@@ -904,9 +904,13 @@ class XAUPaperTradingEngine:
         self,
         account: XAUPaperAccount,
         unrealized_pnl: float = 0.0,
+        *,
+        track_extremes: bool = True,
     ) -> None:
         equity = float(account.initial_capital) + float(account.realized_pnl) + float(unrealized_pnl)
         account.current_equity = round(equity, 4)
+        if not track_extremes:
+            return
         account.peak_equity = max(float(account.peak_equity or account.initial_capital), equity)
         if account.peak_equity > 0:
             dd = max(0.0, (account.peak_equity - equity) / account.peak_equity * 100.0)
@@ -1020,21 +1024,32 @@ class XAUPaperTradingEngine:
             old_position = self._open_position(db, active.id)
             if old_position:
                 spot = spot or {}
-                mark = _paper_mark_price(old_position.side, spot)
-                source = str(spot.get("source") or old_position.price_source or "last_mark")
-                if mark is None:
-                    mark = float(old_position.current_price)
+                # Never manufacture a weekly-reset fill from a stale/mid-only
+                # reference. Keep the old weekly account active until a fresh
+                # executable-side paper quote becomes available.
+                exit_quote = None
+                if spot and not bool(spot.get("is_stale")):
+                    exit_quote = _paper_exit_quote(old_position.side, spot)
+                if exit_quote is None:
+                    logger.info(
+                        "[XAU paper] weekly rollover deferred: no fresh bid/ask fill old_week=%s new_week=%s",
+                        active.week_key,
+                        key,
+                    )
+                    return active
+
+                source = str(spot.get("source") or old_position.price_source or "fill_quote")
                 self._close_position(
                     db,
                     active,
                     old_position,
-                    float(mark),
+                    float(exit_quote),
                     "weekly_reset",
                     now_utc,
                     {
                         "reset_week": key,
                         "mark_source": source,
-                        "fresh_spot": bool(spot) and not bool(spot.get("is_stale")),
+                        "fresh_spot": True,
                     },
                 )
             active.status = "closed"
@@ -1088,12 +1103,17 @@ class XAUPaperTradingEngine:
         pnl = _pnl(position.side, position.entry_price, mark, position.quantity_oz)
         position.current_price = mark
         position.unrealized_pnl = round(pnl, 4)
-        position.mfe_usd = max(float(position.mfe_usd or 0.0), pnl)
-        position.mae_usd = min(float(position.mae_usd or 0.0), pnl)
-        self._update_account_equity(account, pnl)
-        if mark_kind == "analysis_reference":
+
+        if mark_kind == "fill_quote":
+            position.mfe_usd = max(float(position.mfe_usd or 0.0), pnl)
+            position.mae_usd = min(float(position.mae_usd or 0.0), pnl)
+            self._update_account_equity(account, pnl, track_extremes=True)
+        else:
+            # Contextual MTM is useful for display, but must not contaminate
+            # execution-observed MFE/MAE or max-drawdown statistics.
+            self._update_account_equity(account, pnl, track_extremes=False)
             logger.debug(
-                "[XAU paper] mark-to-market uses analysis reference; exits remain locked"
+                "[XAU paper] contextual mark updates display equity only; execution metrics remain frozen"
             )
         return mark
 
