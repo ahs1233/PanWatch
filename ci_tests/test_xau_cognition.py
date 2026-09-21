@@ -437,3 +437,47 @@ def test_cognition_uses_explicit_rollover_fill_state_without_double_penalty():
     assert fill["market"]["state"] == "closed"
     assert fill["issues"] == ["fill_market_closed"]
     assert state["data_quality"]["score"] > 0.70
+
+
+
+def test_shadow_memory_needs_enough_samples_before_affecting_confidence():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 0,
+            "similar_samples": 0,
+            "shadow_memory": {
+                "sample_count": 7,
+                "positive_rate": 1.0,
+                "similarity_weighted_return_bps": 20.0,
+                "average_similarity": 0.9,
+                "research_only": True,
+            },
+        },
+    )
+    assert state["memory"]["shadow_confidence_adjustment"] == 0.0
+
+
+def test_shadow_memory_is_bounded_research_prior_not_trade_calibration():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 0,
+            "similar_samples": 0,
+            "calibration_sample_count": 0,
+            "shadow_memory": {
+                "sample_count": 40,
+                "positive_rate": 1.0,
+                "similarity_weighted_return_bps": 50.0,
+                "average_similarity": 1.0,
+                "research_only": True,
+            },
+        },
+    )
+    memory = state["memory"]
+    assert 0.0 < memory["shadow_confidence_adjustment"] <= 0.015
+    assert memory["trade_confidence_adjustment"] == 0.0
+    assert memory["calibration_sample_count"] == 0
+    assert state["confidence"]["calibration_basis"] == "prior_shrunk_no_history"
