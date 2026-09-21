@@ -92,6 +92,30 @@ def _can_revalidate_signal(
     )
 
 
+def _entry_gate_reason(
+    *,
+    candidate: str,
+    fusion_state: str,
+    spot: dict,
+    has_open_position: bool,
+    max_spread_bps: float,
+) -> tuple[bool, str]:
+    if has_open_position:
+        return False, "position_already_open"
+    if candidate not in {"long_setup", "short_setup"}:
+        return False, fusion_state or "no_setup"
+    if bool(spot.get("is_stale")):
+        return False, "indicative_spot_stale"
+    if _number(spot.get("bid")) is None or _number(spot.get("ask")) is None:
+        return False, "bid_ask_unavailable"
+    spread_bps = _spot_spread_bps(spot)
+    if spread_bps is not None and spread_bps > float(max_spread_bps):
+        return False, "spread_too_wide"
+    if fusion_state not in {"setup_macro_support", "setup_macro_neutral"}:
+        return False, fusion_state or "fusion_not_eligible"
+    return True, ""
+
+
 def _paper_entry_price(side: str, spot: dict) -> float | None:
     """Paper entries require an actual indicative bid/ask side.
 
@@ -703,31 +727,17 @@ class XAUPaperTradingEngine:
         now_utc: datetime,
     ) -> XAUPaperPosition | None:
         candidate = str(fusion.get("technical_candidate") or "none")
+        state = str(fusion.get("state") or "")
+        existing_position = self._open_position(db, account.id)
+        accepted_state, rejection_reason = _entry_gate_reason(
+            candidate=candidate,
+            fusion_state=state,
+            spot=spot,
+            has_open_position=existing_position is not None,
+            max_spread_bps=float(self.settings.xau_paper_max_spread_bps),
+        )
         if candidate not in {"long_setup", "short_setup"}:
             return None
-
-        state = str(fusion.get("state") or "")
-        accepted_state = state in {"setup_macro_support", "setup_macro_neutral"}
-        rejection_reason = ""
-
-        existing_position = self._open_position(db, account.id)
-        if existing_position:
-            accepted_state = False
-            rejection_reason = "position_already_open"
-        elif bool(spot.get("is_stale")):
-            accepted_state = False
-            rejection_reason = "indicative_spot_stale"
-        elif _number(spot.get("bid")) is None or _number(spot.get("ask")) is None:
-            accepted_state = False
-            rejection_reason = "bid_ask_unavailable"
-        elif (
-            _spot_spread_bps(spot) is not None
-            and _spot_spread_bps(spot) > float(self.settings.xau_paper_max_spread_bps)
-        ):
-            accepted_state = False
-            rejection_reason = "spread_too_wide"
-        elif not accepted_state:
-            rejection_reason = state or "fusion_not_eligible"
 
         signal = self._record_signal(
             db,
@@ -808,6 +818,83 @@ class XAUPaperTradingEngine:
             state,
         )
         return position
+
+    async def eligibility(self) -> dict:
+        technical = await get_xau_snapshot(force=False)
+        macro = await get_macro_context(force=False)
+        fusion = build_decision_fusion(technical, macro)
+        spot = technical.get("indicative_spot") or {}
+        candidate = str(fusion.get("technical_candidate") or "none")
+        state = str(fusion.get("state") or "")
+
+        db = open_xau_paper_session()
+        try:
+            account = self._active_account(db)
+            position = self._open_position(db, account.id) if account else None
+            eligible, gate_reason = _entry_gate_reason(
+                candidate=candidate,
+                fusion_state=state,
+                spot=spot,
+                has_open_position=position is not None,
+                max_spread_bps=float(self.settings.xau_paper_max_spread_bps),
+            )
+
+            side = (
+                "long"
+                if candidate == "long_setup"
+                else "short"
+                if candidate == "short_setup"
+                else None
+            )
+            projected = None
+            if eligible and side and account:
+                entry = _paper_entry_price(side, spot)
+                if entry is None:
+                    eligible = False
+                    gate_reason = "bid_ask_unavailable"
+                else:
+                    levels = self._levels_and_size(account, side, entry, technical)
+                    if levels is None:
+                        eligible = False
+                        gate_reason = "risk_levels_unavailable"
+                    else:
+                        stop, target, quantity, risk_usd = levels
+                        projected = {
+                            "side": side,
+                            "entry_price": entry,
+                            "stop_loss": stop,
+                            "target_price": target,
+                            "quantity_oz": quantity,
+                            "risk_usd": risk_usd,
+                        }
+
+            spread_bps = _spot_spread_bps(spot)
+            return {
+                "eligible": eligible,
+                "gate_reason": gate_reason or "eligible",
+                "candidate": candidate,
+                "fusion_state": state,
+                "macro_relation": fusion.get("macro_relation"),
+                "macro_bias": fusion.get("macro_bias"),
+                "macro_confidence": fusion.get("macro_confidence"),
+                "event_risk": fusion.get("event_risk"),
+                "alignment": technical.get("alignment"),
+                "micro_direction": (technical.get("micro") or {}).get("direction"),
+                "spot": {
+                    "price": spot.get("price"),
+                    "bid": spot.get("bid"),
+                    "ask": spot.get("ask"),
+                    "spread_bps": spread_bps,
+                    "source": spot.get("source"),
+                    "age_seconds": spot.get("age_seconds"),
+                    "is_stale": spot.get("is_stale"),
+                },
+                "projected": projected,
+                "position": _serialize_position(position),
+                "execution_allowed": False,
+            }
+        finally:
+            db.close()
 
     async def scan(self, now: datetime | None = None) -> dict:
         if not self.settings.xau_paper_enabled:
