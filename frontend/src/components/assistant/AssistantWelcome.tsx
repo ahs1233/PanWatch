@@ -1,4 +1,4 @@
-import { ArrowUpRight, Briefcase, Search, Sparkles, TriangleAlert } from 'lucide-react'
+import { ArrowUpRight, Briefcase, Search, Sparkles, AlertTriangle } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { fetchAPI } from '@panwatch/api/client'
 
