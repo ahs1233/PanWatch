@@ -87,6 +87,21 @@ def _paper_mark_price(side: str, spot: dict) -> float | None:
     return _number(spot.get("ask")) or _number(spot.get("price"))
 
 
+def _spot_spread_bps(spot: dict) -> float | None:
+    direct = _number(spot.get("spread_bps"))
+    if direct is not None:
+        return direct
+    bid = _number(spot.get("bid"))
+    ask = _number(spot.get("ask"))
+    mid = _number(spot.get("price"))
+    if bid is None or ask is None:
+        return None
+    basis = mid or ((bid + ask) / 2.0)
+    if basis <= 0:
+        return None
+    return max(0.0, (ask - bid) / basis * 10_000.0)
+
+
 def _pnl(side: str, entry: float, mark: float, quantity: float) -> float:
     if side == "long":
         return (mark - entry) * quantity
@@ -570,6 +585,12 @@ class XAUPaperTradingEngine:
         elif _number(spot.get("bid")) is None or _number(spot.get("ask")) is None:
             accepted_state = False
             rejection_reason = "bid_ask_unavailable"
+        elif (
+            _spot_spread_bps(spot) is not None
+            and _spot_spread_bps(spot) > float(self.settings.xau_paper_max_spread_bps)
+        ):
+            accepted_state = False
+            rejection_reason = "spread_too_wide"
         elif not accepted_state:
             rejection_reason = state or "fusion_not_eligible"
 
@@ -678,6 +699,17 @@ class XAUPaperTradingEngine:
                             exit_reason = "stop_loss"
                         elif mark <= position.target_price:
                             exit_reason = "target_price"
+
+                    if exit_reason is None and position.opened_at:
+                        opened_at = position.opened_at
+                        if opened_at.tzinfo is not None:
+                            opened_at = opened_at.astimezone(timezone.utc).replace(tzinfo=None)
+                        held_minutes = max(
+                            0.0,
+                            (now_utc - opened_at).total_seconds() / 60.0,
+                        )
+                        if held_minutes >= float(self.settings.xau_paper_max_hold_minutes):
+                            exit_reason = "time_stop"
 
                     if exit_reason:
                         exit_fill = _paper_exit_fill_price(
@@ -825,6 +857,8 @@ class XAUPaperTradingEngine:
             "risk_pct": self.settings.xau_paper_risk_pct,
             "reward_risk": self.settings.xau_paper_reward_risk,
             "max_leverage": self.settings.xau_paper_max_leverage,
+            "max_spread_bps": self.settings.xau_paper_max_spread_bps,
+            "max_hold_minutes": self.settings.xau_paper_max_hold_minutes,
             "scan_seconds": self.settings.xau_paper_scan_seconds,
             "timezone": self.settings.xau_paper_timezone,
             "entry_states": ["setup_macro_support", "setup_macro_neutral"],
