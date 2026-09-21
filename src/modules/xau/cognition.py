@@ -262,8 +262,13 @@ def _regime(
         scores["transition"] += 0.65
     if event_risk:
         scores["shock_repricing"] += 2.50
-    if data_quality < 0.60 or technical.get("blocked"):
-        scores["data_uncertain"] += 2.60
+    if technical.get("blocked"):
+        # A hard technical gate means directional inference is secondary to
+        # sensor/data uncertainty. Keep probabilities, but make uncertainty
+        # decisively dominant rather than allowing trend evidence to overrule it.
+        scores["data_uncertain"] += 6.00
+    elif data_quality < 0.60:
+        scores["data_uncertain"] += 3.50
 
     probabilities = _softmax(scores, temperature=0.75)
     label, confidence = max(probabilities.items(), key=lambda item: item[1])
