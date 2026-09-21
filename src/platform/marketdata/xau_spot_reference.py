@@ -79,7 +79,7 @@ class BiquoteXAUIndicativeSpotReference:
             headers=headers,
         )
         strict_stale_fallback = False
-        if response.status_code == 404:
+        if getattr(response, "status_code", 200) == 404:
             # Biquote documents strict 404 when allowStale=false and the last
             # quote is older than five minutes. Retry once for context/market
             # state only; the result remains stale and can never become a fill.
