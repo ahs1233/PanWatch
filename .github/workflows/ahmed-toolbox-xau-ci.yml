@@ -46,6 +46,7 @@ jobs:
             src/platform/external_tools \
             src/platform/marketdata/xau_models.py \
             src/platform/marketdata/xau_research_provider.py \
+            src/platform/marketdata/xau_spot_reference.py \
             src/modules/xau \
             src/modules/strategy/xau_intraday.py \
             src/modules/assistant/xau_tools.py \
