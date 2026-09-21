@@ -82,8 +82,8 @@ function candidateLabel(value?: string): string {
 
 function friendlyReason(value: string): string {
   return value
-    .replaceAll('_', ' ')
-    .replace(/^./, (char) => char.toUpperCase())
+    .replace(/_/g, ' ')
+    .replace(/^./, (char: string) => char.toUpperCase())
 }
 
 export default function DashboardPage() {
