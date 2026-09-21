@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
+
 
 @dataclass(frozen=True)
 class XAUMicroPoint:
@@ -131,3 +133,49 @@ class XAUSIntradayReferenceProvider:
             coverage_seconds=coverage_seconds,
             is_stale=status not in {"", "fresh"} or age_seconds > 240,
         )
+
+
+def sampled_spot_bars(
+    series: XAUMicroSeries,
+    timeframe: XAUTimeframe,
+) -> list[XAUBar]:
+    """Aggregate the roughly-two-minute indicative tape into sampled OHLC bars.
+
+    High/low reflect observed samples, not every market tick. Bars remain
+    research-only and execution_eligible=False.
+    """
+
+    interval_minutes = {
+        XAUTimeframe.M5: 5,
+        XAUTimeframe.M15: 15,
+    }.get(timeframe)
+    if interval_minutes is None:
+        raise ValueError("sampled spot bars support only 5m and 15m")
+
+    buckets: dict[int, list[XAUMicroPoint]] = {}
+    seconds = interval_minutes * 60
+    for point in series.points:
+        bucket = int(point.timestamp.timestamp()) // seconds
+        buckets.setdefault(bucket, []).append(point)
+
+    bars: list[XAUBar] = []
+    for bucket in sorted(buckets):
+        points = sorted(buckets[bucket], key=lambda item: item.timestamp)
+        if not points:
+            continue
+        prices = [item.price for item in points]
+        bars.append(
+            XAUBar(
+                timestamp=points[-1].timestamp,
+                timeframe=timeframe,
+                open=prices[0],
+                high=max(prices),
+                low=min(prices),
+                close=prices[-1],
+                volume=None,
+                source="xaus.com:intraday-sampled",
+                symbol="XAUUSD",
+                execution_eligible=False,
+            )
+        )
+    return bars
