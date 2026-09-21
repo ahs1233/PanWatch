@@ -190,7 +190,7 @@ async def get_indicative_spot(force: bool = False) -> dict[str, Any]:
             "observed_at": quote.observed_at.isoformat(),
             "age_seconds": age_seconds,
             "source": quote.source,
-            "is_stale": quote.is_stale,
+            "is_stale": bool(quote.is_stale or age_seconds > 180.0),
             "indicative": True,
             "execution_eligible": False,
         }
