@@ -621,6 +621,10 @@ def test_position_guardian_requests_exit_only_for_qualified_opposite_thesis():
             "paper_entry_allowed": True,
             "meta_decision": "eligible",
             "cognitive_confidence": 0.70,
+            "cognition": {
+                "data_quality": {"score": 0.90},
+                "meta_controller": {"min_confidence": 0.58},
+            },
         },
         98.0,
     )
@@ -631,6 +635,10 @@ def test_position_guardian_requests_exit_only_for_qualified_opposite_thesis():
             "paper_entry_allowed": True,
             "meta_decision": "eligible",
             "cognitive_confidence": 0.55,
+            "cognition": {
+                "data_quality": {"score": 0.90},
+                "meta_controller": {"min_confidence": 0.58},
+            },
         },
         98.0,
     )
@@ -730,3 +738,58 @@ def test_entry_gate_reports_market_rollover_explicitly():
     )
     assert allowed is False
     assert reason == "market_closed_or_rollover"
+
+
+
+def test_position_guardian_requires_quality_for_thesis_reversal():
+    position = _guardian_position("long")
+    result = _position_guardian(
+        position,
+        {
+            "technical_candidate": "short_setup",
+            "paper_entry_allowed": True,
+            "meta_decision": "eligible",
+            "cognitive_confidence": 0.80,
+            "cognition": {
+                "data_quality": {"score": 0.60},
+                "meta_controller": {"min_confidence": 0.58},
+            },
+        },
+        98.0,
+    )
+    assert result["exit_requested"] is False
+
+
+def test_position_guardian_uses_reversal_hysteresis_above_entry_threshold():
+    position = _guardian_position("long")
+    below = _position_guardian(
+        position,
+        {
+            "technical_candidate": "short_setup",
+            "paper_entry_allowed": True,
+            "meta_decision": "eligible",
+            "cognitive_confidence": 0.67,
+            "cognition": {
+                "data_quality": {"score": 0.90},
+                "meta_controller": {"min_confidence": 0.58},
+            },
+        },
+        98.0,
+    )
+    above = _position_guardian(
+        position,
+        {
+            "technical_candidate": "short_setup",
+            "paper_entry_allowed": True,
+            "meta_decision": "eligible",
+            "cognitive_confidence": 0.70,
+            "cognition": {
+                "data_quality": {"score": 0.90},
+                "meta_controller": {"min_confidence": 0.58},
+            },
+        },
+        98.0,
+    )
+    assert below["exit_requested"] is False
+    assert above["exit_requested"] is True
+    assert above["reversal_threshold"] == 0.68
