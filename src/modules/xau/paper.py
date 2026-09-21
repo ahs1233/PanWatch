@@ -548,6 +548,51 @@ class XAUPaperTradingEngine:
             .first()
         )
         if existing:
+            transient_rejections = {
+                "bid_ask_unavailable",
+                "indicative_spot_stale",
+                "spread_too_wide",
+            }
+            if (
+                not existing.accepted
+                and accepted
+                and existing.rejection_reason in transient_rejections
+            ):
+                previous_reason = existing.rejection_reason
+                previous_observed_at = existing.observed_at
+                meta = dict(existing.meta or {})
+                meta["revalidated"] = True
+                meta["initial_rejection_reason"] = previous_reason
+                meta["initial_observed_at"] = (
+                    previous_observed_at.isoformat()
+                    if previous_observed_at
+                    else None
+                )
+                meta["revalidated_at"] = now_utc.isoformat()
+                meta["spot"] = {
+                    "price": spot.get("price"),
+                    "bid": spot.get("bid"),
+                    "ask": spot.get("ask"),
+                    "spread_bps": _spot_spread_bps(spot),
+                    "source": spot.get("source"),
+                    "age_seconds": spot.get("age_seconds"),
+                    "is_stale": spot.get("is_stale"),
+                }
+                existing.accepted = True
+                existing.rejection_reason = ""
+                existing.fusion_state = str(fusion.get("state") or "")
+                existing.macro_relation = str(fusion.get("macro_relation") or "")
+                existing.event_risk = bool(fusion.get("event_risk"))
+                existing.price = _number(spot.get("price"))
+                existing.observed_at = now_utc
+                existing.meta = meta
+                db.flush()
+                logger.info(
+                    "[XAU paper] setup revalidated candidate=%s prior_reason=%s price=%s",
+                    existing.candidate,
+                    previous_reason,
+                    existing.price,
+                )
             return existing
 
         signal = XAUPaperSignal(
