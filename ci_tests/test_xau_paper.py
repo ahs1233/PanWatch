@@ -7,6 +7,7 @@ from src.modules.xau.paper import (
     XAUPaperTradingEngine,
     _paper_entry_price,
     _paper_mark_price,
+    _paper_exit_fill_price,
     _pnl,
     _week_key,
 )
@@ -110,3 +111,45 @@ def test_mid_only_reference_is_not_accepted_as_entry_fill():
     assert _paper_entry_price("short", spot) is None
     assert _paper_mark_price("long", spot) == 4350.0
     assert _paper_mark_price("short", spot) == 4350.0
+
+
+
+def test_target_fill_does_not_credit_favorable_overshoot():
+    assert _paper_exit_fill_price("long", 4405.0, 4300.0, 4400.0, "target_price") == 4400.0
+    assert _paper_exit_fill_price("short", 4295.0, 4400.0, 4300.0, "target_price") == 4300.0
+
+
+def test_stop_fill_keeps_adverse_gap_slippage():
+    assert _paper_exit_fill_price("long", 4288.0, 4300.0, 4400.0, "stop_loss") == 4288.0
+    assert _paper_exit_fill_price("short", 4412.0, 4400.0, 4300.0, "stop_loss") == 4412.0
+
+
+def test_setup_key_dedupes_macro_state_changes_inside_same_15m_anchor():
+    engine = XAUPaperTradingEngine(Settings())
+    account = SimpleNamespace(week_key="2026-W39")
+    technical = {
+        "frames": {
+            "15m": {
+                "observed_at": "2026-09-21T13:30:00+00:00",
+            }
+        }
+    }
+
+    support = engine._setup_key(
+        account,
+        technical,
+        {"technical_candidate": "long_setup", "state": "setup_macro_support"},
+    )
+    neutral = engine._setup_key(
+        account,
+        technical,
+        {"technical_candidate": "long_setup", "state": "setup_macro_neutral"},
+    )
+    short = engine._setup_key(
+        account,
+        technical,
+        {"technical_candidate": "short_setup", "state": "setup_macro_support"},
+    )
+
+    assert support == neutral
+    assert support != short
