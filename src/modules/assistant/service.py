@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -29,6 +30,10 @@ from src.platform.ai.ai_failover import (
     build_failover_client,
     get_configured_failover_client,
 )
+from src.platform.external_tools import (
+    AhmedToolboxClient,
+    register_ahmed_toolbox_tools,
+)
 from src.platform.persistence.models import AIModel, AIService, AppSettings
 from src.platform.runtime.config import Settings
 
@@ -52,6 +57,9 @@ from .schemas import (
 )
 from .tool_descriptors import PANWATCH_TOOL_DESCRIPTORS
 from .tools import build_panwatch_tool_registry
+
+
+logger = logging.getLogger(__name__)
 
 
 class AssistantNotFoundError(LookupError):
@@ -362,9 +370,36 @@ class AssistantService:
             task=task, checkpoint=checkpoint, decisions=decisions
         )
 
+    def _build_tool_registry(self):
+        """Compose local tools plus the optional read-only Ahmed ToolBox surface."""
+        tools = build_panwatch_tool_registry(self._repository.session)
+        descriptors = list(PANWATCH_TOOL_DESCRIPTORS)
+
+        toolbox_url = self._settings.ahmed_toolbox_url.strip()
+        if not toolbox_url:
+            return tools, descriptors
+
+        try:
+            external_descriptors = register_ahmed_toolbox_tools(
+                tools,
+                AhmedToolboxClient(
+                    toolbox_url,
+                    token=self._settings.ahmed_toolbox_token,
+                    timeout_seconds=self._settings.ahmed_toolbox_timeout_seconds,
+                ),
+            )
+            descriptors.extend(external_descriptors)
+        except Exception as exc:  # noqa: BLE001 - external research must fail soft
+            logger.warning(
+                "Ahmed ToolBox discovery unavailable; using local tools only: %s",
+                exc,
+            )
+
+        return tools, descriptors
+
     def build_runtime(self, failover_client) -> AgentRuntime:
         """Compose host adapters into the business-agnostic PanAgent runtime."""
-        tools = build_panwatch_tool_registry(self._repository.session)
+        tools, descriptors = self._build_tool_registry()
         return AgentRuntime(
             FailoverModelAdapter(failover_client),
             tools,
@@ -374,7 +409,7 @@ class AssistantService:
                     ToolResearchPlugin(
                         ToolResearchService(
                             tools,
-                            descriptors=list(PANWATCH_TOOL_DESCRIPTORS),
+                            descriptors=descriptors,
                         ),
                         mode="active",
                     )
@@ -416,9 +451,7 @@ class AssistantService:
                 ).mode.value,
                 "confirmation_required": tool.confirmation_required,
             }
-            for tool in build_panwatch_tool_registry(
-                self._repository.session
-            ).registered_tools()
+            for tool in self._build_tool_registry()[0].registered_tools()
         ]
         return {
             "defaults": defaults,
@@ -448,9 +481,7 @@ class AssistantService:
         elif selector_kind == "tool" and resolved_risk is None:
             registered = {
                 tool.name: tool
-                for tool in build_panwatch_tool_registry(
-                    self._repository.session
-                ).registered_tools()
+                for tool in self._build_tool_registry()[0].registered_tools()
             }
             if selector_value not in registered:
                 raise ValueError("未知工具必须携带风险类别")
@@ -544,7 +575,7 @@ class AssistantService:
         """Estimate the definitions registered for the assistant model input."""
         return [
             tool.openai_schema()
-            for tool in build_panwatch_tool_registry(self._repository.session).registered_tools()
+            for tool in self._build_tool_registry()[0].registered_tools()
         ]
 
     @staticmethod
