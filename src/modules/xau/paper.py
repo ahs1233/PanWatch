@@ -645,6 +645,22 @@ class XAUPaperTradingEngine:
 
         trade_meta = dict(meta or {})
         trade_meta.setdefault("engine_version", PAPER_ENGINE_VERSION)
+
+        signal = (
+            db.query(XAUPaperSignal)
+            .filter(XAUPaperSignal.setup_key == position.setup_key)
+            .first()
+        )
+        signal_meta = dict(signal.meta or {}) if signal else {}
+        trade_meta["entry_state_vector"] = signal_meta.get("state_vector")
+        trade_meta["entry_cognition"] = signal_meta.get("cognition") or {}
+        trade_meta["autopsy"] = _trade_autopsy(
+            position,
+            signal_meta,
+            exit_reason=exit_reason,
+            pnl=pnl,
+            r_multiple=r_multiple,
+        )
         if position.opened_at:
             trade_meta["holding_minutes"] = round(
                 _position_age_minutes(position.opened_at, now_utc),
@@ -883,6 +899,14 @@ class XAUPaperTradingEngine:
                     else None
                 )
                 meta["revalidated_at"] = now_utc.isoformat()
+                meta["state_vector"] = (
+                    ((fusion.get("cognition") or {}).get("market_state"))
+                    or build_market_state_vector(technical, macro)
+                )
+                meta["cognition"] = fusion.get("cognition") or {}
+                meta["regime"] = fusion.get("regime")
+                meta["cognitive_confidence"] = fusion.get("cognitive_confidence")
+                meta["meta_decision"] = fusion.get("meta_decision")
                 meta["spot"] = {
                     "price": spot.get("price"),
                     "bid": spot.get("bid"),
@@ -922,6 +946,10 @@ class XAUPaperTradingEngine:
             observed_at=now_utc,
             meta={
                 "engine_version": PAPER_ENGINE_VERSION,
+                "state_vector": (
+                    ((fusion.get("cognition") or {}).get("market_state"))
+                    or build_market_state_vector(technical, macro)
+                ),
                 "technical_mode": technical.get("technical_mode"),
                 "alignment": technical.get("alignment"),
                 "atr_reference": technical.get("atr_reference"),
@@ -1329,6 +1357,7 @@ class XAUPaperTradingEngine:
                     "signals": [],
                     "settings": self.public_settings(),
                     "performance": _performance_metrics([]),
+                    "diagnostics": _trade_diagnostics([]),
                     "execution_allowed": False,
                 }
 
@@ -1354,6 +1383,7 @@ class XAUPaperTradingEngine:
                 "signals": [_serialize_signal(item) for item in signals],
                 "settings": self.public_settings(),
                 "performance": _performance_metrics(trades),
+                "diagnostics": _trade_diagnostics(trades),
                 "execution_allowed": False,
             }
         finally:
@@ -1390,6 +1420,7 @@ class XAUPaperTradingEngine:
                     else 0.0
                 )
                 item["performance"] = _performance_metrics(trades)
+                item["diagnostics"] = _trade_diagnostics(trades)
                 out.append(item)
             return out
         finally:
