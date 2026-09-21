@@ -143,6 +143,96 @@ function human(value?: string | null): string {
   return value.replace(/_/g, ' ').replace(/^./, (c: string) => c.toUpperCase())
 }
 
+function EquityCurve({
+  initialCapital,
+  currentEquity,
+  trades,
+}: {
+  initialCapital: number
+  currentEquity: number
+  trades: PaperTrade[]
+}) {
+  const ordered = [...trades].sort((a, b) => {
+    const left = a.closed_at ? new Date(a.closed_at).getTime() : 0
+    const right = b.closed_at ? new Date(b.closed_at).getTime() : 0
+    return left - right
+  })
+
+  const values = [initialCapital]
+  let equity = initialCapital
+  for (const trade of ordered) {
+    equity += trade.pnl
+    values.push(equity)
+  }
+  if (Math.abs((values.at(-1) || initialCapital) - currentEquity) > 0.005) {
+    values.push(currentEquity)
+  }
+
+  const minValue = Math.min(...values)
+  const maxValue = Math.max(...values)
+  const span = Math.max(1, maxValue - minValue)
+  const pad = Math.max(span * 0.15, initialCapital * 0.001)
+  const low = minValue - pad
+  const high = maxValue + pad
+  const range = Math.max(1, high - low)
+  const denominator = Math.max(1, values.length - 1)
+  const points = values
+    .map((value, index) => {
+      const x = (index / denominator) * 100
+      const y = 34 - ((value - low) / range) * 30
+      return `${x.toFixed(2)},${y.toFixed(2)}`
+    })
+    .join(' ')
+
+  return (
+    <div>
+      <div className="mb-2 flex items-end justify-between gap-3">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Equity curve</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">
+            {ordered.length} closed trade{ordered.length === 1 ? '' : 's'} · live equity included
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="font-mono text-[16px] font-semibold">{money(currentEquity)}</div>
+          <div className="text-[10px] text-muted-foreground">
+            Range {money(minValue)} → {money(maxValue)}
+          </div>
+        </div>
+      </div>
+      <div className="h-40 w-full rounded-xl bg-accent/25 p-2">
+        <svg viewBox="0 0 100 36" className="h-full w-full overflow-visible" role="img" aria-label="Paper trading equity curve">
+          <line x1="0" x2="100" y1="34" y2="34" className="stroke-border" strokeWidth="0.35" />
+          <polyline
+            points={points}
+            fill="none"
+            vectorEffect="non-scaling-stroke"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="text-primary"
+          />
+          {values.map((value, index) => {
+            const x = (index / denominator) * 100
+            const y = 34 - ((value - low) / range) * 30
+            return (
+              <circle
+                key={`${index}-${value}`}
+                cx={x}
+                cy={y}
+                r="0.75"
+                fill="currentColor"
+                className="text-primary"
+              />
+            )
+          })}
+        </svg>
+      </div>
+    </div>
+  )
+}
+
 function dateTime(value?: string | null): string {
   if (!value) return '--'
   const d = new Date(value)
@@ -335,6 +425,14 @@ export default function PaperTradingPage() {
             Avg MFE {money(data?.performance?.average_mfe_usd)} · MAE {money(data?.performance?.average_mae_usd)}
           </div>
         </div>
+      </div>
+
+      <div className="card mb-4 p-4">
+        <EquityCurve
+          initialCapital={account?.initial_capital || data?.settings?.initial_capital || 10_000}
+          currentEquity={account?.current_equity || data?.settings?.initial_capital || 10_000}
+          trades={data?.trades || []}
+        />
       </div>
 
       <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-12">
