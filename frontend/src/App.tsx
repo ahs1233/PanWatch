@@ -1,6 +1,6 @@
 import { Suspense, useState, useEffect, useRef } from 'react'
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, Database, Clock, LayoutDashboard, Github, MessageCircle } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, Database, Clock, LayoutDashboard, Github, MessageCircle, Activity } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { appApi } from '@panwatch/api/app'
 import { fetchAPI, isAuthenticated } from '@panwatch/api/client'
@@ -32,6 +32,7 @@ const {
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Gold' },
+  { to: '/paper-trading', icon: Activity, label: 'Paper $10k' },
   { to: '/assistant', icon: MessageCircle, label: 'AI Research' },
   { to: '/history', icon: Clock, label: 'History' },
   { to: '/datasources', icon: Database, label: 'Data Sources' },
