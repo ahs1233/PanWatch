@@ -80,19 +80,22 @@ async def get_research_bars(force: bool = False):
             except Exception:
                 return []
 
-        m1_task = asyncio.create_task(yahoo_bars(XAUTimeframe.M1))
-
         try:
+            # Primary intraday path: live indicative spot tape sampled into 5m/15m.
+            # We intentionally do NOT hit Yahoo 1m here; the live spot micro-series
+            # replaces the 1m confirmation in get_xau_snapshot().
             series = await get_micro_series(force=force)
+            m1 = []
             m5 = sampled_spot_bars(series, XAUTimeframe.M5)
             m15 = sampled_spot_bars(series, XAUTimeframe.M15)
         except Exception:
-            m5, m15 = await asyncio.gather(
+            # Only if the spot tape itself is unavailable do we fall back to GC=F.
+            m1, m5, m15 = await asyncio.gather(
+                yahoo_bars(XAUTimeframe.M1),
                 yahoo_bars(XAUTimeframe.M5),
                 yahoo_bars(XAUTimeframe.M15),
             )
 
-        m1 = await m1_task
         data = {
             XAUTimeframe.M1: m1,
             XAUTimeframe.M5: m5,
