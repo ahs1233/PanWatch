@@ -313,3 +313,23 @@ def test_well_calibrated_positive_history_only_relaxes_threshold_slightly():
     adaptation = state["meta_controller"]["threshold_adaptation"]
     assert adaptation["base"] - adaptation["effective"] <= 0.0151
     assert adaptation["effective"] >= 0.50
+
+
+
+def test_micro_substitute_does_not_count_1m_as_missing_quality_penalty():
+    technical = _technical()
+    technical["technical_mode"] = "spot_micro_plus_spot_5m_15m"
+    technical["frames"].pop("1m", None)
+    technical["micro"]["status"] = "ready"
+    technical["micro"]["is_stale"] = False
+    technical["micro"]["age_seconds"] = 8.0
+    technical["indicative_spot"]["age_seconds"] = 4.0
+
+    state = build_cognitive_state(
+        technical,
+        {"bias": -1, "confidence": 0.6, "event_risk": False},
+    )
+    issues = state["data_quality"]["issues"]
+    assert "1m_missing" not in issues
+    assert "micro_substitutes_1m" in issues
+    assert state["data_quality"]["score"] >= 0.70
