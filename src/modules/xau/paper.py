@@ -1951,6 +1951,7 @@ class XAUPaperTradingEngine:
             "cognition_enabled": self.settings.xau_cognition_enabled,
             "cognition_min_confidence": self.settings.xau_cognition_min_confidence,
             "fast_scan_seconds": self.settings.xau_fast_scan_seconds,
+            "reversal_confirmation_cycles": 2,
             "execution_allowed": False,
             "storage": "neon_postgres" if paper_store_is_external() else "local_sqlite_fallback",
             "storage_persistent": paper_store_is_external(),
@@ -1978,8 +1979,9 @@ class XAUPaperTradingScheduler:
             data_quality = cognition.get("data_quality") or {}
             sensors = data_quality.get("sensors") or {}
             fill = sensors.get("fill_readiness") or {}
+            guardian = result.get("position_management") or {}
             logger.info(
-                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s regime=%s confidence=%s quality=%s quality_issues=%s analysis_ref=%s analysis_age=%s fill_score=%s fill_issues=%s meta=%s memory=%s similar=%s event_risk=%s event_kind=%s event_validation=%s event_policy=%s",
+                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s regime=%s confidence=%s quality=%s quality_issues=%s analysis_ref=%s analysis_age=%s fill_score=%s fill_issues=%s guardian=%s guardian_reason=%s reversal_streak=%s/%s meta=%s memory=%s similar=%s event_risk=%s event_kind=%s event_validation=%s event_policy=%s",
                 result.get("week_key"),
                 account.get("current_equity"),
                 position.get("side") if position else "flat",
@@ -1994,6 +1996,10 @@ class XAUPaperTradingScheduler:
                 sensors.get("analysis_reference_age_seconds"),
                 fill.get("score"),
                 fill.get("issues"),
+                guardian.get("action"),
+                guardian.get("reason"),
+                guardian.get("confirmation_streak"),
+                guardian.get("confirmation_required"),
                 fusion.get("meta_decision"),
                 memory.get("source"),
                 memory.get("similar_samples"),
