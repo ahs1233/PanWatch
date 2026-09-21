@@ -717,3 +717,24 @@ def test_macro_force_waits_for_full_refresh(monkeypatch):
         assert result["confidence"] == 0.75
 
     asyncio.run(scenario())
+
+
+
+def test_indicative_spot_marks_quotes_older_than_three_minutes_stale(monkeypatch):
+    old = datetime.now(timezone.utc) - timedelta(seconds=181)
+
+    def fake_fetch(self, timeout_seconds: float = 10.0):
+        return XAUIndicativeSpot(
+            price=2620.0,
+            bid=2619.8,
+            ask=2620.2,
+            observed_at=old,
+            source="test-old-spot",
+            is_stale=False,
+        )
+
+    monkeypatch.setattr(CompositeXAUIndicativeSpotProvider, "fetch", fake_fetch)
+    service._spot_cache = None
+    result = asyncio.run(service.get_indicative_spot(force=True))
+    assert result["age_seconds"] >= 180.0
+    assert result["is_stale"] is True
