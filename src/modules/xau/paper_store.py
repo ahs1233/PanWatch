@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
 from src.platform.persistence.database import Base, SessionLocal
@@ -25,7 +25,9 @@ from src.platform.runtime.config import Settings
 logger = logging.getLogger(__name__)
 
 _external_engine = None
+_external_replay_available = False
 XAUPaperSessionLocal = SessionLocal
+XAUReplaySessionLocal = SessionLocal
 
 
 def _sqlalchemy_url(url: str) -> str:
@@ -38,14 +40,16 @@ def _sqlalchemy_url(url: str) -> str:
 def init_xau_paper_store(settings: Settings | None = None) -> bool:
     """Initialize the paper store. Returns True when external PostgreSQL is used."""
 
-    global _external_engine, XAUPaperSessionLocal
+    global _external_engine, _external_replay_available, XAUPaperSessionLocal, XAUReplaySessionLocal
 
     settings = settings or Settings()
     raw_url = (settings.xau_paper_database_url or "").strip()
     if not raw_url:
         XAUPaperSessionLocal = SessionLocal
+        XAUReplaySessionLocal = SessionLocal
+        _external_replay_available = False
         logger.warning(
-            "XAU paper store is using local SQLite fallback; history will only be "
+            "XAU paper/replay store is using local SQLite fallback; history will only be "
             "durable when the host persists /app/data"
         )
         return False
@@ -58,15 +62,36 @@ def init_xau_paper_store(settings: Settings | None = None) -> bool:
             pool_size=2,
             max_overflow=2,
         )
-        tables = [
+        # Existing paper tables are mandatory and already provisioned in production.
+        # Replay is optional research memory; never make application startup depend
+        # on DDL privileges for a newly introduced table.
+        paper_tables = [
             XAUPaperAccount.__table__,
             XAUPaperSignal.__table__,
             XAUPaperPosition.__table__,
             XAUPaperTrade.__table__,
-            XAUReplayEpisode.__table__,
         ]
-        Base.metadata.create_all(bind=_external_engine, tables=tables)
+        Base.metadata.create_all(bind=_external_engine, tables=paper_tables)
         XAUPaperSessionLocal = sessionmaker(bind=_external_engine, expire_on_commit=False)
+
+        inspector = inspect(_external_engine)
+        _external_replay_available = inspector.has_table("xau_replay_episodes")
+        if _external_replay_available:
+            XAUReplaySessionLocal = sessionmaker(
+                bind=_external_engine,
+                expire_on_commit=False,
+            )
+            logger.info("XAU replay store initialized on external PostgreSQL")
+        else:
+            # Main SQLite is initialized independently by init_db() and includes
+            # XAUReplayEpisode via Base.metadata. This fallback keeps research
+            # replay available without risking XAU runtime startup.
+            XAUReplaySessionLocal = SessionLocal
+            logger.warning(
+                "XAU replay table is not provisioned in external PostgreSQL; "
+                "using local SQLite replay fallback"
+            )
+
         logger.info("XAU paper store initialized on external PostgreSQL")
 
     return True
@@ -76,6 +101,13 @@ def paper_store_is_external() -> bool:
     return _external_engine is not None
 
 
+def replay_store_is_external() -> bool:
+    return bool(_external_engine is not None and _external_replay_available)
+
 
 def open_xau_paper_session():
     return XAUPaperSessionLocal()
+
+
+def open_xau_replay_session():
+    return XAUReplaySessionLocal()
