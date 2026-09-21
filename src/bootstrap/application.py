@@ -6,6 +6,7 @@ HTTP 中间件、认证依赖和各模块 router；具体业务规则仍由 ``mo
 """
 
 import asyncio
+import logging
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +50,8 @@ from src.modules.strategy.api import factors
 from src.modules.xau import api as xau_api
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.runtime.config import Settings
+
+logger = logging.getLogger(__name__)
 from src.web.response import ResponseWrapperMiddleware
 
 app = FastAPI(
@@ -245,33 +248,72 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/api/runtime-readiness")
-async def runtime_readiness():
-    """Non-secret readiness probe for Railway and deployment diagnostics."""
-    settings = Settings()
+async def _toolbox_readiness(settings: Settings) -> dict:
+    """Probe the configured MCP gateway without exposing credentials or schemas."""
     toolbox = {
         "configured": bool(settings.ahmed_toolbox_url),
         "reachable": False,
         "tool_count": 0,
+        "web_search_available": False,
+        "read_url_available": False,
         "scrapling_fetch_available": False,
         "error": None,
     }
+    if not settings.ahmed_toolbox_url:
+        return toolbox
 
-    if settings.ahmed_toolbox_url:
-        try:
-            client = AhmedToolboxClient(
-                settings.ahmed_toolbox_url,
-                token=settings.ahmed_toolbox_token,
-                timeout_seconds=settings.ahmed_toolbox_timeout_seconds,
-            )
-            tools = await asyncio.to_thread(client.list_tools)
-            names = [str(item.get("name") or "") for item in tools if isinstance(item, dict)]
-            toolbox["reachable"] = True
-            toolbox["tool_count"] = len(tools)
-            toolbox["scrapling_fetch_available"] = "scrapling__fetch" in names
-        except Exception as exc:  # noqa: BLE001 - readiness must report, not crash
-            toolbox["error"] = type(exc).__name__
+    client = AhmedToolboxClient(
+        settings.ahmed_toolbox_url,
+        token=settings.ahmed_toolbox_token,
+        timeout_seconds=settings.ahmed_toolbox_timeout_seconds,
+    )
+    try:
+        tools = await asyncio.to_thread(client.list_tools)
+        names = {
+            str(item.get("name") or "")
+            for item in tools
+            if isinstance(item, dict)
+        }
+        toolbox["reachable"] = True
+        toolbox["tool_count"] = len(tools)
+        toolbox["web_search_available"] = "reach_web_search" in names
+        toolbox["read_url_available"] = "reach_read_url" in names
+        toolbox["scrapling_fetch_available"] = "scrapling__fetch" in names
+    except Exception as exc:  # noqa: BLE001 - readiness must report, not crash
+        toolbox["error"] = type(exc).__name__
+    finally:
+        await asyncio.to_thread(client.close)
+    return toolbox
 
+
+async def _startup_toolbox_probe() -> None:
+    """One fail-soft production proof that remote research tools are discoverable."""
+    status = await _toolbox_readiness(Settings())
+    if status["reachable"]:
+        logger.info(
+            "Ahmed ToolBox startup probe ready: tools=%s web_search=%s read_url=%s scrapling=%s",
+            status["tool_count"],
+            status["web_search_available"],
+            status["read_url_available"],
+            status["scrapling_fetch_available"],
+        )
+    elif status["configured"]:
+        logger.warning(
+            "Ahmed ToolBox startup probe unavailable: error=%s",
+            status["error"],
+        )
+    else:
+        logger.info("Ahmed ToolBox startup probe skipped: not configured")
+
+
+app.router.on_startup.append(_startup_toolbox_probe)
+
+
+@app.get("/api/runtime-readiness")
+async def runtime_readiness():
+    """Non-secret readiness probe for Railway and deployment diagnostics."""
+    settings = Settings()
+    toolbox = await _toolbox_readiness(settings)
     ready = bool(settings.ai_api_key) and bool(toolbox["reachable"])
     return {
         "status": "ready" if ready else "partial",
