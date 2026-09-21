@@ -10,6 +10,8 @@ from src.modules.xau.paper import (
     _entry_gate_reason,
     _paper_entry_price,
     _can_revalidate_signal,
+    _calibration_metrics,
+    _trade_autopsy,
     _paper_mark_price,
     _paper_exit_quote,
     _paper_exit_fill_price,
@@ -179,6 +181,7 @@ def test_performance_metrics_use_r_and_realized_pnl():
     assert metrics["profit_factor"] == 3.0
     assert metrics["average_win_r"] == 1.5
     assert metrics["average_loss_r"] == -1.0
+    assert metrics["win_rate"] == round(2 / 3, 4)
     assert metrics["average_mfe_usd"] == round(235.0 / 3.0, 4)
     assert metrics["average_mae_usd"] == -30.0
 
@@ -300,3 +303,43 @@ def test_entry_gate_reason_matches_engine_policy():
         has_open_position=False,
         max_spread_bps=3.0,
     ) == (True, "")
+
+
+
+def test_calibration_metrics_report_brier_and_ece():
+    metrics = _calibration_metrics([(0.8, 1), (0.2, 0)])
+    assert metrics["calibration_sample_count"] == 2
+    assert metrics["brier_score"] == pytest.approx(0.04, abs=1e-4)
+    assert metrics["expected_calibration_error"] == pytest.approx(0.2, abs=1e-4)
+
+
+def test_trade_autopsy_distinguishes_timing_failure_from_direction_failure():
+    position = SimpleNamespace(
+        risk_usd=100.0,
+        mfe_usd=60.0,
+        mae_usd=-100.0,
+    )
+    signal_meta = {
+        "cognitive_confidence": 0.80,
+        "cognition": {
+            "regime": {"label": "trend_bear"},
+            "hypotheses": [{"name": "trend_continuation", "weight": 0.5}],
+            "adversarial": {"counter_evidence": ["transition_risk"]},
+            "confidence": {"calibrated_confidence": 0.80},
+        },
+    }
+
+    autopsy = _trade_autopsy(
+        position,
+        signal_meta,
+        exit_reason="stop_loss",
+        pnl=-100.0,
+        r_multiple=-1.0,
+    )
+
+    assert autopsy["outcome"] == "loss"
+    assert autopsy["primary_attribution"] == "entry_timing_or_stop_too_tight"
+    assert "counter_evidence_present_at_entry" in autopsy["attributions"]
+    assert "high_confidence_error" in autopsy["attributions"]
+    assert autopsy["mfe_r"] == 0.6
+    assert autopsy["calibration_outcome"] == 0
