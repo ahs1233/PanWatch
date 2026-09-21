@@ -472,6 +472,85 @@ def _tool_text(result: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
+def _event_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _validated_event_gate(
+    parsed: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+
+    claimed = bool(parsed.get("event_risk", False))
+    kind = str(parsed.get("event_kind") or "none").strip().lower()
+    name = str(parsed.get("event_name") or "").strip()
+
+    try:
+        event_confidence = max(
+            0.0,
+            min(1.0, float(parsed.get("event_confidence", 0.0))),
+        )
+    except (TypeError, ValueError):
+        event_confidence = 0.0
+
+    event_time = _event_timestamp(parsed.get("event_time_utc"))
+    try:
+        event_age_minutes = float(parsed.get("event_age_minutes"))
+    except (TypeError, ValueError):
+        event_age_minutes = None
+
+    active = False
+    reason = "not_claimed"
+
+    if claimed and not name:
+        reason = "missing_event_name"
+    elif claimed and kind == "scheduled":
+        if event_time is None:
+            reason = "missing_or_invalid_event_time"
+        elif event_confidence < 0.65:
+            reason = "event_confidence_too_low"
+        else:
+            minutes_until = (event_time - current).total_seconds() / 60.0
+            active = -30.0 <= minutes_until <= 90.0
+            reason = "scheduled_event_window" if active else "scheduled_event_outside_window"
+    elif claimed and kind == "breaking":
+        if event_age_minutes is None:
+            reason = "missing_event_age"
+        elif event_confidence < 0.70:
+            reason = "event_confidence_too_low"
+        else:
+            active = 0.0 <= event_age_minutes <= 30.0
+            reason = "breaking_event_window" if active else "breaking_event_too_old"
+    elif claimed:
+        reason = "unsupported_event_kind"
+
+    return {
+        "event_risk": active,
+        "event_kind": kind if kind in {"scheduled", "breaking"} else "none",
+        "event_name": name or None,
+        "event_time_utc": event_time.isoformat() if event_time else None,
+        "event_age_minutes": event_age_minutes,
+        "event_confidence": event_confidence,
+        "event_validation": reason,
+    }
+
+
 def _parse_json(value: str) -> dict[str, Any]:
     value = value.strip()
     value = re.sub(r"^~~~(?:json)?\s*", "", value, flags=re.I)
@@ -539,6 +618,12 @@ async def get_macro_context(force: bool = False) -> dict[str, Any]:
             "bias_label": "neutral",
             "confidence": 0.0,
             "event_risk": False,
+            "event_kind": "none",
+            "event_name": None,
+            "event_time_utc": None,
+            "event_age_minutes": None,
+            "event_confidence": 0.0,
+            "event_validation": "not_claimed",
             "summary": "Macro research unavailable.",
             "drivers": [],
             "search_ok": bool(raw),
@@ -554,10 +639,20 @@ async def get_macro_context(force: bool = False) -> dict[str, Any]:
                 )
                 prompt = (
                     "Using ONLY the search material below, summarize the current macro context for gold. "
-                    "Return JSON only with keys bias, confidence, event_risk, summary, drivers. "
-                    "bias must be -1, 0, or 1. confidence must be 0..1. "
+                    "Return JSON only with keys bias, confidence, event_risk, event_kind, "
+                    "event_name, event_time_utc, event_age_minutes, event_confidence, summary, drivers. "
+                    "bias must be -1, 0, or 1. confidence and event_confidence must be 0..1. "
+                    "event_kind must be scheduled, breaking, or none. "
+                    "Set event_risk=true ONLY when the material explicitly supports either: "
+                    "(A) a scheduled high-impact USD/Fed macro event with an exact UTC time that is "
+                    "within 90 minutes before through 30 minutes after now, or "
+                    "(B) a breaking market-moving shock that occurred/published within the last 30 minutes. "
+                    "For scheduled events provide event_time_utc as an ISO-8601 UTC timestamp. "
+                    "For breaking events provide event_age_minutes. "
+                    "Do NOT flag general ongoing geopolitics, old news, earlier-day events outside the window, "
+                    "generic volatility, or events with uncertain timing. If uncertain, event_risk=false. "
                     "drivers must contain at most five short factual bullets. "
-                    "Do not invent facts, prices, or dates. If evidence conflicts, use bias 0.\n\n"
+                    "Do not invent facts, prices, dates, or event times. If evidence conflicts, use bias 0.\n\n"
                     + raw[:24000]
                 )
                 answer = await asyncio.wait_for(
@@ -578,11 +673,15 @@ async def get_macro_context(force: bool = False) -> dict[str, Any]:
                 except (TypeError, ValueError):
                     confidence = 0.0
                 drivers = parsed.get("drivers") if isinstance(parsed.get("drivers"), list) else []
+                event_gate = _validated_event_gate(
+                    parsed,
+                    now=datetime.now(timezone.utc),
+                )
                 data.update({
                     "bias": bias,
                     "bias_label": "bullish" if bias > 0 else "bearish" if bias < 0 else "neutral",
                     "confidence": confidence,
-                    "event_risk": bool(parsed.get("event_risk", False)),
+                    **event_gate,
                     "summary": str(parsed.get("summary") or "").strip() or data["summary"],
                     "drivers": [str(item).strip() for item in drivers[:5] if str(item).strip()],
                 })
