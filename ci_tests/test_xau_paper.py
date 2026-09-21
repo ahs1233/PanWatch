@@ -1236,3 +1236,62 @@ def test_shadow_memory_temporally_decorrelates_overlapping_decisions():
     assert memory["sample_count"] == 1
     assert memory["overlap_discarded"] == 5
     assert memory["temporally_decorrelated"] is True
+
+
+
+def test_replay_memory_does_not_mix_spot_and_futures_source_families():
+    base_vector = {
+        "source_family": "xau_spot_structure",
+        "candidate": "long_setup",
+        "alignment": "bullish",
+        "session": "london_ny_overlap",
+        "regime": "trend_bull",
+        "breakout": "up",
+        "directional_pressure": 1.0,
+        "return_10m_pct": 0.10,
+        "return_30m_pct": 0.20,
+        "acceleration": 0.03,
+        "volatility_pct": 0.15,
+        "rsi_5m_norm": 0.20,
+        "rsi_15m_norm": 0.10,
+        "macro_bias": 0.0,
+        "macro_confidence": 0.0,
+        "spread_bps": 0.5,
+        "spot_proxy_basis_bps": 0.0,
+        "spot_consensus_delta_bps": 0.0,
+        "data_quality": 1.0,
+    }
+    t0 = datetime(2026, 9, 21, 12, 0)
+    spot_episode = SimpleNamespace(
+        state_vector=dict(base_vector),
+        directional_return_bps=12.0,
+        observed_at=t0,
+        outcome_at=t0 + timedelta(minutes=60),
+        horizon_minutes=60,
+        source="biquote.io:MT5-ohlc:walk-forward",
+        meta={},
+    )
+    futures_vector = dict(base_vector)
+    futures_vector["source_family"] = "gc_futures_proxy"
+    futures_episode = SimpleNamespace(
+        state_vector=futures_vector,
+        directional_return_bps=-30.0,
+        observed_at=t0 + timedelta(hours=2),
+        outcome_at=t0 + timedelta(hours=3),
+        horizon_minutes=60,
+        source="yfinance:GC=F:walk-forward",
+        meta={},
+    )
+
+    memory = _replay_research_memory(
+        [spot_episode, futures_episode],
+        base_vector,
+        similarity_floor=0.70,
+        limit=20,
+    )
+
+    assert memory["sample_count"] == 1
+    assert memory["positive_rate"] == 1.0
+    assert memory["source_family"] == "xau_spot_structure"
+    assert memory["source_filtered"] is True
+    assert memory["source_mismatch_discarded"] == 1
