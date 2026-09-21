@@ -11,12 +11,14 @@ eligible, and never feeds its outcomes into trade-calibration metrics.
 from __future__ import annotations
 
 import asyncio
+import logging
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
 from typing import Any, Callable
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
 from src.modules.xau.paper_store import open_xau_paper_session
@@ -24,6 +26,9 @@ from src.platform.marketdata.xau_biquote import BiquoteXAUOHLCProvider
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
 from src.platform.marketdata.xau_research_provider import YahooGoldResearchProvider
 from src.platform.persistence.models import XAUReplayEpisode
+from src.platform.runtime.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 _TIMEFRAME_DURATION = {
@@ -537,3 +542,59 @@ async def refresh_replay_memory(
         "execution_allowed": False,
         "lookahead_protected": True,
     }
+
+
+class XAUReplayScheduler:
+    """Low-frequency replay refresh isolated from the live XAU hot path."""
+
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or Settings()
+        self.scheduler = AsyncIOScheduler(timezone=self.settings.xau_paper_timezone)
+
+    async def _refresh(self) -> None:
+        try:
+            result = await refresh_replay_memory(
+                horizon_minutes=self.settings.xau_replay_horizon_minutes,
+                step_minutes=self.settings.xau_replay_step_minutes,
+                limit=self.settings.xau_replay_bar_limit,
+            )
+            logger.info(
+                "[XAU replay] source=%s generated=%s added=%s stored=%s range=%s..%s research_only=true",
+                result.get("source"),
+                result.get("generated_episodes"),
+                result.get("added_episodes"),
+                result.get("stored_episodes_for_source"),
+                result.get("first_observed_at"),
+                result.get("last_observed_at"),
+            )
+        except Exception as exc:  # noqa: BLE001 - replay must never block live runtime
+            logger.warning(
+                "[XAU replay] refresh failed type=%s",
+                type(exc).__name__,
+            )
+
+    def start(self) -> None:
+        if not self.settings.xau_replay_enabled:
+            logger.info("[XAU replay] scheduler disabled")
+            return
+        interval = max(60, int(self.settings.xau_replay_interval_minutes))
+        first_run = datetime.now(timezone.utc) + timedelta(seconds=90)
+        self.scheduler.add_job(
+            self._refresh,
+            trigger="interval",
+            minutes=interval,
+            next_run_time=first_run,
+            id="xau-replay-refresh",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+        self.scheduler.start()
+        logger.info(
+            "[XAU replay] scheduler started interval_minutes=%s first_run_delay_seconds=90",
+            interval,
+        )
+
+    def shutdown(self) -> None:
+        if self.scheduler.running:
+            self.scheduler.shutdown(wait=False)
