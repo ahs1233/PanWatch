@@ -71,12 +71,24 @@ class BiquoteXAUIndicativeSpotReference:
     url = "https://biquote.io/api/XAUUSD"
 
     def fetch(self, timeout_seconds: float = 10.0) -> XAUIndicativeSpot:
+        headers = {"User-Agent": "PanWatch-XAU/0.1"}
         response = httpx.get(
             self.url,
             params={"allowStale": "false"},
             timeout=timeout_seconds,
-            headers={"User-Agent": "PanWatch-XAU/0.1"},
+            headers=headers,
         )
+        strict_stale_fallback = False
+        if response.status_code == 404:
+            # Biquote documents strict 404 when allowStale=false and the last
+            # quote is older than five minutes. Retry once for context/market
+            # state only; the result remains stale and can never become a fill.
+            response = httpx.get(
+                self.url,
+                timeout=timeout_seconds,
+                headers=headers,
+            )
+            strict_stale_fallback = True
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
@@ -101,7 +113,7 @@ class BiquoteXAUIndicativeSpotReference:
 
         market_state = str(payload.get("marketState") or "").strip().lower()
         stale = bool(payload.get("stale", False))
-        is_stale = stale or quote_age_seconds > 300.0
+        is_stale = strict_stale_fallback or stale or quote_age_seconds > 300.0
         if market_state and market_state != "open":
             is_stale = True
 
