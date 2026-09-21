@@ -473,6 +473,47 @@ def _trade_diagnostics(trades: list[XAUPaperTrade]) -> dict:
     }
 
 
+def _shadow_metrics(signals: list[XAUPaperSignal]) -> dict:
+    """Aggregate counterfactual outcomes for accepted and rejected setups."""
+    buckets: dict[str, dict[str, list[float]]] = {}
+    for signal in signals:
+        candidate = str(signal.candidate or "")
+        if candidate not in {"long_setup", "short_setup"}:
+            continue
+        decision = "accepted" if bool(signal.accepted) else "rejected"
+        shadow = (signal.meta or {}).get("shadow") or {}
+        for horizon, payload in shadow.items():
+            if not isinstance(payload, dict):
+                continue
+            value = _number(payload.get("directional_return_bps"))
+            if value is None:
+                continue
+            bucket = buckets.setdefault(
+                str(horizon),
+                {"accepted": [], "rejected": []},
+            )
+            bucket[decision].append(float(value))
+
+    out: dict[str, dict] = {}
+    for horizon, groups in buckets.items():
+        out[horizon] = {}
+        for decision, values in groups.items():
+            if not values:
+                out[horizon][decision] = {
+                    "count": 0,
+                    "positive_rate": None,
+                    "average_directional_return_bps": None,
+                }
+                continue
+            positives = sum(1 for value in values if value > 0)
+            out[horizon][decision] = {
+                "count": len(values),
+                "positive_rate": round(positives / len(values), 4),
+                "average_directional_return_bps": round(sum(values) / len(values), 4),
+            }
+    return out
+
+
 def _serialize_signal(signal: XAUPaperSignal) -> dict:
     return {
         "id": signal.id,
@@ -640,6 +681,75 @@ class XAUPaperTradingEngine:
         else:
             metrics["similarity_weighted_expectancy_r"] = None
         return metrics
+
+    def _update_shadow_outcomes(
+        self,
+        db,
+        *,
+        reference_price: float | None,
+        now_utc: datetime,
+        reference_source: str = "",
+    ) -> int:
+        """Journal forward outcomes for historical setup decisions.
+
+        This never opens/closes positions. It only measures what happened after
+        both accepted and rejected directional setups so false negatives can be
+        evaluated later.
+        """
+        price = _number(reference_price)
+        if price is None:
+            return 0
+
+        cutoff = now_utc - timedelta(hours=6)
+        signals = (
+            db.query(XAUPaperSignal)
+            .filter(
+                XAUPaperSignal.observed_at >= cutoff,
+                XAUPaperSignal.candidate.in_(("long_setup", "short_setup")),
+            )
+            .order_by(XAUPaperSignal.observed_at.desc(), XAUPaperSignal.id.desc())
+            .limit(500)
+            .all()
+        )
+
+        horizons = (15, 30, 60, 240)
+        changed = 0
+        for signal in signals:
+            if not signal.observed_at or not signal.price:
+                continue
+            elapsed = _position_age_minutes(signal.observed_at, now_utc)
+            side = 1.0 if signal.candidate == "long_setup" else -1.0
+            meta = dict(signal.meta or {})
+            shadow = dict(meta.get("shadow") or {})
+            touched = False
+
+            for horizon in horizons:
+                key = f"{horizon}m"
+                if key in shadow or elapsed < horizon:
+                    continue
+                directional_return_bps = (
+                    ((price - float(signal.price)) / float(signal.price))
+                    * 10_000.0
+                    * side
+                )
+                shadow[key] = {
+                    "directional_return_bps": round(directional_return_bps, 4),
+                    "positive": directional_return_bps > 0,
+                    "reference_price": round(price, 6),
+                    "reference_source": reference_source,
+                    "observed_after_minutes": round(elapsed, 2),
+                    "measured_at": now_utc.isoformat(),
+                }
+                touched = True
+
+            if touched:
+                meta["shadow"] = shadow
+                signal.meta = meta
+                changed += 1
+
+        if changed:
+            db.flush()
+        return changed
 
     def _update_account_equity(
         self,
@@ -1289,6 +1399,13 @@ class XAUPaperTradingEngine:
         db = open_xau_paper_session()
         try:
             account = self._ensure_week(db, spot, now=now)
+            analysis_reference = technical.get("analysis_reference") or {}
+            shadow_updates = self._update_shadow_outcomes(
+                db,
+                reference_price=_number(analysis_reference.get("price")),
+                now_utc=now_utc,
+                reference_source=str(analysis_reference.get("source") or ""),
+            )
             memory = self._memory_snapshot(db, technical, macro)
             fusion = build_decision_fusion(
                 technical,
@@ -1393,6 +1510,7 @@ class XAUPaperTradingEngine:
                 "closed_trade": _serialize_trade(closed_trade) if closed_trade else None,
                 "fusion": fusion,
                 "memory": memory,
+                "shadow_updates": shadow_updates,
                 "execution_allowed": False,
             }
         except Exception:
@@ -1432,6 +1550,13 @@ class XAUPaperTradingEngine:
                 .limit(max(1, min(int(signal_limit), 200)))
                 .all()
             )
+            shadow_signals = (
+                db.query(XAUPaperSignal)
+                .filter(XAUPaperSignal.account_id == account.id)
+                .order_by(XAUPaperSignal.observed_at.desc(), XAUPaperSignal.id.desc())
+                .limit(500)
+                .all()
+            )
             return {
                 "account": _serialize_account(account),
                 "position": _serialize_position(position),
@@ -1440,6 +1565,7 @@ class XAUPaperTradingEngine:
                 "settings": self.public_settings(),
                 "performance": _performance_metrics(trades),
                 "diagnostics": _trade_diagnostics(trades),
+                "shadow_diagnostics": _shadow_metrics(shadow_signals),
                 "execution_allowed": False,
             }
         finally:
