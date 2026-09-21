@@ -17,7 +17,7 @@ from src.modules.xau.service import (
     get_macro_context,
     get_xau_snapshot,
 )
-from src.modules.xau.paper_store import open_xau_paper_session
+from src.modules.xau.paper_store import open_xau_paper_session, paper_store_is_external
 from src.platform.persistence.models import (
     XAUPaperAccount,
     XAUPaperPosition,
@@ -709,6 +709,8 @@ class XAUPaperTradingEngine:
             "timezone": self.settings.xau_paper_timezone,
             "entry_states": ["setup_macro_support", "setup_macro_neutral"],
             "execution_allowed": False,
+            "storage": "neon_postgres" if paper_store_is_external() else "local_sqlite_fallback",
+            "storage_persistent": paper_store_is_external(),
         }
 
 
