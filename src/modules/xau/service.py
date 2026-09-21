@@ -17,7 +17,10 @@ from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.platform.ai.ai_client import AIClient
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.marketdata.xau_models import XAUTimeframe
-from src.platform.marketdata.xau_micro_reference import XAUSIntradayReferenceProvider
+from src.platform.marketdata.xau_micro_reference import (
+    XAUSIntradayReferenceProvider,
+    sampled_spot_bars,
+)
 from src.platform.marketdata.xau_research_provider import YahooGoldResearchProvider
 from src.platform.marketdata.xau_spot_reference import CompositeXAUIndicativeSpotProvider
 from src.platform.runtime.config import Settings
@@ -27,15 +30,35 @@ logger = logging.getLogger(__name__)
 _BARS_TTL = 45.0
 _SPOT_TTL = 55.0
 _MICRO_TTL = 55.0
+_SERIES_TTL = 55.0
 _MACRO_TTL = 300.0
 _bars_cache = None
 _spot_cache = None
 _micro_cache = None
+_series_cache = None
 _macro_cache = None
 _bars_lock = asyncio.Lock()
 _spot_lock = asyncio.Lock()
 _micro_lock = asyncio.Lock()
+_series_lock = asyncio.Lock()
 _macro_lock = asyncio.Lock()
+
+
+async def get_micro_series(force: bool = False):
+    global _series_cache
+    now = time.monotonic()
+    if not force and _series_cache and now - _series_cache[0] < _SERIES_TTL:
+        return _series_cache[1]
+
+    async with _series_lock:
+        now = time.monotonic()
+        if not force and _series_cache and now - _series_cache[0] < _SERIES_TTL:
+            return _series_cache[1]
+
+        provider = XAUSIntradayReferenceProvider()
+        series = await asyncio.to_thread(provider.fetch, hours=12)
+        _series_cache = (time.monotonic(), series)
+        return series
 
 
 async def get_research_bars(force: bool = False):
@@ -49,16 +72,27 @@ async def get_research_bars(force: bool = False):
         if not force and _bars_cache and now - _bars_cache[0] < _BARS_TTL:
             return _bars_cache[1]
 
-        provider = YahooGoldResearchProvider()
+        yahoo = YahooGoldResearchProvider()
 
-        async def load(timeframe):
-            return await asyncio.to_thread(provider.bars, timeframe)
+        async def yahoo_bars(timeframe):
+            try:
+                return await asyncio.to_thread(yahoo.bars, timeframe)
+            except Exception:
+                return []
 
-        m1, m5, m15 = await asyncio.gather(
-            load(XAUTimeframe.M1),
-            load(XAUTimeframe.M5),
-            load(XAUTimeframe.M15),
-        )
+        m1_task = asyncio.create_task(yahoo_bars(XAUTimeframe.M1))
+
+        try:
+            series = await get_micro_series(force=force)
+            m5 = sampled_spot_bars(series, XAUTimeframe.M5)
+            m15 = sampled_spot_bars(series, XAUTimeframe.M15)
+        except Exception:
+            m5, m15 = await asyncio.gather(
+                yahoo_bars(XAUTimeframe.M5),
+                yahoo_bars(XAUTimeframe.M15),
+            )
+
+        m1 = await m1_task
         data = {
             XAUTimeframe.M1: m1,
             XAUTimeframe.M5: m5,
@@ -141,8 +175,7 @@ async def get_micro_context(force: bool = False) -> dict[str, Any]:
         if not force and _micro_cache and now - _micro_cache[0] < _MICRO_TTL:
             return _micro_cache[1]
 
-        provider = XAUSIntradayReferenceProvider()
-        series = await asyncio.to_thread(provider.fetch, hours=2)
+        series = await get_micro_series(force=force)
         prices = [point.price for point in series.points]
         latest = series.points[-1]
 
@@ -211,8 +244,11 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
 
     frames = {}
     for name, state in assessment.frame_states.items():
+        frame_bars = bars.get(state.timeframe) or []
+        frame_source = frame_bars[-1].source if frame_bars else ""
         frames[name] = {
             "timeframe": state.timeframe.value,
+            "source": frame_source,
             "close": state.close,
             "ema_fast": state.ema_fast,
             "ema_slow": state.ema_slow,
@@ -256,7 +292,7 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     if micro_can_replace_1m:
         terminal_blocked = bool(remaining_reasons)
         terminal_status = "blocked" if terminal_blocked else "ready_with_spot_micro"
-        technical_mode = "spot_micro_plus_gc_5m_15m"
+        technical_mode = "spot_micro_plus_spot_5m_15m"
         terminal_candidate = "none"
 
         five = frames.get("5m")
@@ -289,7 +325,7 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     bearish = sum(1 for item in directions if item == "bearish")
     alignment = "bullish" if bullish >= 2 else "bearish" if bearish >= 2 else "mixed"
 
-    proxy_price = latest.get("close")
+    proxy_price = (frames.get("1m") or {}).get("close")
     basis = (
         (spot["price"] - proxy_price)
         if spot and proxy_price is not None
@@ -317,7 +353,8 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "instrument": "XAUUSD",
         "name": "Gold / U.S. Dollar",
         "research_proxy": "GC=F",
-        "research_source": "Yahoo Finance via yfinance",
+        "research_source": "XAUS sampled spot 5m/15m + Yahoo GC=F 1m fallback",
+        "primary_intraday_source": "xaus.com:intraday-sampled",
         "research_only": True,
         "execution_feed_connected": False,
         "execution_status": "LOCKED_NO_TRADABLE_SPOT_FEED",
@@ -330,7 +367,11 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "spot_minus_proxy": basis,
         "spot_minus_proxy_bps": basis_bps,
         "change_pct_1m": change_pct,
-        "observed_at": latest.get("observed_at"),
+        "observed_at": (
+            (spot or {}).get("observed_at")
+            or (micro or {}).get("observed_at")
+            or latest.get("observed_at")
+        ),
         "status": terminal_status,
         "candidate": terminal_candidate,
         "blocked": terminal_blocked,
