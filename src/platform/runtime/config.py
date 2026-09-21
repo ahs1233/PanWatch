@@ -17,9 +17,15 @@ class Settings(BaseSettings):
     """环境变量配置"""
 
     # AI
-    ai_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
-    ai_api_key: str = ""
-    ai_model: str = "glm-4"
+    # This fork defaults to Atria's OpenAI-compatible endpoint. Only the
+    # secret key is required at deploy time; the provider/model are
+    # bootstrapped into PanWatch automatically on startup.
+    ai_base_url: str = "https://api.atria-asi.ai/v1"
+    ai_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("AI_API_KEY", "ATRIA_API_KEY"),
+    )
+    ai_model: str = "Atria-Dawn-Preview"
 
     # Assistant context engineering. The compression model is optional: when
     # unset, the host reuses the configured default assistant model.
