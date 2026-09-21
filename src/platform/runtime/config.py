@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     ahmed_toolbox_token: str = ""
     ahmed_toolbox_timeout_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
 
+    # XAU weekly paper league. These settings are explicit so paper-risk rules
+    # are inspectable and never confused with the research decision fusion.
+    xau_paper_enabled: bool = True
+    xau_paper_initial_capital: float = Field(default=10_000.0, gt=0)
+    xau_paper_risk_pct: float = Field(default=0.01, gt=0, le=0.10)
+    xau_paper_reward_risk: float = Field(default=2.0, gt=0.25, le=10.0)
+    xau_paper_max_leverage: float = Field(default=1.0, ge=0.1, le=100.0)
+    xau_paper_scan_seconds: int = Field(default=60, ge=30, le=3600)
+    xau_paper_timezone: str = "Asia/Baghdad"
+
     # Telegram
     notify_telegram_bot_token: str = ""
     notify_telegram_chat_id: str = ""
