@@ -90,12 +90,24 @@ interface PaperSettings {
   storage_persistent: boolean
 }
 
+interface PaperPerformance {
+  trade_count: number
+  average_r: number
+  expectancy_r: number
+  profit_factor: number | null
+  average_mfe_usd: number
+  average_mae_usd: number
+  average_win_r: number
+  average_loss_r: number
+}
+
 interface PaperSummary {
   account: PaperAccount | null
   position: PaperPosition | null
   trades: PaperTrade[]
   signals: PaperSignal[]
   settings: PaperSettings
+  performance: PaperPerformance
   execution_allowed: boolean
 }
 
@@ -237,7 +249,7 @@ export default function PaperTradingPage() {
         </div>
       )}
 
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-8">
         <div className="card p-4">
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Week</div>
           <div className="mt-2 text-[18px] font-bold">{account?.week_key || '--'}</div>
@@ -276,6 +288,24 @@ export default function PaperTradingPage() {
           <div className="mt-2 text-[18px] font-bold">{num((data?.settings?.risk_pct || 0) * 100, 1)}% / trade</div>
           <div className="mt-1 text-[10px] text-muted-foreground">
             {num(data?.settings?.reward_risk, 1)}R target · {num(data?.settings?.max_leverage, 1)}× max
+          </div>
+        </div>
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Expectancy</div>
+          <div className={`mt-2 text-[20px] font-bold ${(data?.performance?.expectancy_r || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+            {num(data?.performance?.expectancy_r, 2)}R
+          </div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            Avg win {num(data?.performance?.average_win_r, 2)}R · avg loss {num(data?.performance?.average_loss_r, 2)}R
+          </div>
+        </div>
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Profit factor</div>
+          <div className="mt-2 text-[20px] font-bold">
+            {data?.performance?.profit_factor == null ? '--' : num(data.performance.profit_factor, 2)}
+          </div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            Avg MFE {money(data?.performance?.average_mfe_usd)} · MAE {money(data?.performance?.average_mae_usd)}
           </div>
         </div>
       </div>
