@@ -120,13 +120,25 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         score -= 0.12
         issues.append("micro_aging")
 
-    missing_frames = [name for name in ("1m", "5m", "15m") if name not in frames]
+    micro_substitutes_1m = bool(
+        technical.get("technical_mode") == "spot_micro_plus_spot_5m_15m"
+        and micro
+        and micro.get("status") == "ready"
+        and not micro.get("is_stale")
+    )
+    required_frames = ("5m", "15m") if micro_substitutes_1m else ("1m", "5m", "15m")
+    missing_frames = [name for name in required_frames if name not in frames]
     if missing_frames:
         score -= 0.09 * len(missing_frames)
         issues.extend(f"{name}_missing" for name in missing_frames)
 
+    if micro_substitutes_1m:
+        issues.append("micro_substitutes_1m")
+    elif "1m" not in frames:
+        score -= 0.05
+
     if any("fallback" in str(item) for item in technical.get("warnings") or []):
-        score -= 0.08
+        score -= 0.05
         issues.append("fallback_source_active")
 
     # Large disagreement between the indicative spot and the structural 1m
