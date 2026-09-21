@@ -136,6 +136,33 @@ def _paper_mark_price(side: str, spot: dict) -> float | None:
     return _number(spot.get("ask")) or _number(spot.get("price"))
 
 
+def _paper_context_mark_price(
+    side: str,
+    spot: dict,
+    analysis_reference: dict | None = None,
+) -> tuple[float | None, str]:
+    """Best available non-executable mark for equity/PnL display.
+
+    Fresh bid/ask is preferred. A fresh analytical mid may mark an open paper
+    position, but it can never trigger or price a simulated exit.
+    """
+    spot = spot or {}
+    if spot and not bool(spot.get("is_stale")):
+        mark = _paper_mark_price(side, spot)
+        if mark is not None:
+            return mark, "fill_quote"
+
+    reference = analysis_reference or {}
+    if (
+        reference
+        and not bool(reference.get("is_stale"))
+        and _number(reference.get("price")) is not None
+    ):
+        return _number(reference.get("price")), "analysis_reference"
+
+    return None, "unavailable"
+
+
 def _paper_exit_quote(side: str, spot: dict) -> float | None:
     """Executable-side indicative quote used for simulated exits."""
     if side == "long":
@@ -790,8 +817,13 @@ class XAUPaperTradingEngine:
         account: XAUPaperAccount,
         position: XAUPaperPosition,
         spot: dict,
+        analysis_reference: dict | None = None,
     ) -> float | None:
-        mark = _paper_mark_price(position.side, spot)
+        mark, mark_kind = _paper_context_mark_price(
+            position.side,
+            spot,
+            analysis_reference,
+        )
         if mark is None:
             return None
         pnl = _pnl(position.side, position.entry_price, mark, position.quantity_oz)
@@ -800,6 +832,10 @@ class XAUPaperTradingEngine:
         position.mfe_usd = max(float(position.mfe_usd or 0.0), pnl)
         position.mae_usd = min(float(position.mae_usd or 0.0), pnl)
         self._update_account_equity(account, pnl)
+        if mark_kind == "analysis_reference":
+            logger.debug(
+                "[XAU paper] mark-to-market uses analysis reference; exits remain locked"
+            )
         return mark
 
     def _levels_and_size(
@@ -1247,6 +1283,7 @@ class XAUPaperTradingEngine:
         technical = await get_xau_snapshot(force=False)
         macro = await get_macro_context(force=False)
         spot = technical.get("indicative_spot") or {}
+        analysis_reference = technical.get("analysis_reference") or {}
         now_utc = _utc_naive(now)
 
         db = open_xau_paper_session()
@@ -1262,8 +1299,15 @@ class XAUPaperTradingEngine:
             position = self._open_position(db, account.id)
             closed_trade = None
 
+            if position:
+                self._mark_position(
+                    account,
+                    position,
+                    spot,
+                    analysis_reference,
+                )
+
             if position and spot and not bool(spot.get("is_stale")):
-                self._mark_position(account, position, spot)
                 exit_quote = _paper_exit_quote(position.side, spot)
                 if exit_quote is not None:
                     exit_reason = None
@@ -1318,8 +1362,20 @@ class XAUPaperTradingEngine:
                 )
                 position = opened_position or self._open_position(db, account.id)
 
-            if position and spot and not bool(spot.get("is_stale")):
-                self._mark_position(account, position, spot)
+            if position:
+                mark = self._mark_position(
+                    account,
+                    position,
+                    spot,
+                    analysis_reference,
+                )
+                # If no current mark exists, preserve the last known unrealized
+                # equity rather than falsely resetting an open position to flat PnL.
+                if mark is None:
+                    self._update_account_equity(
+                        account,
+                        float(position.unrealized_pnl or 0.0),
+                    )
             else:
                 self._update_account_equity(account, 0.0)
 
