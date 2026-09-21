@@ -1466,8 +1466,11 @@ class XAUPaperTradingScheduler:
             fusion = result.get("fusion") or {}
             memory = result.get("memory") or {}
             cognition = fusion.get("cognition") or {}
+            data_quality = cognition.get("data_quality") or {}
+            sensors = data_quality.get("sensors") or {}
+            fill = sensors.get("fill_readiness") or {}
             logger.info(
-                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s regime=%s confidence=%s quality=%s quality_issues=%s meta=%s memory=%s similar=%s event_risk=%s event_kind=%s event_validation=%s event_policy=%s",
+                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s regime=%s confidence=%s quality=%s quality_issues=%s analysis_ref=%s analysis_age=%s fill_score=%s fill_issues=%s meta=%s memory=%s similar=%s event_risk=%s event_kind=%s event_validation=%s event_policy=%s",
                 result.get("week_key"),
                 account.get("current_equity"),
                 position.get("side") if position else "flat",
@@ -1476,8 +1479,12 @@ class XAUPaperTradingScheduler:
                 fusion.get("state"),
                 fusion.get("regime"),
                 fusion.get("cognitive_confidence"),
-                ((cognition.get("data_quality") or {}).get("score")),
-                ((cognition.get("data_quality") or {}).get("issues")),
+                data_quality.get("score"),
+                data_quality.get("issues"),
+                sensors.get("analysis_reference_kind"),
+                sensors.get("analysis_reference_age_seconds"),
+                fill.get("score"),
+                fill.get("issues"),
                 fusion.get("meta_decision"),
                 memory.get("source"),
                 memory.get("similar_samples"),
