@@ -522,6 +522,7 @@ def persist_replay_episodes_in_paper_store(db, episodes: list[ReplayEpisode]) ->
 async def _fetch_default_replay_history(
     *,
     limit: int = 1000,
+    lookback_days: int = 0,
 ) -> tuple[dict[XAUTimeframe, list[XAUBar]], str]:
     """Fetch one internally consistent replay dataset.
 
@@ -530,7 +531,49 @@ async def _fetch_default_replay_history(
     frames rather than mixing instruments inside one historical episode.
     """
     limit = max(60, min(int(limit), 1000))
+    lookback_days = max(0, min(int(lookback_days), 30))
     biquote = BiquoteXAUOHLCProvider()
+
+    if lookback_days > 0:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=lookback_days)
+
+        async def biquote_range_one(timeframe: XAUTimeframe):
+            return await asyncio.to_thread(
+                biquote.bars_range,
+                timeframe,
+                start=start,
+                end=end,
+            )
+
+        try:
+            results = await asyncio.gather(
+                *(biquote_range_one(tf) for tf in (
+                    XAUTimeframe.M1,
+                    XAUTimeframe.M5,
+                    XAUTimeframe.M15,
+                ))
+            )
+            deep_bars = {
+                XAUTimeframe.M1: results[0],
+                XAUTimeframe.M5: results[1],
+                XAUTimeframe.M15: results[2],
+            }
+            minimums = {
+                XAUTimeframe.M1: 300,
+                XAUTimeframe.M5: 60,
+                XAUTimeframe.M15: 30,
+            }
+            if all(
+                len(deep_bars[tf]) >= minimums[tf]
+                for tf in minimums
+            ):
+                return deep_bars, "biquote.io:MT5-ohlc-range"
+        except Exception as exc:  # noqa: BLE001 - fail soft to recent history
+            logger.warning(
+                "[XAU replay] deep MT5 history unavailable type=%s; using recent fallback",
+                type(exc).__name__,
+            )
 
     async def biquote_one(timeframe: XAUTimeframe):
         return await asyncio.to_thread(
@@ -576,9 +619,13 @@ async def refresh_replay_memory(
     horizon_minutes: int = 60,
     step_minutes: int = 5,
     limit: int = 1000,
+    lookback_days: int = 0,
 ) -> dict[str, Any]:
     """Fetch historical bars, run no-lookahead replay and persist new episodes."""
-    bars, source = await _fetch_default_replay_history(limit=limit)
+    bars, source = await _fetch_default_replay_history(
+        limit=limit,
+        lookback_days=lookback_days,
+    )
     replay_source = f"{source}:walk-forward"
     episodes = walk_forward_replay(
         bars,
@@ -633,6 +680,7 @@ async def refresh_replay_memory(
         "stored_episodes_for_source": total,
         "horizon_minutes": int(horizon_minutes),
         "step_minutes": int(step_minutes),
+        "lookback_days": int(lookback_days),
         "first_observed_at": (
             min(observed_times).isoformat() if observed_times else None
         ),
@@ -666,15 +714,17 @@ class XAUReplayScheduler:
                 horizon_minutes=self.settings.xau_replay_horizon_minutes,
                 step_minutes=self.settings.xau_replay_step_minutes,
                 limit=self.settings.xau_replay_bar_limit,
+                lookback_days=self.settings.xau_replay_lookback_days,
             )
             logger.info(
-                "[XAU replay] source=%s generated=%s added=%s stored=%s storage=%s durable=%s range=%s..%s research_only=true",
+                "[XAU replay] source=%s generated=%s added=%s stored=%s storage=%s durable=%s lookback_days=%s range=%s..%s research_only=true",
                 result.get("source"),
                 result.get("generated_episodes"),
                 result.get("added_episodes"),
                 result.get("stored_episodes_for_source"),
                 result.get("storage_mode"),
                 result.get("durable_external_store"),
+                result.get("lookback_days"),
                 result.get("first_observed_at"),
                 result.get("last_observed_at"),
             )
