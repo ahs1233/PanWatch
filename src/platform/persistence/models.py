@@ -1079,6 +1079,133 @@ class PaperTradingTrade(Base):
     meta = Column(JSON, default={})
 
 
+
+class XAUPaperAccount(Base):
+    """Weekly XAU paper-trading league account."""
+
+    __tablename__ = "xau_paper_accounts"
+    __table_args__ = (
+        UniqueConstraint("week_key", name="uq_xau_paper_account_week"),
+        Index("ix_xau_paper_account_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    week_key = Column(String, nullable=False)
+    initial_capital = Column(Float, nullable=False, default=10000.0)
+    realized_pnl = Column(Float, nullable=False, default=0.0)
+    current_equity = Column(Float, nullable=False, default=10000.0)
+    peak_equity = Column(Float, nullable=False, default=10000.0)
+    max_drawdown_pct = Column(Float, nullable=False, default=0.0)
+    total_trades = Column(Integer, nullable=False, default=0)
+    winning_trades = Column(Integer, nullable=False, default=0)
+    losing_trades = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False, default="active")
+    started_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class XAUPaperSignal(Base):
+    """Deduplicated XAU setup observation used by the weekly paper engine."""
+
+    __tablename__ = "xau_paper_signals"
+    __table_args__ = (
+        UniqueConstraint("setup_key", name="uq_xau_paper_signal_setup"),
+        Index("ix_xau_paper_signal_account_observed", "account_id", "observed_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("xau_paper_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    setup_key = Column(String, nullable=False)
+    candidate = Column(String, nullable=False, default="none")
+    fusion_state = Column(String, nullable=False, default="")
+    macro_relation = Column(String, nullable=False, default="")
+    event_risk = Column(Boolean, nullable=False, default=False)
+    price = Column(Float, nullable=True)
+    accepted = Column(Boolean, nullable=False, default=False)
+    rejection_reason = Column(String, nullable=False, default="")
+    observed_at = Column(DateTime, nullable=False)
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class XAUPaperPosition(Base):
+    """Open/closed XAU paper position; at most one is opened by the engine."""
+
+    __tablename__ = "xau_paper_positions"
+    __table_args__ = (
+        Index("ix_xau_paper_position_status", "status"),
+        Index("ix_xau_paper_position_account", "account_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("xau_paper_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    setup_key = Column(String, nullable=False, default="")
+    side = Column(String, nullable=False)
+    quantity_oz = Column(Float, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    stop_loss = Column(Float, nullable=False)
+    target_price = Column(Float, nullable=False)
+    current_price = Column(Float, nullable=False)
+    unrealized_pnl = Column(Float, nullable=False, default=0.0)
+    mfe_usd = Column(Float, nullable=False, default=0.0)
+    mae_usd = Column(Float, nullable=False, default=0.0)
+    risk_usd = Column(Float, nullable=False, default=0.0)
+    setup_state = Column(String, nullable=False, default="")
+    macro_relation = Column(String, nullable=False, default="")
+    price_source = Column(String, nullable=False, default="")
+    status = Column(String, nullable=False, default="open")
+    opened_at = Column(DateTime, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class XAUPaperTrade(Base):
+    """Closed XAU paper trade with excursion analytics."""
+
+    __tablename__ = "xau_paper_trades"
+    __table_args__ = (
+        Index("ix_xau_paper_trade_account_closed", "account_id", "closed_at"),
+        Index("ix_xau_paper_trade_setup", "setup_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("xau_paper_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    setup_key = Column(String, nullable=False, default="")
+    side = Column(String, nullable=False)
+    quantity_oz = Column(Float, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=False)
+    stop_loss = Column(Float, nullable=False)
+    target_price = Column(Float, nullable=False)
+    pnl = Column(Float, nullable=False, default=0.0)
+    pnl_pct_equity = Column(Float, nullable=False, default=0.0)
+    r_multiple = Column(Float, nullable=False, default=0.0)
+    mfe_usd = Column(Float, nullable=False, default=0.0)
+    mae_usd = Column(Float, nullable=False, default=0.0)
+    risk_usd = Column(Float, nullable=False, default=0.0)
+    exit_reason = Column(String, nullable=False, default="")
+    setup_state = Column(String, nullable=False, default="")
+    macro_relation = Column(String, nullable=False, default="")
+    price_source = Column(String, nullable=False, default="")
+    opened_at = Column(DateTime, nullable=False)
+    closed_at = Column(DateTime, nullable=False)
+    meta = Column(JSON, default={})
+
+
 class ChatConversation(Base):
     """AI 对话会话"""
 
