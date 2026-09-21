@@ -166,7 +166,7 @@ def sampled_spot_bars(
         prices = [item.price for item in points]
         bars.append(
             XAUBar(
-                timestamp=points[-1].timestamp,
+                timestamp=datetime.fromtimestamp(bucket * seconds, tz=timezone.utc),
                 timeframe=timeframe,
                 open=prices[0],
                 high=max(prices),
