@@ -326,6 +326,7 @@ def test_biquote_marks_closed_market_as_stale(monkeypatch):
 
     quote = BiquoteXAUIndicativeSpotReference().fetch()
     assert quote.is_stale is True
+    assert quote.market_state == "closed"
 
 
 def test_composite_prefers_fresh_bid_ask_over_mid_only():
@@ -927,4 +928,5 @@ def test_biquote_strict_404_retries_as_stale_context(monkeypatch):
     assert quote.bid == 4340.10
     assert quote.ask == 4340.40
     assert quote.is_stale is True
+    assert quote.provider_quote_age_seconds == 301
     assert quote.execution_eligible is False
