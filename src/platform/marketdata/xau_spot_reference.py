@@ -61,6 +61,63 @@ def _number(value: Any) -> float | None:
     return number if number > 0 else None
 
 
+class BiquoteXAUIndicativeSpotReference:
+    """Public MT5-backed indicative XAUUSD bid/ask reference.
+
+    This feed is suitable for paper-fill friction and quote-side simulation only.
+    It is never execution eligible because it is not tied to the user's broker.
+    """
+
+    url = "https://biquote.io/api/XAUUSD"
+
+    def fetch(self, timeout_seconds: float = 10.0) -> XAUIndicativeSpot:
+        response = httpx.get(
+            self.url,
+            params={"allowStale": "false"},
+            timeout=timeout_seconds,
+            headers={"User-Agent": "PanWatch-XAU/0.1"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("biquote.io returned malformed XAUUSD response")
+
+        bid = _number(payload.get("bid"))
+        ask = _number(payload.get("ask"))
+        if bid is None or ask is None:
+            raise RuntimeError("biquote.io returned no usable bid/ask")
+        if ask < bid:
+            raise RuntimeError("biquote.io returned crossed XAUUSD quote")
+
+        price = _number(payload.get("mid")) or ((bid + ask) / 2.0)
+        observed_at = _parse_timestamp(
+            payload.get("timestamp") or payload.get("lastQuoteAt")
+        )
+
+        try:
+            quote_age_seconds = float(payload.get("quoteAgeSeconds") or 0.0)
+        except (TypeError, ValueError):
+            quote_age_seconds = 0.0
+
+        market_state = str(payload.get("marketState") or "").strip().lower()
+        stale = bool(payload.get("stale", False))
+        is_stale = stale or quote_age_seconds > 300.0
+        if market_state and market_state != "open":
+            is_stale = True
+
+        raw_source = str(payload.get("source") or "MT5").strip()
+        source = f"biquote.io:{raw_source}" if raw_source else "biquote.io:MT5"
+
+        return XAUIndicativeSpot(
+            price=price,
+            bid=bid,
+            ask=ask,
+            observed_at=observed_at,
+            source=source,
+            is_stale=is_stale,
+        )
+
+
 class GoldPriceDevSpotReference:
     """Keyless spot reference with bid/ask and explicit stale metadata."""
 
@@ -133,19 +190,34 @@ class XAUSSpotReference:
 
 
 class CompositeXAUIndicativeSpotProvider:
-    """Try the bid/ask source first, then fail soft to a mid-market source."""
+    """Prefer a fresh bid/ask quote, then fail soft to fresh mid references."""
 
     def __init__(self) -> None:
         self.providers = (
+            BiquoteXAUIndicativeSpotReference(),
             GoldPriceDevSpotReference(),
             XAUSSpotReference(),
         )
 
     def fetch(self, timeout_seconds: float = 10.0) -> XAUIndicativeSpot:
         errors: list[str] = []
+        fallback: XAUIndicativeSpot | None = None
+
         for provider in self.providers:
             try:
-                return provider.fetch(timeout_seconds=timeout_seconds)
+                quote = provider.fetch(timeout_seconds=timeout_seconds)
             except Exception as exc:  # noqa: BLE001 - fail over to next reference
                 errors.append(f"{type(provider).__name__}:{type(exc).__name__}")
+                continue
+
+            if not quote.is_stale and quote.bid is not None and quote.ask is not None:
+                return quote
+
+            if fallback is None:
+                fallback = quote
+            elif fallback.is_stale and not quote.is_stale:
+                fallback = quote
+
+        if fallback is not None:
+            return fallback
         raise RuntimeError("all XAU spot references failed: " + ",".join(errors))
