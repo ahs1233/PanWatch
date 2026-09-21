@@ -106,16 +106,22 @@ def test_external_mcp_tools_are_registered_as_deferred_read_tools():
     assert {item.tool_name for item in descriptors} == set(specs)
 
 
-def test_xau_research_tool_is_deferred_and_explicitly_non_execution():
+def test_xau_research_tools_are_deferred_and_explicitly_non_execution():
     registry = ToolRegistry()
     descriptors = register_xau_research_tools(registry)
 
     specs = {tool.name: tool for tool in registry.registered_tools()}
+    descriptor_map = {item.tool_name: item for item in descriptors}
 
-    assert set(specs) == {"get_xau_intraday_research"}
+    assert set(specs) == {
+        "get_xau_intraday_research",
+        "get_xau_decision_fusion",
+    }
     assert specs["get_xau_intraday_research"].exposure is ToolExposure.DEFERRED
-    assert descriptors[0].tool_name == "get_xau_intraday_research"
-    assert "not valid for execution" in descriptors[0].summary
+    assert specs["get_xau_decision_fusion"].exposure is ToolExposure.DEFERRED
+    assert set(descriptor_map) == set(specs)
+    assert "not valid for execution" in descriptor_map["get_xau_intraday_research"].summary
+    assert "research-only" in descriptor_map["get_xau_decision_fusion"].summary.lower()
 
 
 def test_xau_execution_mode_blocks_research_proxy_data():
