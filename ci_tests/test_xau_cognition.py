@@ -20,7 +20,16 @@ def _technical(candidate="short_setup", *, blocked=False, rsi=44.0, spot_price=4
             "price": spot_price,
             "bid": spot_price - 0.1,
             "ask": spot_price + 0.1,
+            "age_seconds": 1.0,
             "is_stale": False,
+        },
+        "analysis_reference": {
+            "price": spot_price,
+            "source": "test-spot",
+            "age_seconds": 1.0,
+            "is_stale": False,
+            "kind": "indicative_spot",
+            "execution_eligible": False,
         },
         "micro": {
             "status": "ready",
@@ -346,17 +355,63 @@ def test_mid_only_slightly_aged_spot_keeps_analytical_quality_but_not_execution_
         "age_seconds": 60.0,
         "is_stale": False,
     })
+    technical["analysis_reference"] = {
+        "price": 4340.1,
+        "source": "test-micro",
+        "age_seconds": 12.0,
+        "is_stale": False,
+        "kind": "micro_fallback",
+        "execution_eligible": False,
+    }
     technical["micro"]["status"] = "ready"
     technical["micro"]["is_stale"] = False
-    technical["micro"]["age_seconds"] = 30.0
+    technical["micro"]["age_seconds"] = 12.0
     technical["warnings"] = ["biquote_ohlc_fallback_active"]
 
     state = build_cognitive_state(
         technical,
         {"bias": -1, "confidence": 0.6, "event_risk": False},
     )
-    issues = state["data_quality"]["issues"]
-    assert "spot_stale" not in issues
-    assert "spot_slightly_aged" in issues
-    assert "bid_ask_missing_execution_only" in issues
-    assert state["data_quality"]["score"] >= 0.75
+    quality = state["data_quality"]
+    fill = quality["sensors"]["fill_readiness"]
+    assert "analysis_reference_stale" not in quality["issues"]
+    assert quality["score"] >= 0.85
+    assert fill["ready_for_paper_fill"] is False
+    assert "fill_bid_ask_missing" in fill["issues"]
+
+
+def test_stale_fill_quote_does_not_poison_fresh_micro_analysis():
+    technical = _technical()
+    technical["technical_mode"] = "spot_micro_plus_spot_5m_15m"
+    technical["frames"].pop("1m", None)
+    technical["indicative_spot"].update({
+        "age_seconds": 600.0,
+        "is_stale": True,
+        "bid": None,
+        "ask": None,
+    })
+    technical["analysis_reference"] = {
+        "price": 4340.2,
+        "source": "xaus.com:intraday",
+        "age_seconds": 8.0,
+        "is_stale": False,
+        "kind": "micro_fallback",
+        "execution_eligible": False,
+    }
+    technical["micro"].update({
+        "status": "ready",
+        "is_stale": False,
+        "age_seconds": 8.0,
+    })
+
+    state = build_cognitive_state(
+        technical,
+        {"bias": -1, "confidence": 0.6, "event_risk": False},
+    )
+    quality = state["data_quality"]
+    fill = quality["sensors"]["fill_readiness"]
+    assert quality["score"] >= 0.90
+    assert state["regime"]["label"] != "data_uncertain"
+    assert fill["ready_for_paper_fill"] is False
+    assert "fill_quote_stale" in fill["issues"]
+    assert "fill_bid_ask_missing" in fill["issues"]
