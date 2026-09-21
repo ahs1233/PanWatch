@@ -678,3 +678,23 @@ def test_conflicting_research_priors_are_damped():
         abs(memory["shadow_confidence_adjustment"])
         + abs(memory["replay_confidence_adjustment"])
     )
+
+
+
+def test_market_state_tags_structural_source_family():
+    spot_technical = _technical()
+    for frame in spot_technical["frames"].values():
+        frame["source"] = "biquote.io:MT5-ohlc"
+    spot_technical["technical_mode"] = "biquote_mt5_1m_5m_15m"
+
+    futures_technical = _technical()
+    for frame in futures_technical["frames"].values():
+        frame["source"] = "yfinance:GC=F"
+    futures_technical["technical_mode"] = "mixed_research_fallback_1m_5m_15m"
+
+    macro = {"bias": 0, "confidence": 0.0, "event_risk": False}
+    spot_vector = build_market_state_vector(spot_technical, macro)
+    futures_vector = build_market_state_vector(futures_technical, macro)
+
+    assert spot_vector["source_family"] == "xau_spot_structure"
+    assert futures_vector["source_family"] == "gc_futures_proxy"
