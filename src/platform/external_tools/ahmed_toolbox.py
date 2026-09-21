@@ -120,3 +120,8 @@ class AhmedToolboxClient:
         if not isinstance(result, dict):
             raise AhmedToolboxError("Ahmed ToolBox tools/call payload is malformed")
         return result
+
+
+    def close(self) -> None:
+        """Release the underlying HTTP client for short-lived probes."""
+        self._client.close()
