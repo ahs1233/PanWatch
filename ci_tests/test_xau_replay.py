@@ -9,11 +9,16 @@ from src.modules.xau.replay import (
     _fetch_default_replay_history,
     build_replay_technical_state,
     persist_replay_episodes,
+    persist_replay_episodes_in_paper_store,
     walk_forward_replay,
 )
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
 from src.platform.persistence.database import Base
-from src.platform.persistence.models import XAUReplayEpisode
+from src.platform.persistence.models import (
+    XAUPaperAccount,
+    XAUPaperSignal,
+    XAUReplayEpisode,
+)
 
 
 def _bars(timeframe: XAUTimeframe, count: int, *, start: datetime, slope: float = 0.2):
@@ -209,3 +214,62 @@ def test_default_replay_history_does_not_mix_sources_on_partial_biquote_failure(
         for tf in XAUTimeframe
         for row in history[tf]
     )
+
+
+
+def test_paper_signal_compat_replay_storage_is_idempotent_and_isolated():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[
+            XAUPaperAccount.__table__,
+            XAUPaperSignal.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        start = datetime(2026, 1, 5, 0, 0)
+        account = XAUPaperAccount(
+            week_key="2026-W02",
+            initial_capital=10_000.0,
+            realized_pnl=0.0,
+            current_equity=10_000.0,
+            peak_equity=10_000.0,
+            max_drawdown_pct=0.0,
+            total_trades=0,
+            winning_trades=0,
+            losing_trades=0,
+            status="active",
+            started_at=start,
+        )
+        db.add(account)
+        db.commit()
+
+        episodes = walk_forward_replay(
+            _history(),
+            horizon_minutes=30,
+            step_minutes=30,
+            source="compat-test",
+        )
+        assert episodes
+
+        added_first = persist_replay_episodes_in_paper_store(db, episodes[:3])
+        db.commit()
+        added_second = persist_replay_episodes_in_paper_store(db, episodes[:3])
+        db.commit()
+
+        rows = (
+            db.query(XAUPaperSignal)
+            .filter(XAUPaperSignal.rejection_reason == "historical_replay")
+            .all()
+        )
+        assert added_first == 3
+        assert added_second == 0
+        assert len(rows) == 3
+        assert all(row.accepted is False for row in rows)
+        assert all(row.candidate.startswith("replay_") for row in rows)
+        assert all(row.setup_key.startswith("replay:") for row in rows)
+        assert all((row.meta or {}).get("lookahead_protected") is True for row in rows)
+    finally:
+        db.close()
