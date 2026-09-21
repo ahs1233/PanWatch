@@ -167,10 +167,12 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
         _arguments: dict,
     ) -> ToolResult:
         try:
-            summary_data = XAUPaperTradingEngine().summary(
+            paper_engine = XAUPaperTradingEngine()
+            summary_data = paper_engine.summary(
                 trade_limit=50,
                 signal_limit=50,
             )
+            summary_data["weekly_history"] = paper_engine.history(limit=12)
         except Exception as exc:  # noqa: BLE001
             return ToolResult.failure(
                 summary=f"XAU paper league unavailable: {type(exc).__name__}",
@@ -185,7 +187,8 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
             f"equity={account.get('current_equity')}; "
             f"realized_pnl={account.get('realized_pnl')}; "
             f"trades={account.get('total_trades')}; "
-            f"position={position.get('side') if position else 'flat'}. "
+            f"position={position.get('side') if position else 'flat'}; "
+            f"history_weeks={len(summary_data.get('weekly_history') or [])}. "
             "Simulation only; no live execution capability."
         )
         return ToolResult.success(
