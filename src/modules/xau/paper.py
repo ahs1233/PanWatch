@@ -93,6 +93,27 @@ def _pnl(side: str, entry: float, mark: float, quantity: float) -> float:
     return (entry - mark) * quantity
 
 
+def _paper_exit_fill_price(
+    side: str,
+    mark: float,
+    stop_loss: float,
+    target_price: float,
+    exit_reason: str,
+) -> float:
+    """Conservative paper fill once a stop/target condition is observed.
+
+    Targets fill at the target level instead of crediting favorable overshoot.
+    Stops preserve adverse gap/slippage by taking the worse observed mark.
+    """
+    if exit_reason == "target_price":
+        return float(target_price)
+    if exit_reason == "stop_loss":
+        if side == "long":
+            return min(float(mark), float(stop_loss))
+        return max(float(mark), float(stop_loss))
+    return float(mark)
+
+
 def _serialize_account(account: XAUPaperAccount | None) -> dict | None:
     if not account:
         return None
@@ -426,7 +447,6 @@ class XAUPaperTradingEngine:
         return (
             f"{account.week_key}:"
             f"{fusion.get('technical_candidate')}:"
-            f"{fusion.get('state')}:"
             f"{anchor}"
         )
 
@@ -623,11 +643,18 @@ class XAUPaperTradingEngine:
                             exit_reason = "target_price"
 
                     if exit_reason:
+                        exit_fill = _paper_exit_fill_price(
+                            position.side,
+                            mark,
+                            position.stop_loss,
+                            position.target_price,
+                            exit_reason,
+                        )
                         closed_trade = self._close_position(
                             db,
                             account,
                             position,
-                            mark,
+                            exit_fill,
                             exit_reason,
                             now_utc,
                             {
