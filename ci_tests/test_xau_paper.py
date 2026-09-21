@@ -18,6 +18,7 @@ from src.modules.xau.paper import (
     _paper_exit_fill_price,
     _performance_metrics,
     _shadow_metrics,
+    _shadow_horizon_due,
     _calibration_metrics,
     _trade_autopsy,
     _position_age_minutes,
@@ -521,3 +522,20 @@ def test_shadow_metrics_ignore_non_directional_observations():
         ),
     ]
     assert _shadow_metrics(signals) == {}
+
+
+
+def test_shadow_horizon_only_measures_near_target_time():
+    due, grace = _shadow_horizon_due(15.5, 15)
+    assert due is True
+    assert grace == 2.0
+
+    due_late, _ = _shadow_horizon_due(25.0, 15)
+    assert due_late is False
+
+    due_60, grace_60 = _shadow_horizon_due(64.0, 60)
+    assert due_60 is True
+    assert grace_60 == 6.0
+
+    due_restart, _ = _shadow_horizon_due(240.0, 15)
+    assert due_restart is False
