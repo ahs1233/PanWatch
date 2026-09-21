@@ -1148,3 +1148,91 @@ def test_shadow_research_memory_excludes_execution_and_accepted_signals():
     assert memory["positive_rate"] == 0.0
     assert memory["decision_filtered"] is True
     assert "cognitive_veto" in memory["eligible_rejection_reasons"]
+
+
+
+def test_replay_memory_temporally_decorrelates_overlapping_horizons():
+    vector = {
+        "candidate": "long_setup",
+        "alignment": "bullish",
+        "session": "new_york",
+        "regime": "trend_bull",
+        "directional_pressure": 0.8,
+        "return_10m_pct": 0.1,
+        "return_30m_pct": 0.2,
+        "acceleration": 0.03,
+        "volatility_pct": 0.15,
+        "rsi_5m_norm": 0.2,
+        "rsi_15m_norm": 0.1,
+        "breakout": "up",
+        "macro_bias": 0.0,
+        "macro_confidence": 0.0,
+        "spread_bps": 0.0,
+        "spot_proxy_basis_bps": 0.0,
+        "data_quality": 0.95,
+    }
+    start = datetime(2026, 1, 5, 12, 0)
+    episodes = []
+    for i in range(12):
+        observed = start + timedelta(minutes=5 * i)
+        episodes.append(
+            SimpleNamespace(
+                state_vector=dict(vector),
+                directional_return_bps=10.0,
+                horizon_minutes=60,
+                observed_at=observed,
+                outcome_at=observed + timedelta(minutes=60),
+                meta={},
+            )
+        )
+
+    memory = _replay_research_memory(episodes, vector)
+
+    assert memory["raw_sample_count"] == 12
+    assert memory["sample_count"] == 1
+    assert memory["overlap_discarded"] == 11
+    assert memory["temporally_decorrelated"] is True
+
+
+def test_shadow_memory_temporally_decorrelates_overlapping_decisions():
+    vector = {
+        "candidate": "short_setup",
+        "alignment": "bearish",
+        "session": "new_york",
+        "regime": "trend_bear",
+        "directional_pressure": -0.8,
+        "return_10m_pct": -0.1,
+        "return_30m_pct": -0.2,
+        "acceleration": -0.03,
+        "volatility_pct": 0.15,
+        "rsi_5m_norm": -0.2,
+        "rsi_15m_norm": -0.1,
+        "breakout": "down",
+        "macro_bias": -1.0,
+        "macro_confidence": 0.7,
+        "spread_bps": 0.5,
+        "spot_proxy_basis_bps": 0.0,
+        "data_quality": 0.95,
+    }
+    start = datetime(2026, 1, 5, 12, 0)
+    signals = []
+    for i in range(6):
+        observed = start + timedelta(minutes=10 * i)
+        signals.append(
+            SimpleNamespace(
+                accepted=False,
+                rejection_reason="cognitive_wait",
+                observed_at=observed,
+                meta={
+                    "state_vector": dict(vector),
+                    "shadow": {"60m": {"directional_return_bps": 5.0}},
+                },
+            )
+        )
+
+    memory = _shadow_research_memory(signals, vector)
+
+    assert memory["raw_sample_count"] == 6
+    assert memory["sample_count"] == 1
+    assert memory["overlap_discarded"] == 5
+    assert memory["temporally_decorrelated"] is True
