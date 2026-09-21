@@ -16,6 +16,10 @@ from src.platform.marketdata.models import MarketCode
 class Settings(BaseSettings):
     """环境变量配置"""
 
+    # Runtime profile. The Ahmed fork runs as an XAU/USD research terminal by
+    # default; "legacy" restores the original stock-centric background jobs.
+    panwatch_profile: str = "xau"
+
     # AI
     # This fork defaults to Atria's OpenAI-compatible endpoint. Only the
     # secret key is required at deploy time; the provider/model are
