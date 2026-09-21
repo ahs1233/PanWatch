@@ -16,6 +16,10 @@ from typing import Any
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.platform.ai.ai_client import AIClient
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
+from src.platform.marketdata.xau_biquote import (
+    BiquoteEconomicCalendarProvider,
+    BiquoteXAUOHLCProvider,
+)
 from src.platform.marketdata.xau_models import XAUTimeframe
 from src.platform.marketdata.xau_micro_reference import (
     XAUSIntradayReferenceProvider,
@@ -26,6 +30,8 @@ from src.platform.marketdata.xau_spot_reference import CompositeXAUIndicativeSpo
 from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
+
+MACRO_EVENT_POLICY_VERSION = "calendar-v1+breaking-v1"
 
 _BARS_TTL = 45.0
 _SPOT_TTL = 55.0
@@ -72,7 +78,18 @@ async def get_research_bars(force: bool = False):
         if not force and _bars_cache and now - _bars_cache[0] < _BARS_TTL:
             return _bars_cache[1]
 
+        biquote = BiquoteXAUOHLCProvider()
         yahoo = YahooGoldResearchProvider()
+
+        async def biquote_bars(timeframe):
+            try:
+                return await asyncio.to_thread(
+                    biquote.bars,
+                    timeframe,
+                    limit=240,
+                )
+            except Exception:
+                return []
 
         async def yahoo_bars(timeframe):
             try:
@@ -80,21 +97,31 @@ async def get_research_bars(force: bool = False):
             except Exception:
                 return []
 
-        try:
-            # Primary intraday path: live indicative spot tape sampled into 5m/15m.
-            # We intentionally do NOT hit Yahoo 1m here; the live spot micro-series
-            # replaces the 1m confirmation in get_xau_snapshot().
-            series = await get_micro_series(force=force)
-            m1 = []
-            m5 = sampled_spot_bars(series, XAUTimeframe.M5)
-            m15 = sampled_spot_bars(series, XAUTimeframe.M15)
-        except Exception:
-            # Only if the spot tape itself is unavailable do we fall back to GC=F.
-            m1, m5, m15 = await asyncio.gather(
-                yahoo_bars(XAUTimeframe.M1),
-                yahoo_bars(XAUTimeframe.M5),
-                yahoo_bars(XAUTimeframe.M15),
-            )
+        m1, m5, m15 = await asyncio.gather(
+            biquote_bars(XAUTimeframe.M1),
+            biquote_bars(XAUTimeframe.M5),
+            biquote_bars(XAUTimeframe.M15),
+        )
+
+        # Fail soft per timeframe. XAUS sampled spot is preferred over GC=F for
+        # 5m/15m; Yahoo GC=F remains the last-resort research proxy.
+        sampled_5 = []
+        sampled_15 = []
+        if not m5 or not m15:
+            try:
+                series = await get_micro_series(force=force)
+                sampled_5 = sampled_spot_bars(series, XAUTimeframe.M5)
+                sampled_15 = sampled_spot_bars(series, XAUTimeframe.M15)
+            except Exception:
+                sampled_5 = []
+                sampled_15 = []
+
+        if not m1:
+            m1 = await yahoo_bars(XAUTimeframe.M1)
+        if not m5:
+            m5 = sampled_5 or await yahoo_bars(XAUTimeframe.M5)
+        if not m15:
+            m15 = sampled_15 or await yahoo_bars(XAUTimeframe.M15)
 
         data = {
             XAUTimeframe.M1: m1,
@@ -290,7 +317,19 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     terminal_blocked = assessment.blocked
     terminal_status = assessment.status
     terminal_candidate = assessment.candidate
-    technical_mode = "gc_proxy_1m_5m_15m"
+    frame_sources = {
+        name: str(frame.get("source") or "")
+        for name, frame in frames.items()
+    }
+    all_biquote = all(
+        frame_sources.get(name, "").startswith("biquote.io:")
+        for name in ("1m", "5m", "15m")
+    )
+    technical_mode = (
+        "biquote_mt5_1m_5m_15m"
+        if all_biquote
+        else "mixed_research_fallback_1m_5m_15m"
+    )
 
     if micro_can_replace_1m:
         terminal_blocked = bool(remaining_reasons)
@@ -341,6 +380,8 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     )
 
     warnings = list(assessment.warnings)
+    if not all_biquote:
+        warnings.append("biquote_ohlc_fallback_active")
     if micro_can_replace_1m:
         warnings.append("gc_1m_stale_replaced_by_live_spot_micro")
     elif micro_error:
@@ -356,8 +397,8 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "instrument": "XAUUSD",
         "name": "Gold / U.S. Dollar",
         "research_proxy": "GC=F",
-        "research_source": "XAUS sampled spot 5m/15m + Yahoo GC=F 1m fallback",
-        "primary_intraday_source": "xaus.com:intraday-sampled",
+        "research_source": "Biquote MT5 OHLC primary; XAUS/Yahoo research fallbacks",
+        "primary_intraday_source": "biquote.io:MT5-ohlc",
         "research_only": True,
         "execution_feed_connected": False,
         "execution_status": "LOCKED_NO_TRADABLE_SPOT_FEED",
@@ -460,6 +501,8 @@ def build_decision_fusion(
         "event_age_minutes": macro.get("event_age_minutes"),
         "event_confidence": macro.get("event_confidence"),
         "event_validation": macro.get("event_validation"),
+        "event_policy_version": macro.get("event_policy_version"),
+        "event_source_url": macro.get("event_source_url"),
         "research_ready": research_ready,
         "execution_allowed": False,
         "execution_status": technical.get(
@@ -554,7 +597,26 @@ def _validated_event_gate(
         "event_age_minutes": event_age_minutes,
         "event_confidence": event_confidence,
         "event_validation": reason,
+        "event_policy_version": MACRO_EVENT_POLICY_VERSION,
     }
+
+
+def _resolve_event_gate(
+    ai_event_gate: dict[str, Any],
+    calendar_event: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if calendar_event:
+        resolved = dict(calendar_event)
+        resolved["event_policy_version"] = MACRO_EVENT_POLICY_VERSION
+        return resolved
+
+    resolved = dict(ai_event_gate)
+    resolved["event_policy_version"] = MACRO_EVENT_POLICY_VERSION
+    # Scheduled events must come from the structured calendar, not the LLM.
+    if resolved.get("event_kind") == "scheduled":
+        resolved["event_risk"] = False
+        resolved["event_validation"] = "scheduled_event_requires_calendar"
+    return resolved
 
 
 def _parse_json(value: str) -> dict[str, Any]:
@@ -587,7 +649,23 @@ async def get_macro_context(force: bool = False) -> dict[str, Any]:
             return _macro_cache[1]
 
         settings = Settings()
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        macro_now = datetime.now(timezone.utc)
+        today = macro_now.strftime("%Y-%m-%d")
+
+        calendar_event = None
+        calendar_error = None
+        try:
+            calendar_event = await asyncio.wait_for(
+                asyncio.to_thread(
+                    BiquoteEconomicCalendarProvider().active_usd_event,
+                    now=macro_now,
+                    before_minutes=90,
+                    after_minutes=30,
+                ),
+                timeout=15,
+            )
+        except Exception as exc:
+            calendar_error = type(exc).__name__
         query = (
             "gold XAUUSD latest macro drivers " + today +
             " Federal Reserve US dollar DXY Treasury yields inflation "
@@ -630,11 +708,17 @@ async def get_macro_context(force: bool = False) -> dict[str, Any]:
             "event_age_minutes": None,
             "event_confidence": 0.0,
             "event_validation": "not_claimed",
+            "event_policy_version": MACRO_EVENT_POLICY_VERSION,
+            "event_source_url": None,
+            "calendar_ok": calendar_error is None,
+            "calendar_error": calendar_error,
             "summary": "Macro research unavailable.",
             "drivers": [],
             "search_ok": bool(raw),
             "search_error": search_error,
         }
+
+        ai_event_gate = _validated_event_gate({}, now=macro_now)
 
         if raw and settings.ai_api_key:
             try:
@@ -648,12 +732,10 @@ async def get_macro_context(force: bool = False) -> dict[str, Any]:
                     "Return JSON only with keys bias, confidence, event_risk, event_kind, "
                     "event_name, event_time_utc, event_age_minutes, event_confidence, summary, drivers. "
                     "bias must be -1, 0, or 1. confidence and event_confidence must be 0..1. "
-                    "event_kind must be scheduled, breaking, or none. "
-                    "Set event_risk=true ONLY when the material explicitly supports either: "
-                    "(A) a scheduled high-impact USD/Fed macro event with an exact UTC time that is "
-                    "within 90 minutes before through 30 minutes after now, or "
-                    "(B) a breaking market-moving shock that occurred/published within the last 30 minutes. "
-                    "For scheduled events provide event_time_utc as an ISO-8601 UTC timestamp. "
+                    "event_kind must be breaking or none. Scheduled-event gating is handled separately "
+                    "by a structured economic calendar, so NEVER set event_risk=true for scheduled releases. "
+                    "Set event_risk=true only for a breaking market-moving shock explicitly supported by "
+                    "the search material and occurring/published within the last 30 minutes. "
                     "For breaking events provide event_age_minutes. "
                     "Do NOT flag general ongoing geopolitics, old news, earlier-day events outside the window, "
                     "generic volatility, or events with uncertain timing. If uncertain, event_risk=false. "
@@ -679,21 +761,22 @@ async def get_macro_context(force: bool = False) -> dict[str, Any]:
                 except (TypeError, ValueError):
                     confidence = 0.0
                 drivers = parsed.get("drivers") if isinstance(parsed.get("drivers"), list) else []
-                event_gate = _validated_event_gate(
+                ai_event_gate = _validated_event_gate(
                     parsed,
-                    now=datetime.now(timezone.utc),
+                    now=macro_now,
                 )
                 data.update({
                     "bias": bias,
                     "bias_label": "bullish" if bias > 0 else "bearish" if bias < 0 else "neutral",
                     "confidence": confidence,
-                    **event_gate,
                     "summary": str(parsed.get("summary") or "").strip() or data["summary"],
                     "drivers": [str(item).strip() for item in drivers[:5] if str(item).strip()],
                 })
             except Exception as exc:
                 data["summary"] = "Web research succeeded, but macro synthesis failed."
                 data["synthesis_error"] = type(exc).__name__
+
+        data.update(_resolve_event_gate(ai_event_gate, calendar_event))
 
         _macro_cache = (time.monotonic(), data)
         return data

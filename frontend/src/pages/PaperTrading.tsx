@@ -78,6 +78,7 @@ interface PaperSignal {
 
 interface PaperSettings {
   enabled: boolean
+  engine_version: string
   initial_capital: number
   risk_pct: number
   reward_risk: number
@@ -129,6 +130,8 @@ interface PaperEligibility {
   event_age_minutes: number | null
   event_confidence: number | null
   event_validation: string | null
+  event_policy_version: string | null
+  event_source_url: string | null
   alignment: string
   micro_direction: string
   spot: {
@@ -420,7 +423,7 @@ export default function PaperTradingPage() {
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Week</div>
           <div className="mt-2 text-[18px] font-bold">{account?.week_key || '--'}</div>
           <div className="mt-1 text-[10px] text-muted-foreground">
-            {data?.settings?.timezone || 'Asia/Baghdad'} · {data?.settings?.storage_persistent ? 'NEON PERSISTENT' : 'LOCAL FALLBACK'}
+            {data?.settings?.timezone || 'Asia/Baghdad'} · v{data?.settings?.engine_version || '--'} · {data?.settings?.storage_persistent ? 'NEON PERSISTENT' : 'LOCAL FALLBACK'}
           </div>
         </div>
         <div className="card p-4">
@@ -588,6 +591,7 @@ export default function PaperTradingPage() {
           {eligibility?.event_name ? ` · ${eligibility.event_name}` : ''}
           {eligibility?.event_time_utc ? ` · ${dateTime(eligibility.event_time_utc)}` : ''}
           {eligibility?.event_kind === 'breaking' && eligibility?.event_age_minutes != null ? ` · age ${num(eligibility.event_age_minutes, 0)}m` : ''}
+          {eligibility?.event_policy_version ? ` · policy ${eligibility.event_policy_version}` : ''}
           {' · '}quote age {num(eligibility?.spot?.age_seconds, 0)}s · live execution remains locked.
         </div>
       </div>

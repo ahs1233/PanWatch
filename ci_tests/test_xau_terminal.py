@@ -4,7 +4,11 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from src.modules.xau import service
-from src.modules.xau.service import _validated_event_gate
+from src.modules.xau.service import _resolve_event_gate, _validated_event_gate
+from src.platform.marketdata.xau_biquote import (
+    BiquoteEconomicCalendarProvider,
+    BiquoteXAUOHLCProvider,
+)
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
 from src.platform.marketdata import xau_spot_reference
 from src.platform.marketdata.xau_spot_reference import (
@@ -452,3 +456,135 @@ def test_event_gate_rejects_vague_or_untimed_claims():
     )
     assert untimed["event_risk"] is False
     assert untimed["event_validation"] == "missing_or_invalid_event_time"
+
+
+
+def test_biquote_ohlc_parses_and_sorts_mt5_bars(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "symbol": "XAUUSD",
+                "interval": "1m",
+                "bars": [
+                    {
+                        "openTime": "2026-09-21T15:01:00Z",
+                        "open": 4351.0,
+                        "high": 4352.0,
+                        "low": 4350.5,
+                        "close": 4351.5,
+                        "volume": 0,
+                        "tickVolume": 120,
+                        "isOpen": True,
+                    },
+                    {
+                        "openTime": "2026-09-21T15:00:00Z",
+                        "open": 4350.0,
+                        "high": 4351.2,
+                        "low": 4349.8,
+                        "close": 4351.0,
+                        "volume": 0,
+                        "tickVolume": 100,
+                        "isOpen": False,
+                    },
+                ],
+            }
+
+    from src.platform.marketdata import xau_biquote
+    monkeypatch.setattr(xau_biquote.httpx, "get", lambda *args, **kwargs: FakeResponse())
+
+    bars = BiquoteXAUOHLCProvider().bars(XAUTimeframe.M1, limit=100)
+
+    assert len(bars) == 2
+    assert bars[0].timestamp.isoformat() == "2026-09-21T15:00:00+00:00"
+    assert bars[1].timestamp.isoformat() == "2026-09-21T15:01:00+00:00"
+    assert bars[1].close == 4351.5
+    assert bars[1].source == "biquote.io:MT5-ohlc"
+    assert bars[1].execution_eligible is False
+
+
+def test_biquote_calendar_selects_high_impact_exact_usd_window(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [
+                {
+                    "id": "mql5:1",
+                    "time": "2026-09-21T15:45:00Z",
+                    "countryCode": "US",
+                    "currency": "USD",
+                    "name": "US CPI",
+                    "importance": "high",
+                    "timeMode": "exact",
+                    "sourceUrl": "https://example.test/cpi",
+                },
+                {
+                    "id": "mql5:2",
+                    "time": "2026-09-21T15:20:00Z",
+                    "countryCode": "US",
+                    "currency": "USD",
+                    "name": "Low impact",
+                    "importance": "low",
+                    "timeMode": "exact",
+                },
+            ]
+
+    from src.platform.marketdata import xau_biquote
+    monkeypatch.setattr(xau_biquote.httpx, "get", lambda *args, **kwargs: FakeResponse())
+
+    event = BiquoteEconomicCalendarProvider().active_usd_event(
+        now=datetime(2026, 9, 21, 15, 0, tzinfo=timezone.utc),
+        before_minutes=90,
+        after_minutes=30,
+    )
+
+    assert event is not None
+    assert event["event_risk"] is True
+    assert event["event_name"] == "US CPI"
+    assert event["event_validation"] == "calendar_high_impact_window"
+
+
+def test_structured_calendar_overrides_ai_scheduled_claim_and_preserves_breaking():
+    ai_scheduled = {
+        "event_risk": True,
+        "event_kind": "scheduled",
+        "event_name": "Unverified scheduled claim",
+        "event_time_utc": "2026-09-21T15:30:00+00:00",
+        "event_age_minutes": None,
+        "event_confidence": 0.9,
+        "event_validation": "scheduled_event_window",
+    }
+    no_calendar = _resolve_event_gate(ai_scheduled, None)
+    assert no_calendar["event_risk"] is False
+    assert no_calendar["event_validation"] == "scheduled_event_requires_calendar"
+
+    breaking = {
+        "event_risk": True,
+        "event_kind": "breaking",
+        "event_name": "Breaking shock",
+        "event_time_utc": None,
+        "event_age_minutes": 5.0,
+        "event_confidence": 0.9,
+        "event_validation": "breaking_event_window",
+    }
+    resolved_breaking = _resolve_event_gate(breaking, None)
+    assert resolved_breaking["event_risk"] is True
+
+    calendar = {
+        "event_risk": True,
+        "event_kind": "scheduled",
+        "event_name": "US CPI",
+        "event_time_utc": "2026-09-21T15:45:00+00:00",
+        "event_age_minutes": None,
+        "event_confidence": 1.0,
+        "event_validation": "calendar_high_impact_window",
+        "event_source_url": "https://example.test/cpi",
+    }
+    resolved_calendar = _resolve_event_gate(breaking, calendar)
+    assert resolved_calendar["event_risk"] is True
+    assert resolved_calendar["event_name"] == "US CPI"
+    assert resolved_calendar["event_validation"] == "calendar_high_impact_window"

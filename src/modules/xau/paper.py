@@ -29,7 +29,7 @@ from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
 
-PAPER_ENGINE_VERSION = "0.3.0"
+PAPER_ENGINE_VERSION = "0.5.0"
 
 
 def _utc_naive(now: datetime | None = None) -> datetime:
@@ -683,6 +683,15 @@ class XAUPaperTradingEngine:
                 "macro_bias": macro.get("bias"),
                 "macro_confidence": macro.get("confidence"),
                 "macro_relation": fusion.get("macro_relation"),
+                "event_risk": fusion.get("event_risk"),
+                "event_kind": fusion.get("event_kind"),
+                "event_name": fusion.get("event_name"),
+                "event_time_utc": fusion.get("event_time_utc"),
+                "event_age_minutes": fusion.get("event_age_minutes"),
+                "event_confidence": fusion.get("event_confidence"),
+                "event_validation": fusion.get("event_validation"),
+                "event_policy_version": fusion.get("event_policy_version"),
+                "event_source_url": fusion.get("event_source_url"),
                 "fusion_reasons": fusion.get("reasons") or [],
                 "spot": {
                     "price": spot.get("price"),
@@ -884,6 +893,8 @@ class XAUPaperTradingEngine:
                 "event_age_minutes": fusion.get("event_age_minutes"),
                 "event_confidence": fusion.get("event_confidence"),
                 "event_validation": fusion.get("event_validation"),
+                "event_policy_version": fusion.get("event_policy_version"),
+                "event_source_url": fusion.get("event_source_url"),
                 "alignment": technical.get("alignment"),
                 "micro_direction": (technical.get("micro") or {}).get("direction"),
                 "spot": {
@@ -1113,7 +1124,7 @@ class XAUPaperTradingScheduler:
             account = result.get("account") or {}
             position = result.get("position") or {}
             logger.info(
-                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s event_risk=%s event_kind=%s event_validation=%s",
+                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s event_risk=%s event_kind=%s event_validation=%s event_policy=%s",
                 result.get("week_key"),
                 account.get("current_equity"),
                 position.get("side") if position else "flat",
@@ -1123,6 +1134,7 @@ class XAUPaperTradingScheduler:
                 (result.get("fusion") or {}).get("event_risk"),
                 (result.get("fusion") or {}).get("event_kind"),
                 (result.get("fusion") or {}).get("event_validation"),
+                (result.get("fusion") or {}).get("event_policy_version"),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[XAU paper] scan failed: %s", type(exc).__name__)
