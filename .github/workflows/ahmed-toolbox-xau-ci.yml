@@ -35,6 +35,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest httpx openai "pydantic>=2" "pydantic-settings>=2" "sqlalchemy>=2" pyyaml
           python -m pip install -e ./packages/pan-agent-runtime
+          python -m pip install -e ./packages/pan-agent-token-meter
           python -m pip install -e ./packages/pan-agent-tool-research
 
       - name: Compile changed Python
