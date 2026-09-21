@@ -675,6 +675,9 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
         and shadow_similarity >= 0.68
         and shadow_positive_rate is not None
         and bool(shadow.get("decision_filtered", False))
+        and bool(shadow.get("research_only", False))
+        and bool(shadow.get("lookahead_protected", False))
+        and bool(shadow.get("temporally_decorrelated", False))
     ):
         shadow_strength = _clip(shadow_samples / 40.0) * _clip(shadow_similarity)
         positive_edge = _clip(
@@ -700,6 +703,9 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
         and replay_similarity >= 0.70
         and replay_positive_rate is not None
         and replay_weighted_bps is not None
+        and bool(replay.get("research_only", False))
+        and bool(replay.get("lookahead_protected", False))
+        and bool(replay.get("temporally_decorrelated", False))
     ):
         replay_strength = _clip(replay_samples / 80.0) * _clip(replay_similarity)
         replay_positive_edge = _clip(
@@ -716,8 +722,18 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
             0.006 * replay_positive_edge + 0.004 * replay_return_edge
         ) * replay_strength
 
+    research_raw = shadow_adjustment + replay_adjustment
+    research_conflict = bool(
+        shadow_adjustment
+        and replay_adjustment
+        and shadow_adjustment * replay_adjustment < 0
+    )
+    if research_conflict:
+        # Independent research priors disagree: reduce their joint influence
+        # instead of letting one source dominate by magnitude.
+        research_raw *= 0.25
     research_adjustment = _clip(
-        shadow_adjustment + replay_adjustment,
+        research_raw,
         -0.02,
         0.02,
     )
@@ -741,6 +757,7 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
         "shadow_confidence_adjustment": round(shadow_adjustment, 4),
         "replay_confidence_adjustment": round(replay_adjustment, 4),
         "research_confidence_adjustment": round(research_adjustment, 4),
+        "research_prior_conflict": research_conflict,
         "shadow_memory": shadow,
         "replay_memory": replay,
         "autopsy_counts": memory.get("autopsy_counts") or {},
