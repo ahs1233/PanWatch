@@ -333,3 +333,30 @@ def test_micro_substitute_does_not_count_1m_as_missing_quality_penalty():
     assert "1m_missing" not in issues
     assert "micro_substitutes_1m" in issues
     assert state["data_quality"]["score"] >= 0.70
+
+
+
+def test_mid_only_slightly_aged_spot_keeps_analytical_quality_but_not_execution_readiness():
+    technical = _technical()
+    technical["technical_mode"] = "spot_micro_plus_spot_5m_15m"
+    technical["frames"].pop("1m", None)
+    technical["indicative_spot"].update({
+        "bid": None,
+        "ask": None,
+        "age_seconds": 60.0,
+        "is_stale": False,
+    })
+    technical["micro"]["status"] = "ready"
+    technical["micro"]["is_stale"] = False
+    technical["micro"]["age_seconds"] = 30.0
+    technical["warnings"] = ["biquote_ohlc_fallback_active"]
+
+    state = build_cognitive_state(
+        technical,
+        {"bias": -1, "confidence": 0.6, "event_risk": False},
+    )
+    issues = state["data_quality"]["issues"]
+    assert "spot_stale" not in issues
+    assert "spot_slightly_aged" in issues
+    assert "bid_ask_missing_execution_only" in issues
+    assert state["data_quality"]["score"] >= 0.75
