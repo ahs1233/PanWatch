@@ -773,6 +773,19 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
         # Independent research priors disagree: reduce their joint influence
         # instead of letting one source dominate by magnitude.
         research_raw *= 0.25
+
+    trade_research_conflict = bool(
+        sample_basis >= 15
+        and trade_adjustment
+        and research_raw
+        and trade_adjustment * research_raw < 0
+    )
+    if trade_research_conflict:
+        # Executed, calibrated evidence outranks research-only priors.  Replay
+        # and shadow memory may challenge the live record, but must not cancel
+        # a sufficiently established realized edge.
+        research_raw *= 0.20
+
     research_adjustment = _clip(
         research_raw,
         -0.02,
@@ -799,6 +812,7 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
         "replay_confidence_adjustment": round(replay_adjustment, 4),
         "research_confidence_adjustment": round(research_adjustment, 4),
         "research_prior_conflict": research_conflict,
+        "trade_research_conflict": trade_research_conflict,
         "shadow_memory": shadow,
         "replay_memory": replay,
         "autopsy_counts": memory.get("autopsy_counts") or {},
