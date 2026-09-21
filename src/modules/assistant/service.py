@@ -574,10 +574,17 @@ class AssistantService:
         return AssistantConfigUpdate(**defaults).model_dump()
 
     def _context_tool_schemas(self) -> list[dict]:
-        """Estimate the definitions registered for the assistant model input."""
+        """Estimate the initial local model tool surface without remote discovery.
+
+        Ahmed ToolBox and XAU research tools are deferred behind ToolResearch,
+        so contacting remote MCP servers here would add latency to ordinary
+        context measurement without improving the estimate of the first turn.
+        """
         return [
             tool.openai_schema()
-            for tool in self._build_tool_registry()[0].registered_tools()
+            for tool in build_panwatch_tool_registry(
+                self._repository.session
+            ).registered_tools()
         ]
 
     @staticmethod
