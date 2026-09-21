@@ -669,13 +669,12 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
     shadow_samples = int(_number(shadow.get("sample_count"), 0.0))
     shadow_similarity = _number(shadow.get("average_similarity"), 0.0)
     shadow_positive_rate = shadow.get("positive_rate")
-    shadow_weighted_bps = shadow.get("similarity_weighted_return_bps")
     shadow_adjustment = 0.0
     if (
         shadow_samples >= 8
         and shadow_similarity >= 0.68
         and shadow_positive_rate is not None
-        and shadow_weighted_bps is not None
+        and bool(shadow.get("decision_filtered", False))
     ):
         shadow_strength = _clip(shadow_samples / 40.0) * _clip(shadow_similarity)
         positive_edge = _clip(
@@ -683,10 +682,10 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
             -1.0,
             1.0,
         )
-        return_edge = _clip(float(shadow_weighted_bps) / 20.0, -1.0, 1.0)
-        shadow_adjustment = (
-            0.008 * positive_edge + 0.007 * return_edge
-        ) * shadow_strength
+        # Forward shadow outcomes are heterogeneous across 15m/30m/60m.
+        # Their return magnitude is diagnostic only; confidence receives only
+        # a small directional prior, capped at +/-0.8 percentage points.
+        shadow_adjustment = 0.008 * positive_edge * shadow_strength
 
     # Walk-forward replay is also research-only. It requires a larger sample
     # than live shadow memory and is bounded to +/-1 confidence point.
