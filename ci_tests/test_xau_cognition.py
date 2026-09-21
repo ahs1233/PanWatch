@@ -270,3 +270,46 @@ def test_empirical_history_changes_confidence_basis():
     assert state["confidence"]["calibration_basis"] == "empirical_bayesian_history"
     assert state["confidence"]["sample_count"] == 30
     assert state["confidence"]["brier_score"] == 0.19
+
+
+
+def test_calibration_error_raises_effective_entry_threshold():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 20,
+            "similar_samples": 20,
+            "expectancy_r": 0.1,
+            "profit_factor": 1.1,
+            "posterior_win_probability": 0.56,
+            "calibration_sample_count": 20,
+            "brier_score": 0.31,
+            "expected_calibration_error": 0.28,
+        },
+        min_confidence=0.58,
+    )
+    adaptation = state["meta_controller"]["threshold_adaptation"]
+    assert adaptation["effective"] > adaptation["base"]
+    assert "calibration_error_raise_threshold" in adaptation["reasons"]
+
+
+def test_well_calibrated_positive_history_only_relaxes_threshold_slightly():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 40,
+            "similar_samples": 40,
+            "expectancy_r": 0.5,
+            "profit_factor": 1.8,
+            "posterior_win_probability": 0.66,
+            "calibration_sample_count": 40,
+            "brier_score": 0.15,
+            "expected_calibration_error": 0.05,
+        },
+        min_confidence=0.58,
+    )
+    adaptation = state["meta_controller"]["threshold_adaptation"]
+    assert adaptation["base"] - adaptation["effective"] <= 0.0151
+    assert adaptation["effective"] >= 0.50
