@@ -1583,10 +1583,31 @@ async def verify_runtime_integrations() -> None:
             tools = await asyncio.wait_for(asyncio.to_thread(client.list_tools), timeout=20)
             names = [str(item.get("name") or "") for item in tools]
             logger.info(
-                "[runtime-smoke] ToolBox ok tool_count=%s scrapling_fetch=%s",
+                "[runtime-smoke] ToolBox ok tool_count=%s scrapling_fetch=%s reach_web_search=%s",
                 len(names),
                 "scrapling__fetch" in names,
+                "reach_web_search" in names,
             )
+            if "reach_web_search" in names:
+                search_result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.call_tool,
+                        "reach_web_search",
+                        {"query": "OpenAI official site", "num_results": 1},
+                    ),
+                    timeout=30,
+                )
+                search_error = bool(search_result.get("isError"))
+                search_text = "\n".join(
+                    str(item.get("text") or "")
+                    for item in (search_result.get("content") or [])
+                    if isinstance(item, dict)
+                ).strip()
+                logger.info(
+                    "[runtime-smoke] Agent-Reach web search ok=%s nonempty=%s",
+                    not search_error,
+                    bool(search_text),
+                )
             if "scrapling__fetch" in names:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(
