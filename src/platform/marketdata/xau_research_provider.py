@@ -25,9 +25,17 @@ class YahooGoldResearchProvider:
 
     def bars(self, timeframe: XAUTimeframe) -> list[XAUBar]:
         try:
+            import os
             import yfinance as yf
         except ImportError as exc:
             raise RuntimeError("yfinance is required for GC=F research data") from exc
+
+        cache_dir = os.environ.get("YFINANCE_CACHE_DIR", "/tmp/panwatch-yfinance")
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            yf.set_tz_cache_location(cache_dir)
+        except Exception:
+            pass
 
         frame = yf.Ticker(self.symbol).history(
             period=_PERIOD_BY_TIMEFRAME[timeframe],
