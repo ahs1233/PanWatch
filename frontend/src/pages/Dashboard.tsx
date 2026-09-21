@@ -94,11 +94,6 @@ function fmt(value?: number | null, digits = 2): string {
   return value.toFixed(digits)
 }
 
-function pct(value?: number | null, digits = 2): string {
-  if (value == null || !Number.isFinite(value)) return '--'
-  return `${value > 0 ? '+' : ''}${value.toFixed(digits)}%`
-}
-
 function directionClass(direction?: string): string {
   if (direction === 'bullish') return 'text-emerald-500'
   if (direction === 'bearish') return 'text-rose-500'
