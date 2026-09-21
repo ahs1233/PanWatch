@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from src.modules.xau import service
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
+from src.platform.marketdata.xau_micro_reference import XAUMicroPoint, XAUMicroSeries, sampled_spot_bars
 
 
 def _bars(timeframe: XAUTimeframe, count: int = 40) -> list[XAUBar]:
@@ -202,3 +203,29 @@ def test_macro_json_parser_accepts_plain_object():
     )
     assert parsed["bias"] == 1
     assert parsed["confidence"] == 0.7
+
+
+
+def test_sampled_spot_bars_use_stable_bucket_timestamp():
+    base = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+    series = XAUMicroSeries(
+        points=(
+            XAUMicroPoint(timestamp=base + timedelta(minutes=1), price=4300.0),
+            XAUMicroPoint(timestamp=base + timedelta(minutes=3), price=4301.0),
+            XAUMicroPoint(timestamp=base + timedelta(minutes=4), price=4302.0),
+            XAUMicroPoint(timestamp=base + timedelta(minutes=6), price=4303.0),
+        ),
+        observed_at=base + timedelta(minutes=6),
+        source="test",
+        age_seconds=0.0,
+        coverage_seconds=360.0,
+        is_stale=False,
+    )
+
+    bars = sampled_spot_bars(series, XAUTimeframe.M5)
+
+    assert len(bars) == 2
+    assert bars[0].timestamp == base
+    assert bars[1].timestamp == base + timedelta(minutes=5)
+    assert bars[0].close == 4302.0
+    assert bars[1].close == 4303.0
