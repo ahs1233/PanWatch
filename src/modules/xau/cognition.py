@@ -688,7 +688,41 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
             0.008 * positive_edge + 0.007 * return_edge
         ) * shadow_strength
 
-    confidence_adjustment = trade_adjustment + shadow_adjustment
+    # Walk-forward replay is also research-only. It requires a larger sample
+    # than live shadow memory and is bounded to +/-1 confidence point.
+    replay = memory.get("replay_memory") or {}
+    replay_samples = int(_number(replay.get("sample_count"), 0.0))
+    replay_similarity = _number(replay.get("average_similarity"), 0.0)
+    replay_positive_rate = replay.get("positive_rate")
+    replay_weighted_bps = replay.get("similarity_weighted_return_bps")
+    replay_adjustment = 0.0
+    if (
+        replay_samples >= 15
+        and replay_similarity >= 0.70
+        and replay_positive_rate is not None
+        and replay_weighted_bps is not None
+    ):
+        replay_strength = _clip(replay_samples / 80.0) * _clip(replay_similarity)
+        replay_positive_edge = _clip(
+            (float(replay_positive_rate) - 0.5) * 2.0,
+            -1.0,
+            1.0,
+        )
+        replay_return_edge = _clip(
+            float(replay_weighted_bps) / 25.0,
+            -1.0,
+            1.0,
+        )
+        replay_adjustment = (
+            0.006 * replay_positive_edge + 0.004 * replay_return_edge
+        ) * replay_strength
+
+    research_adjustment = _clip(
+        shadow_adjustment + replay_adjustment,
+        -0.02,
+        0.02,
+    )
+    confidence_adjustment = trade_adjustment + research_adjustment
 
     return {
         "trade_count": trade_count,
@@ -706,7 +740,10 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
         "confidence_adjustment": round(confidence_adjustment, 4),
         "trade_confidence_adjustment": round(trade_adjustment, 4),
         "shadow_confidence_adjustment": round(shadow_adjustment, 4),
+        "replay_confidence_adjustment": round(replay_adjustment, 4),
+        "research_confidence_adjustment": round(research_adjustment, 4),
         "shadow_memory": shadow,
+        "replay_memory": replay,
         "autopsy_counts": memory.get("autopsy_counts") or {},
     }
 
