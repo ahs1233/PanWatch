@@ -77,15 +77,30 @@ def _market_session(observed_at: Any) -> str:
 
 
 def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str, Any]]:
+    """Score analytical sensing independently from paper/live fill readiness."""
     score = 1.0
     issues: list[str] = []
     spot = technical.get("indicative_spot") or {}
+    analysis_reference = technical.get("analysis_reference") or {}
     micro = technical.get("micro") or {}
     frames = technical.get("frames") or {}
 
+    # Analytical perception should use the freshest valid context reference.
+    # A stale/mid-only fill quote must not make the market "unknowable" when
+    # a fresh micro/structural reference still exists.
+    analysis_age_raw = analysis_reference.get("age_seconds")
+    analysis_age = (
+        _number(analysis_age_raw, 0.0)
+        if analysis_age_raw is not None
+        else None
+    )
+    analysis_stale = bool(analysis_reference.get("is_stale"))
+    analysis_kind = str(analysis_reference.get("kind") or "none")
+    analysis_price = analysis_reference.get("price")
+
     spot_age_raw = spot.get("age_seconds")
-    micro_age_raw = micro.get("age_seconds")
     spot_age = _number(spot_age_raw, 0.0) if spot_age_raw is not None else None
+    micro_age_raw = micro.get("age_seconds")
     micro_age = _number(micro_age_raw, 0.0) if micro_age_raw is not None else None
     spread_bps = _number(spot.get("spread_bps"), 0.0)
     basis_bps = abs(_number(technical.get("spot_minus_proxy_bps"), 0.0))
@@ -96,28 +111,23 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
     if technical.get("blocked"):
         score -= 0.35
         issues.append("technical_data_gate")
-    if not spot:
+
+    if analysis_price is None:
         score -= 0.40
-        issues.append("spot_missing")
+        issues.append("analysis_reference_missing")
     else:
-        if spot.get("is_stale"):
+        if analysis_stale:
             score -= 0.30
-            issues.append("spot_stale")
-        elif spot_age is not None and spot_age > 180:
+            issues.append("analysis_reference_stale")
+        elif analysis_age is not None and analysis_age > 180:
             score -= 0.25
-            issues.append("spot_very_old")
-        elif spot_age is not None and spot_age > 90:
+            issues.append("analysis_reference_very_old")
+        elif analysis_age is not None and analysis_age > 90:
             score -= 0.12
-            issues.append("spot_aging")
-        elif spot_age is not None and spot_age > 30:
+            issues.append("analysis_reference_aging")
+        elif analysis_age is not None and analysis_age > 30:
             score -= 0.05
-            issues.append("spot_slightly_aged")
-        if spot.get("bid") is None or spot.get("ask") is None:
-            score -= 0.07
-            issues.append("bid_ask_missing_execution_only")
-        if spread_bps > 3.0:
-            score -= min(0.16, (spread_bps - 3.0) * 0.020)
-            issues.append("spread_elevated")
+            issues.append("analysis_reference_slightly_aged")
 
     if not micro or micro.get("status") == "blocked" or micro.get("is_stale"):
         score -= 0.18
@@ -147,15 +157,17 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         score -= 0.05
         issues.append("fallback_source_active")
 
-    # Large disagreement between the indicative spot and the structural 1m
-    # reference is a sensor-consistency warning, not a directional signal.
-    if basis_bps >= 8.0:
-        score -= 0.22
-        issues.append("spot_structure_disagreement")
-    elif basis_bps >= 4.0:
-        score -= 0.08
-        issues.append("spot_structure_basis_elevated")
+    # Basis is only meaningful when both sides are actually available.
+    if technical.get("spot_minus_proxy_bps") is not None:
+        if basis_bps >= 8.0:
+            score -= 0.22
+            issues.append("spot_structure_disagreement")
+        elif basis_bps >= 4.0:
+            score -= 0.08
+            issues.append("spot_structure_basis_elevated")
 
+    # Consensus validates the analytical reference, not whether a fill quote
+    # contains bid/ask. Missing consensus is only a small uncertainty penalty.
     if consensus_usable == 0:
         score -= 0.05
         issues.append("spot_consensus_unavailable")
@@ -166,7 +178,29 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         score -= 0.10
         issues.append("cross_source_spot_basis_elevated")
 
+    fill_issues: list[str] = []
+    fill_score = 1.0
+    if not spot:
+        fill_score = 0.0
+        fill_issues.append("fill_quote_missing")
+    else:
+        if bool(spot.get("is_stale")):
+            fill_score -= 0.55
+            fill_issues.append("fill_quote_stale")
+        if spot.get("bid") is None or spot.get("ask") is None:
+            fill_score -= 0.45
+            fill_issues.append("fill_bid_ask_missing")
+        if spread_bps > 3.0:
+            fill_score -= min(0.35, (spread_bps - 3.0) * 0.04)
+            fill_issues.append("fill_spread_elevated")
+
     sensors = {
+        "analysis_reference_kind": analysis_kind,
+        "analysis_reference_source": analysis_reference.get("source"),
+        "analysis_reference_age_seconds": (
+            round(analysis_age, 2) if analysis_age is not None else None
+        ),
+        "analysis_reference_stale": analysis_stale,
         "spot_age_seconds": round(spot_age, 2) if spot_age is not None else None,
         "micro_age_seconds": round(micro_age, 2) if micro_age is not None else None,
         "spread_bps": round(spread_bps, 4),
@@ -175,9 +209,13 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         "spot_consensus_usable": consensus_usable,
         "frame_count": len(frames),
         "technical_mode": technical.get("technical_mode"),
+        "fill_readiness": {
+            "score": round(_clip(fill_score), 4),
+            "issues": fill_issues,
+            "ready_for_paper_fill": _clip(fill_score) >= 0.99,
+        },
     }
     return round(_clip(score), 4), list(dict.fromkeys(issues)), sensors
-
 
 def _perception(technical: dict[str, Any]) -> dict[str, Any]:
     frames = technical.get("frames") or {}
@@ -721,7 +759,11 @@ def _execution_plan(
     candidate = str(technical.get("candidate") or "none")
     side = "long" if candidate == "long_setup" else "short" if candidate == "short_setup" else None
     spot = technical.get("indicative_spot") or {}
-    price = _number(spot.get("price"), 0.0)
+    analysis_reference = technical.get("analysis_reference") or {}
+    price = _number(
+        analysis_reference.get("price"),
+        _number(spot.get("price"), 0.0),
+    )
     atr = max(0.0, _number(technical.get("atr_reference"), 0.0))
     five = (technical.get("frames") or {}).get("5m") or {}
     ema_fast = _number(five.get("ema_fast"), price)
