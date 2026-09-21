@@ -423,6 +423,46 @@ def _regime(
     }
 
 
+def _technical_source_family(technical: dict[str, Any]) -> str:
+    """Classify structural market-data family for memory isolation.
+
+    Spot/MT5/XAUS-derived structure and GC=F futures research are useful, but
+    they are not interchangeable historical sensors.  Mixed/unknown families
+    remain explicit rather than silently collapsing into one memory pool.
+    """
+    frames = technical.get("frames") or {}
+    sources = [
+        str((frames.get(name) or {}).get("source") or "").lower()
+        for name in ("1m", "5m", "15m")
+    ]
+    nonempty = [value for value in sources if value]
+    mode = str(technical.get("technical_mode") or "").lower()
+
+    if nonempty and all(
+        ("biquote" in value or "mt5" in value or "xaus.com" in value)
+        for value in nonempty
+    ):
+        return "xau_spot_structure"
+    if any("gc=f" in value or "yfinance" in value for value in nonempty):
+        if all("gc=f" in value or "yfinance" in value for value in nonempty):
+            return "gc_futures_proxy"
+        return "mixed_research"
+
+    if mode in {"biquote_mt5_1m_5m_15m", "spot_micro_plus_spot_5m_15m"}:
+        return "xau_spot_structure"
+    if "mixed_research" in mode:
+        return "mixed_research"
+
+    reference_source = str(
+        (technical.get("analysis_reference") or {}).get("source") or ""
+    ).lower()
+    if "biquote" in reference_source or "xaus.com" in reference_source:
+        return "xau_spot_structure"
+    if "gc=f" in reference_source or "yfinance" in reference_source:
+        return "gc_futures_proxy"
+    return "unknown"
+
+
 def build_market_state_vector(
     technical: dict[str, Any],
     macro: dict[str, Any],
@@ -443,6 +483,7 @@ def build_market_state_vector(
 
     return {
         "version": 2,
+        "source_family": _technical_source_family(technical),
         "candidate": candidate,
         "alignment": str(technical.get("alignment") or "mixed"),
         "session": session,
