@@ -226,12 +226,15 @@ async def get_spot_consensus(force: bool = False) -> dict[str, Any]:
                     0.0,
                     (datetime.now(timezone.utc) - quote.observed_at).total_seconds(),
                 )
+                panwatch_stale = bool(quote.is_stale) or age_seconds > 300.0
                 return {
                     "source": quote.source,
                     "price": quote.price,
                     "observed_at": quote.observed_at.isoformat(),
                     "age_seconds": round(age_seconds, 3),
-                    "is_stale": quote.is_stale,
+                    "provider_stale": bool(quote.is_stale),
+                    "is_stale": panwatch_stale,
+                    "freshness_policy_seconds": 300.0,
                 }
             except Exception as exc:
                 return {
