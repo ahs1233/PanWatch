@@ -108,6 +108,15 @@ def _entry_gate_reason(
         return False, "position_already_open"
     if candidate not in {"long_setup", "short_setup"}:
         return False, fusion_state or "no_setup"
+
+    provider_health = spot.get("provider_health") or []
+    for row in provider_health:
+        if not isinstance(row, dict) or not bool(row.get("has_bid_ask")):
+            continue
+        market_state = str(row.get("market_state") or "").lower()
+        if market_state in {"closed", "market_closed", "maintenance", "rollover"}:
+            return False, "market_closed_rollover"
+
     if bool(spot.get("is_stale")):
         return False, "indicative_spot_stale"
     if _number(spot.get("bid")) is None or _number(spot.get("ask")) is None:
