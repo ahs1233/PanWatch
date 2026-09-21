@@ -42,7 +42,12 @@ def _utc_param(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _parse_ohlc_bars(payload: Any, timeframe: XAUTimeframe) -> list[XAUBar]:
+def _parse_ohlc_bars(
+    payload: Any,
+    timeframe: XAUTimeframe,
+    *,
+    include_open: bool = True,
+) -> list[XAUBar]:
     if not isinstance(payload, dict):
         raise RuntimeError("biquote.io OHLC returned malformed response")
     raw_bars = payload.get("bars")
@@ -53,10 +58,7 @@ def _parse_ohlc_bars(payload: Any, timeframe: XAUTimeframe) -> list[XAUBar]:
     for item in raw_bars:
         if not isinstance(item, dict):
             continue
-        # Historical/replay consumers only want complete candles.  The live
-        # adapter may receive an open candle, but it must not become a closed
-        # historical observation.
-        if bool(item.get("isOpen", False)):
+        if not include_open and bool(item.get("isOpen", False)):
             continue
         timestamp = _timestamp(item.get("openTime"))
         open_price = _number(item.get("open"))
@@ -184,7 +186,11 @@ class BiquoteXAUOHLCProvider:
             )
             response.raise_for_status()
             try:
-                rows = _parse_ohlc_bars(response.json(), timeframe)
+                rows = _parse_ohlc_bars(
+                    response.json(),
+                    timeframe,
+                    include_open=False,
+                )
             except RuntimeError as exc:
                 # Empty market-closed chunks are valid inside a larger range.
                 if "no usable XAU bars" not in str(exc):
