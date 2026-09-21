@@ -253,6 +253,7 @@ async def runtime_readiness():
         "configured": bool(settings.ahmed_toolbox_url),
         "reachable": False,
         "tool_count": 0,
+        "scrapling_fetch_available": False,
         "error": None,
     }
 
@@ -264,14 +265,17 @@ async def runtime_readiness():
                 timeout_seconds=settings.ahmed_toolbox_timeout_seconds,
             )
             tools = await asyncio.to_thread(client.list_tools)
+            names = [str(item.get("name") or "") for item in tools if isinstance(item, dict)]
             toolbox["reachable"] = True
             toolbox["tool_count"] = len(tools)
+            toolbox["scrapling_fetch_available"] = "scrapling__fetch" in names
         except Exception as exc:  # noqa: BLE001 - readiness must report, not crash
             toolbox["error"] = type(exc).__name__
 
     ready = bool(settings.ai_api_key) and bool(toolbox["reachable"])
     return {
         "status": "ready" if ready else "partial",
+        "profile": settings.panwatch_profile,
         "ai": {
             "model": settings.ai_model,
             "api_key_configured": bool(settings.ai_api_key),
