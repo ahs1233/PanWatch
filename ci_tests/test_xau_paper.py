@@ -270,6 +270,26 @@ def test_entry_gate_reason_matches_engine_policy():
         max_spread_bps=3.0,
     ) == (False, "indicative_spot_stale")
 
+
+    assert _entry_gate_reason(
+        candidate="long_setup",
+        fusion_state="setup_macro_support",
+        spot={
+            **good_spot,
+            "provider_health": [
+                {
+                    "provider": "BiquoteXAUIndicativeSpotReference",
+                    "status": "ok",
+                    "has_bid_ask": True,
+                    "is_stale": True,
+                    "market_state": "closed",
+                }
+            ],
+        },
+        has_open_position=False,
+        max_spread_bps=3.0,
+    ) == (False, "market_closed_rollover")
+
     assert _entry_gate_reason(
         candidate="long_setup",
         fusion_state="setup_macro_support",
