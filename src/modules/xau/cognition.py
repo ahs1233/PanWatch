@@ -661,7 +661,34 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
     edge = _clip(expectancy / 1.5, -1.0, 1.0)
     profit_factor_value = _number(profit_factor, 1.0) if profit_factor is not None else 1.0
     pf_edge = _clip((profit_factor_value - 1.0) / 2.0, -1.0, 1.0)
-    confidence_adjustment = (0.035 * edge + 0.025 * pf_edge) * strength
+    trade_adjustment = (0.035 * edge + 0.025 * pf_edge) * strength
+
+    # Shadow memory is research-only. It never replaces trade calibration and
+    # contributes at most +/-1.5 confidence points after enough similar samples.
+    shadow = memory.get("shadow_memory") or {}
+    shadow_samples = int(_number(shadow.get("sample_count"), 0.0))
+    shadow_similarity = _number(shadow.get("average_similarity"), 0.0)
+    shadow_positive_rate = shadow.get("positive_rate")
+    shadow_weighted_bps = shadow.get("similarity_weighted_return_bps")
+    shadow_adjustment = 0.0
+    if (
+        shadow_samples >= 8
+        and shadow_similarity >= 0.68
+        and shadow_positive_rate is not None
+        and shadow_weighted_bps is not None
+    ):
+        shadow_strength = _clip(shadow_samples / 40.0) * _clip(shadow_similarity)
+        positive_edge = _clip(
+            (float(shadow_positive_rate) - 0.5) * 2.0,
+            -1.0,
+            1.0,
+        )
+        return_edge = _clip(float(shadow_weighted_bps) / 20.0, -1.0, 1.0)
+        shadow_adjustment = (
+            0.008 * positive_edge + 0.007 * return_edge
+        ) * shadow_strength
+
+    confidence_adjustment = trade_adjustment + shadow_adjustment
 
     return {
         "trade_count": trade_count,
@@ -677,6 +704,9 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
         "memory_source": memory.get("source"),
         "learning_strength": round(strength, 4),
         "confidence_adjustment": round(confidence_adjustment, 4),
+        "trade_confidence_adjustment": round(trade_adjustment, 4),
+        "shadow_confidence_adjustment": round(shadow_adjustment, 4),
+        "shadow_memory": shadow,
         "autopsy_counts": memory.get("autopsy_counts") or {},
     }
 
