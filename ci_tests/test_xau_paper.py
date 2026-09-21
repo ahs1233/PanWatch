@@ -22,6 +22,7 @@ from src.modules.xau.paper import (
     _calibration_metrics,
     _trade_autopsy,
     _position_age_minutes,
+    _position_guardian,
     _spot_spread_bps,
     _pnl,
     _week_key,
@@ -539,3 +540,98 @@ def test_shadow_horizon_only_measures_near_target_time():
 
     due_restart, _ = _shadow_horizon_due(240.0, 15)
     assert due_restart is False
+
+
+
+def _guardian_position(side="long"):
+    return SimpleNamespace(
+        side=side,
+        entry_price=100.0,
+        quantity_oz=10.0,
+        risk_usd=100.0,
+        stop_loss=90.0 if side == "long" else 110.0,
+        target_price=120.0 if side == "long" else 80.0,
+    )
+
+
+def test_position_guardian_moves_stop_to_breakeven_after_one_r():
+    position = _guardian_position("long")
+    result = _position_guardian(
+        position,
+        {
+            "technical_candidate": "none",
+            "paper_entry_allowed": False,
+            "meta_decision": "observe",
+            "cognitive_confidence": 0.55,
+        },
+        110.0,
+    )
+
+    assert result["action"] == "tighten_stop"
+    assert result["reason"] == "breakeven_after_1r"
+    assert result["new_stop_loss"] == 100.0
+    assert result["exit_requested"] is False
+
+
+def test_position_guardian_locks_half_r_after_one_and_half_r():
+    position = _guardian_position("long")
+    result = _position_guardian(
+        position,
+        {
+            "technical_candidate": "none",
+            "paper_entry_allowed": False,
+            "meta_decision": "observe",
+            "cognitive_confidence": 0.55,
+        },
+        116.0,
+    )
+
+    assert result["action"] == "tighten_stop"
+    assert result["reason"] == "lock_half_r_after_1_5r"
+    assert result["new_stop_loss"] == 105.0
+
+
+def test_position_guardian_requests_exit_only_for_qualified_opposite_thesis():
+    position = _guardian_position("long")
+    qualified = _position_guardian(
+        position,
+        {
+            "technical_candidate": "short_setup",
+            "paper_entry_allowed": True,
+            "meta_decision": "eligible",
+            "cognitive_confidence": 0.70,
+        },
+        98.0,
+    )
+    weak = _position_guardian(
+        position,
+        {
+            "technical_candidate": "short_setup",
+            "paper_entry_allowed": True,
+            "meta_decision": "eligible",
+            "cognitive_confidence": 0.55,
+        },
+        98.0,
+    )
+
+    assert qualified["action"] == "exit"
+    assert qualified["exit_requested"] is True
+    assert qualified["exit_reason"] == "thesis_reversal"
+    assert weak["exit_requested"] is False
+
+
+def test_position_guardian_short_side_tightens_symmetrically():
+    position = _guardian_position("short")
+    result = _position_guardian(
+        position,
+        {
+            "technical_candidate": "none",
+            "paper_entry_allowed": False,
+            "meta_decision": "observe",
+            "cognitive_confidence": 0.55,
+        },
+        84.0,
+    )
+
+    assert result["current_r"] == 1.6
+    assert result["new_stop_loss"] == 95.0
