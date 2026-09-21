@@ -468,17 +468,9 @@ class XAUPaperTradingEngine:
         technical: dict,
         macro: dict,
     ) -> dict:
-        """Retrieve similar historical paper setups, then fall back to global memory."""
+        """Retrieve state-vector-nearest episodes and calibration history."""
         candidate = str(technical.get("candidate") or "none")
-        alignment = str(technical.get("alignment") or "mixed")
-        micro_direction = str((technical.get("micro") or {}).get("direction") or "neutral")
-        frames = technical.get("frames") or {}
-        five_direction = str((frames.get("5m") or {}).get("direction") or "neutral")
-        fifteen_direction = str((frames.get("15m") or {}).get("direction") or "neutral")
-        try:
-            macro_bias = max(-1, min(1, int(macro.get("bias", 0))))
-        except (TypeError, ValueError):
-            macro_bias = 0
+        current_vector = build_market_state_vector(technical, macro)
 
         signals = (
             db.query(XAUPaperSignal)
@@ -487,65 +479,118 @@ class XAUPaperTradingEngine:
                 XAUPaperSignal.candidate == candidate,
             )
             .order_by(XAUPaperSignal.observed_at.desc(), XAUPaperSignal.id.desc())
-            .limit(200)
+            .limit(500)
             .all()
         )
-
-        scored: list[tuple[int, XAUPaperSignal]] = []
-        for signal in signals:
-            meta = signal.meta or {}
-            score = 0
-            if str(meta.get("alignment") or "") == alignment:
-                score += 3
-            saved_micro = meta.get("micro") or {}
-            if str(saved_micro.get("direction") or "") == micro_direction:
-                score += 2
-            saved_frames = meta.get("frames") or {}
-            if str((saved_frames.get("5m") or {}).get("direction") or "") == five_direction:
-                score += 2
-            if str((saved_frames.get("15m") or {}).get("direction") or "") == fifteen_direction:
-                score += 2
-            try:
-                saved_macro = max(-1, min(1, int(meta.get("macro_bias", 0))))
-            except (TypeError, ValueError):
-                saved_macro = 0
-            if saved_macro == macro_bias:
-                score += 1
-            scored.append((score, signal))
-
-        scored.sort(key=lambda item: item[0], reverse=True)
-        similar_signals = [signal for score, signal in scored[:40] if score >= 5]
-        setup_keys = [signal.setup_key for signal in similar_signals]
-
-        similar_trades = []
+        setup_keys = [signal.setup_key for signal in signals]
+        trades = []
         if setup_keys:
-            similar_trades = (
+            trades = (
                 db.query(XAUPaperTrade)
                 .filter(XAUPaperTrade.setup_key.in_(setup_keys))
                 .order_by(XAUPaperTrade.closed_at.desc(), XAUPaperTrade.id.desc())
-                .limit(40)
+                .limit(500)
                 .all()
             )
+        trade_by_key = {trade.setup_key: trade for trade in trades}
 
-        if similar_trades:
-            metrics = _performance_metrics(similar_trades)
-            metrics["source"] = "similar_closed_paper_setups"
-            metrics["similar_samples"] = len(similar_trades)
-            metrics["candidate"] = candidate
-            metrics["alignment"] = alignment
-            return metrics
+        scored: list[tuple[float, XAUPaperSignal, XAUPaperTrade]] = []
+        calibration_predictions: list[tuple[float, int]] = []
+        for signal in signals:
+            trade = trade_by_key.get(signal.setup_key)
+            if trade is None:
+                continue
+            meta = signal.meta or {}
+            saved_vector = (
+                meta.get("state_vector")
+                or ((meta.get("cognition") or {}).get("market_state"))
+                or {}
+            )
+            similarity = state_vector_similarity(current_vector, saved_vector)
 
-        global_trades = (
-            db.query(XAUPaperTrade)
-            .order_by(XAUPaperTrade.closed_at.desc(), XAUPaperTrade.id.desc())
-            .limit(100)
-            .all()
+            # Backward-compatible fallback for episodes recorded before v2 vectors.
+            if similarity <= 0.0:
+                similarity = 0.35
+                if str(meta.get("alignment") or "") == str(current_vector.get("alignment") or ""):
+                    similarity += 0.15
+                if str(meta.get("regime") or "") == str(current_vector.get("regime") or ""):
+                    similarity += 0.15
+                if str((meta.get("micro") or {}).get("direction") or "") in str(current_vector.get("candidate") or ""):
+                    similarity += 0.05
+                similarity = min(0.70, similarity)
+
+            scored.append((similarity, signal, trade))
+
+            predicted = meta.get("cognitive_confidence")
+            if predicted is None:
+                predicted = (
+                    ((meta.get("cognition") or {}).get("confidence") or {})
+                    .get("calibrated_confidence")
+                )
+            if predicted is not None:
+                calibration_predictions.append(
+                    (float(predicted), 1 if float(trade.r_multiple or 0.0) > 0.05 else 0)
+                )
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        selected = [item for item in scored[:60] if item[0] >= 0.68]
+        selected_trades = [item[2] for item in selected]
+
+        if selected_trades:
+            memory_trades = selected_trades
+            source = "state_vector_similar_closed_setups"
+            similarities = [item[0] for item in selected]
+            similar_samples = len(selected_trades)
+        else:
+            memory_trades = (
+                db.query(XAUPaperTrade)
+                .order_by(XAUPaperTrade.closed_at.desc(), XAUPaperTrade.id.desc())
+                .limit(120)
+                .all()
+            )
+            source = "global_closed_paper_trades_fallback"
+            similarities = []
+            similar_samples = 0
+
+        metrics = _performance_metrics(memory_trades)
+        wins = sum(1 for trade in memory_trades if float(trade.r_multiple or 0.0) > 0.05)
+        sample_count = len(memory_trades)
+        empirical = (wins / sample_count) if sample_count else None
+        # Beta(2,2) prior prevents small-sample confidence from becoming extreme.
+        posterior = ((wins + 2.0) / (sample_count + 4.0)) if sample_count else None
+
+        calibration = _calibration_metrics(calibration_predictions)
+        metrics.update(calibration)
+        metrics.update(
+            {
+                "source": source,
+                "similar_samples": similar_samples,
+                "candidate": candidate,
+                "alignment": current_vector.get("alignment"),
+                "regime": current_vector.get("regime"),
+                "session": current_vector.get("session"),
+                "empirical_win_rate": round(empirical, 4) if empirical is not None else None,
+                "posterior_win_probability": round(posterior, 4) if posterior is not None else None,
+                "average_similarity": (
+                    round(sum(similarities) / len(similarities), 4)
+                    if similarities
+                    else None
+                ),
+                "nearest_similarity": round(similarities[0], 4) if similarities else None,
+                "current_state_vector": current_vector,
+                "autopsy_counts": _autopsy_counts(memory_trades),
+            }
         )
-        metrics = _performance_metrics(global_trades)
-        metrics["source"] = "global_closed_paper_trades"
-        metrics["similar_samples"] = 0
-        metrics["candidate"] = candidate
-        metrics["alignment"] = alignment
+
+        if selected:
+            weighted_denominator = sum(item[0] for item in selected) or 1.0
+            metrics["similarity_weighted_expectancy_r"] = round(
+                sum(float(item[2].r_multiple or 0.0) * item[0] for item in selected)
+                / weighted_denominator,
+                4,
+            )
+        else:
+            metrics["similarity_weighted_expectancy_r"] = None
         return metrics
 
     def _update_account_equity(
