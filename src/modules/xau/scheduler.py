@@ -7,6 +7,7 @@ orders because the current feed is GC=F and execution_eligible=False.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -51,6 +52,13 @@ class XAUResearchScheduler:
             self._running = False
 
     def start(self):
+        self.scheduler.add_job(
+            self._scan,
+            "date",
+            run_date=datetime.now(self.scheduler.timezone) + timedelta(seconds=3),
+            id="xau_research_bootstrap",
+            replace_existing=True,
+        )
         self.scheduler.add_job(
             self._scan,
             "interval",
