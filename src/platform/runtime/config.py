@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     context_keep_recent_messages: int = Field(default=8, ge=1, le=100)
     tool_research_enabled: bool = True
 
+    # Ahmed ToolBox MCP. Empty URL keeps the integration disabled and leaves
+    # PanWatch's built-in tools unchanged.
+    ahmed_toolbox_url: str = ""
+    ahmed_toolbox_token: str = ""
+    ahmed_toolbox_timeout_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
+
     # Telegram
     notify_telegram_bot_token: str = ""
     notify_telegram_chat_id: str = ""
