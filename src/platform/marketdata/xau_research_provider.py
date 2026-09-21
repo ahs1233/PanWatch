@@ -1,0 +1,66 @@
+"""Research-only gold proxy using Yahoo Finance GC=F.
+
+This provider is deliberately marked non-execution-eligible. It is useful for
+research, chart context, and TradingAgents grounding, but it is not spot
+XAUUSD and must not be used for broker entry/SL/TP prices.
+"""
+
+from __future__ import annotations
+
+from datetime import timezone
+
+from .xau_models import XAUBar, XAUTimeframe
+
+_PERIOD_BY_TIMEFRAME = {
+    XAUTimeframe.M1: "5d",
+    XAUTimeframe.M5: "1mo",
+    XAUTimeframe.M15: "1mo",
+}
+
+
+class YahooGoldResearchProvider:
+    symbol = "GC=F"
+    source = "yfinance:GC=F"
+    execution_eligible = False
+
+    def bars(self, timeframe: XAUTimeframe) -> list[XAUBar]:
+        try:
+            import yfinance as yf
+        except ImportError as exc:
+            raise RuntimeError("yfinance is required for GC=F research data") from exc
+
+        frame = yf.Ticker(self.symbol).history(
+            period=_PERIOD_BY_TIMEFRAME[timeframe],
+            interval=timeframe.value,
+            auto_adjust=False,
+            actions=False,
+        )
+        if frame is None or frame.empty:
+            return []
+
+        out: list[XAUBar] = []
+        for index, row in frame.iterrows():
+            timestamp = index.to_pydatetime()
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            else:
+                timestamp = timestamp.astimezone(timezone.utc)
+            out.append(
+                XAUBar(
+                    timestamp=timestamp,
+                    timeframe=timeframe,
+                    open=float(row["Open"]),
+                    high=float(row["High"]),
+                    low=float(row["Low"]),
+                    close=float(row["Close"]),
+                    volume=(
+                        float(row["Volume"])
+                        if row.get("Volume") is not None
+                        else None
+                    ),
+                    source=self.source,
+                    symbol="XAUUSD",
+                    execution_eligible=False,
+                )
+            )
+        return out
