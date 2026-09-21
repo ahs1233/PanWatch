@@ -660,8 +660,13 @@ class XAUPaperTradingEngine:
             status="open",
             opened_at=now_utc,
         )
-        db.add(position)
-        db.flush()
+        try:
+            with db.begin_nested():
+                db.add(position)
+                db.flush()
+        except IntegrityError:
+            logger.info("[XAU paper] duplicate setup suppressed: %s", setup_key)
+            return None
 
         mark = _paper_mark_price(side, spot)
         if mark is not None:
