@@ -28,6 +28,7 @@ from src.platform.persistence.models import (
     XAUPaperPosition,
     XAUPaperSignal,
     XAUPaperTrade,
+    XAUReplayEpisode,
 )
 from src.platform.runtime.config import Settings
 
@@ -860,6 +861,63 @@ def _shadow_research_memory(
     }
 
 
+def _replay_research_memory(
+    episodes: list[XAUReplayEpisode],
+    current_vector: dict,
+    *,
+    similarity_floor: float = 0.70,
+    limit: int = 120,
+) -> dict:
+    """Research-only memory retrieved from no-lookahead replay episodes."""
+    scored: list[tuple[float, float]] = []
+    for episode in episodes:
+        saved_vector = episode.state_vector or {}
+        similarity = state_vector_similarity(current_vector, saved_vector)
+        if similarity < similarity_floor:
+            continue
+        scored.append((similarity, float(episode.directional_return_bps or 0.0)))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    scored = scored[: max(1, int(limit))]
+    if not scored:
+        return {
+            "source": "walk_forward_replay",
+            "sample_count": 0,
+            "positive_rate": None,
+            "average_directional_return_bps": None,
+            "similarity_weighted_return_bps": None,
+            "average_similarity": None,
+            "nearest_similarity": None,
+            "research_only": True,
+            "lookahead_protected": True,
+        }
+
+    total_weight = sum(item[0] for item in scored) or 1.0
+    return {
+        "source": "walk_forward_replay",
+        "sample_count": len(scored),
+        "positive_rate": round(
+            sum(1 for _, value in scored if value > 0) / len(scored),
+            4,
+        ),
+        "average_directional_return_bps": round(
+            sum(value for _, value in scored) / len(scored),
+            4,
+        ),
+        "similarity_weighted_return_bps": round(
+            sum(similarity * value for similarity, value in scored) / total_weight,
+            4,
+        ),
+        "average_similarity": round(
+            sum(item[0] for item in scored) / len(scored),
+            4,
+        ),
+        "nearest_similarity": round(scored[0][0], 4),
+        "research_only": True,
+        "lookahead_protected": True,
+    }
+
+
 def _serialize_signal(signal: XAUPaperSignal) -> dict:
     return {
         "id": signal.id,
@@ -1000,6 +1058,18 @@ class XAUPaperTradingEngine:
             current_vector,
         )
 
+        replay_episodes = (
+            db.query(XAUReplayEpisode)
+            .filter(XAUReplayEpisode.candidate == candidate)
+            .order_by(XAUReplayEpisode.observed_at.desc(), XAUReplayEpisode.id.desc())
+            .limit(1000)
+            .all()
+        )
+        replay_memory = _replay_research_memory(
+            replay_episodes,
+            current_vector,
+        )
+
         metrics = _performance_metrics(memory_trades)
         wins = sum(1 for trade in memory_trades if float(trade.r_multiple or 0.0) > 0.05)
         sample_count = len(memory_trades)
@@ -1028,6 +1098,7 @@ class XAUPaperTradingEngine:
                 "current_state_vector": current_vector,
                 "autopsy_counts": _autopsy_counts(memory_trades),
                 "shadow_memory": shadow_memory,
+                "replay_memory": replay_memory,
             }
         )
 
