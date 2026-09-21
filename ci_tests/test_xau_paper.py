@@ -21,6 +21,7 @@ from src.modules.xau.paper import (
     _performance_metrics,
     _shadow_metrics,
     _shadow_research_memory,
+    _replay_research_memory,
     _shadow_horizon_due,
     _calibration_metrics,
     _trade_autopsy,
@@ -1041,3 +1042,51 @@ def test_shadow_research_memory_is_separate_and_similarity_filtered():
     assert memory["positive_rate"] == 0.5
     assert memory["nearest_similarity"] >= memory["average_similarity"]
     assert memory["horizon_mix"] == {"60m": 1, "30m": 1}
+
+
+
+def test_replay_research_memory_filters_by_state_similarity():
+    base_vector = {
+        "candidate": "short_setup",
+        "alignment": "bearish",
+        "session": "new_york",
+        "regime": "trend_bear",
+        "directional_pressure": -0.8,
+        "return_10m_pct": -0.1,
+        "return_30m_pct": -0.2,
+        "acceleration": -0.03,
+        "volatility_pct": 0.15,
+        "rsi_5m_norm": -0.2,
+        "rsi_15m_norm": -0.1,
+        "breakout": "down",
+        "macro_bias": -1.0,
+        "macro_confidence": 0.7,
+        "spread_bps": 0.5,
+        "spot_proxy_basis_bps": 0.0,
+        "data_quality": 0.95,
+    }
+    episodes = [
+        SimpleNamespace(state_vector=dict(base_vector), directional_return_bps=10.0),
+        SimpleNamespace(
+            state_vector={**base_vector, "directional_pressure": -0.7},
+            directional_return_bps=-2.0,
+        ),
+        SimpleNamespace(
+            state_vector={
+                **base_vector,
+                "candidate": "long_setup",
+                "alignment": "bullish",
+                "directional_pressure": 1.0,
+                "macro_bias": 1.0,
+            },
+            directional_return_bps=100.0,
+        ),
+    ]
+
+    memory = _replay_research_memory(episodes, base_vector)
+
+    assert memory["research_only"] is True
+    assert memory["lookahead_protected"] is True
+    assert memory["sample_count"] == 2
+    assert memory["positive_rate"] == 0.5
+    assert memory["nearest_similarity"] >= memory["average_similarity"]
