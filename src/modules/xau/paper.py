@@ -303,11 +303,22 @@ def _position_guardian(
     opposite_candidate = "short_setup" if side == "long" else "long_setup"
     meta_decision = str(fusion.get("meta_decision") or "observe")
     confidence = _number(fusion.get("cognitive_confidence"), 0.0) or 0.0
+    cognition = fusion.get("cognition") or {}
+    meta = cognition.get("meta_controller") or {}
+    data_quality = _number(
+        (cognition.get("data_quality") or {}).get("score"),
+        0.0,
+    ) or 0.0
+    entry_threshold = _number(meta.get("min_confidence"), 0.58) or 0.58
+    # Reversal exits require more evidence than opening a fresh position.
+    # This hysteresis reduces flip-flop around noisy threshold crossings.
+    reversal_threshold = min(0.90, max(0.68, entry_threshold + 0.08))
     opposite_qualified = bool(
         candidate == opposite_candidate
         and fusion.get("paper_entry_allowed")
         and meta_decision == "eligible"
-        and confidence >= 0.62
+        and confidence >= reversal_threshold
+        and data_quality >= 0.75
     )
 
     if opposite_qualified:
@@ -319,6 +330,8 @@ def _position_guardian(
                 "exit_reason": "thesis_reversal",
                 "opposite_candidate": candidate,
                 "confidence": round(confidence, 4),
+                "reversal_threshold": round(reversal_threshold, 4),
+                "data_quality": round(data_quality, 4),
             }
         )
         if protective_stop != current_stop:
