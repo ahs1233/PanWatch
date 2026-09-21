@@ -194,6 +194,10 @@ export default function PaperTradingPage() {
 
   useEffect(() => {
     void load()
+    const timer = window.setInterval(() => {
+      void load()
+    }, 60_000)
+    return () => window.clearInterval(timer)
   }, [load])
 
   const account = data?.account
@@ -218,6 +222,9 @@ export default function PaperTradingPage() {
             </span>
             <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-500">
               WEEKLY $10K
+            </span>
+            <span className="rounded-full bg-accent/50 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+              AUTO · 60s
             </span>
           </div>
           <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Gold Paper Trading</h1>
