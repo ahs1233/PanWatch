@@ -187,6 +187,43 @@ def _serialize_trade(trade: XAUPaperTrade) -> dict:
     }
 
 
+def _performance_metrics(trades: list[XAUPaperTrade]) -> dict:
+    if not trades:
+        return {
+            "trade_count": 0,
+            "average_r": 0.0,
+            "expectancy_r": 0.0,
+            "profit_factor": None,
+            "average_mfe_usd": 0.0,
+            "average_mae_usd": 0.0,
+            "average_win_r": 0.0,
+            "average_loss_r": 0.0,
+        }
+
+    r_values = [float(item.r_multiple or 0.0) for item in trades]
+    wins = [value for value in r_values if value > 0]
+    losses = [value for value in r_values if value < 0]
+    gross_profit = sum(max(float(item.pnl or 0.0), 0.0) for item in trades)
+    gross_loss = abs(sum(min(float(item.pnl or 0.0), 0.0) for item in trades))
+
+    return {
+        "trade_count": len(trades),
+        "average_r": round(sum(r_values) / len(r_values), 4),
+        "expectancy_r": round(sum(r_values) / len(r_values), 4),
+        "profit_factor": round(gross_profit / gross_loss, 4) if gross_loss > 0 else None,
+        "average_mfe_usd": round(
+            sum(float(item.mfe_usd or 0.0) for item in trades) / len(trades),
+            4,
+        ),
+        "average_mae_usd": round(
+            sum(float(item.mae_usd or 0.0) for item in trades) / len(trades),
+            4,
+        ),
+        "average_win_r": round(sum(wins) / len(wins), 4) if wins else 0.0,
+        "average_loss_r": round(sum(losses) / len(losses), 4) if losses else 0.0,
+    }
+
+
 def _serialize_signal(signal: XAUPaperSignal) -> dict:
     return {
         "id": signal.id,
@@ -714,6 +751,7 @@ class XAUPaperTradingEngine:
                     "trades": [],
                     "signals": [],
                     "settings": self.public_settings(),
+                    "performance": _performance_metrics([]),
                     "execution_allowed": False,
                 }
 
@@ -738,6 +776,7 @@ class XAUPaperTradingEngine:
                 "trades": [_serialize_trade(item) for item in trades],
                 "signals": [_serialize_signal(item) for item in signals],
                 "settings": self.public_settings(),
+                "performance": _performance_metrics(trades),
                 "execution_allowed": False,
             }
         finally:
