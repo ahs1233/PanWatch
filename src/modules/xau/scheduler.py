@@ -36,17 +36,32 @@ class XAUResearchScheduler:
                 str((snapshot.get("micro") or {}).get("direction")),
             )
             if signature != self._last_signature:
+                spot = snapshot.get("indicative_spot") or {}
+                provider_health = spot.get("provider_health") or []
+                provider_summary = [
+                    {
+                        "provider": row.get("provider"),
+                        "status": row.get("status"),
+                        "stale": row.get("is_stale"),
+                        "age": row.get("age_seconds"),
+                        "bidask": row.get("has_bid_ask"),
+                        "error": row.get("error_type"),
+                        "selected": row.get("selected"),
+                    }
+                    for row in provider_health
+                ]
                 logger.info(
-                    "[XAU] state status=%s candidate=%s alignment=%s mode=%s micro=%s micro_age=%s spot=%s spot_source=%s spot_stale=%s price_proxy=%s execution=%s gates=%s",
+                    "[XAU] state status=%s candidate=%s alignment=%s mode=%s micro=%s micro_age=%s spot=%s spot_source=%s spot_stale=%s providers=%s price_proxy=%s execution=%s gates=%s",
                     snapshot.get("status"),
                     snapshot.get("candidate"),
                     snapshot.get("alignment"),
                     snapshot.get("technical_mode"),
                     (snapshot.get("micro") or {}).get("direction"),
                     (snapshot.get("micro") or {}).get("age_seconds"),
-                    (snapshot.get("indicative_spot") or {}).get("price"),
-                    (snapshot.get("indicative_spot") or {}).get("source"),
-                    (snapshot.get("indicative_spot") or {}).get("is_stale"),
+                    spot.get("price"),
+                    spot.get("source"),
+                    spot.get("is_stale"),
+                    provider_summary,
                     snapshot.get("price"),
                     snapshot.get("execution_status"),
                     snapshot.get("block_reasons"),
