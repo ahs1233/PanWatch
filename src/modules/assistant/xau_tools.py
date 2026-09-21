@@ -17,6 +17,7 @@ from pan_agent_tool_research import (
     ToolDescriptor,
 )
 
+from src.modules.xau.paper import XAUPaperTradingEngine
 from src.modules.xau.service import (
     build_decision_fusion,
     get_macro_context,
@@ -161,6 +162,58 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
     )
     registry.register(fusion_spec, get_xau_decision_fusion)
 
+    async def get_xau_paper_league(
+        _request: RunRequest,
+        _arguments: dict,
+    ) -> ToolResult:
+        try:
+            summary_data = XAUPaperTradingEngine().summary(
+                trade_limit=50,
+                signal_limit=50,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult.failure(
+                summary=f"XAU paper league unavailable: {type(exc).__name__}",
+                error_code="xau_paper_league_unavailable",
+            )
+
+        account = summary_data.get("account") or {}
+        position = summary_data.get("position") or {}
+        summary = (
+            "XAU weekly paper league: "
+            f"week={account.get('week_key')}; "
+            f"equity={account.get('current_equity')}; "
+            f"realized_pnl={account.get('realized_pnl')}; "
+            f"trades={account.get('total_trades')}; "
+            f"position={position.get('side') if position else 'flat'}. "
+            "Simulation only; no live execution capability."
+        )
+        return ToolResult.success(
+            summary=summary,
+            data=summary_data,
+            sources=[],
+            observed_at=datetime.now(timezone.utc),
+        )
+
+    paper_spec = ToolSpec(
+        name="get_xau_paper_league",
+        title="XAU weekly paper league",
+        description=(
+            "Read the current $10k weekly XAU/USD paper-trading account, open "
+            "position, closed trades, MFE/MAE, R multiples and setup audit trail. "
+            "This tool is simulation-only and can never route a live order."
+        ),
+        risk=ToolRisk.READ,
+        confirmation_required=False,
+        exposure=ToolExposure.DEFERRED,
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    )
+    registry.register(paper_spec, get_xau_paper_league)
+
     return [
         ToolDescriptor(
             tool_name=spec.name,
@@ -240,5 +293,44 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
             risk=ToolRisk.READ,
             confirmation_required=False,
             implementation_version="xau-fusion-0.1",
+        )
+,
+        ToolDescriptor(
+            tool_name=paper_spec.name,
+            title=paper_spec.title,
+            summary=(
+                "Read-only weekly $10k XAU paper league performance, open risk, "
+                "MFE/MAE and setup audit trail."
+            ),
+            use_cases=[
+                "gold paper trading performance",
+                "weekly XAU demo league",
+                "review XAU trades",
+                "MFE MAE analysis",
+            ],
+            keywords=[
+                "XAUUSD",
+                "gold",
+                "paper trading",
+                "demo",
+                "weekly",
+                "MFE",
+                "MAE",
+                "R multiple",
+            ],
+            aliases=["xau paper", "gold demo", "paper league"],
+            domain="portfolio_research",
+            capabilities=[
+                "xau_paper_trading",
+                "performance_review",
+                "trade_audit",
+                "research_only",
+            ],
+            data_freshness=ToolDataFreshness.NEAR_REAL_TIME,
+            estimated_latency_ms=200,
+            output_summary="Read-only XAU paper league account and trade history.",
+            risk=ToolRisk.READ,
+            confirmation_required=False,
+            implementation_version="xau-paper-0.1",
         )
     ]
