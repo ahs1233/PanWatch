@@ -100,17 +100,23 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         score -= 0.40
         issues.append("spot_missing")
     else:
-        if spot.get("is_stale") or (spot_age is not None and spot_age > 30):
+        if spot.get("is_stale"):
             score -= 0.30
             issues.append("spot_stale")
-        elif spot_age is not None and spot_age > 15:
-            score -= 0.08
+        elif spot_age is not None and spot_age > 180:
+            score -= 0.25
+            issues.append("spot_very_old")
+        elif spot_age is not None and spot_age > 90:
+            score -= 0.12
             issues.append("spot_aging")
+        elif spot_age is not None and spot_age > 30:
+            score -= 0.05
+            issues.append("spot_slightly_aged")
         if spot.get("bid") is None or spot.get("ask") is None:
-            score -= 0.15
-            issues.append("bid_ask_missing")
+            score -= 0.07
+            issues.append("bid_ask_missing_execution_only")
         if spread_bps > 3.0:
-            score -= min(0.20, (spread_bps - 3.0) * 0.025)
+            score -= min(0.16, (spread_bps - 3.0) * 0.020)
             issues.append("spread_elevated")
 
     if not micro or micro.get("status") == "blocked" or micro.get("is_stale"):
