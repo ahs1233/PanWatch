@@ -78,6 +78,23 @@ def _market_session(observed_at: Any) -> str:
 
 def _fill_market_state(spot: dict[str, Any]) -> dict[str, Any]:
     """Classify paper-fill availability from all provider diagnostics."""
+    explicit = str(spot.get("fill_state") or "").lower()
+    explicit_map = {
+        "ready": ("open", "fresh_bid_ask_available"),
+        "market_closed_or_rollover": ("closed", "provider_market_closed"),
+        "stale_bid_ask": ("unavailable", "stale_bid_ask"),
+        "unavailable": ("unavailable", "no_fresh_bid_ask"),
+    }
+    if explicit in explicit_map:
+        state, reason = explicit_map[explicit]
+        return {
+            "state": state,
+            "reason": reason,
+            "provider": spot.get("fill_source"),
+            "market_state": spot.get("market_state"),
+            "age_seconds": spot.get("fill_age_seconds"),
+        }
+
     health = spot.get("provider_health") or []
     bid_ask_rows = [
         row for row in health
@@ -245,7 +262,10 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
     elif fill_market["state"] == "feed_unavailable":
         fill_score = 0.0
         fill_issues.append("fill_feed_unavailable")
-    if not spot:
+    elif fill_market.get("reason") == "stale_bid_ask":
+        fill_score = 0.0
+        fill_issues.append("fill_stale_bid_ask")
+    elif not spot:
         fill_score = 0.0
         fill_issues.append("fill_quote_missing")
     else:
