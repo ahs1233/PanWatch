@@ -33,7 +33,7 @@ from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
 
-PAPER_ENGINE_VERSION = "0.8.0"
+PAPER_ENGINE_VERSION = "0.9.0"
 
 
 def _utc_naive(now: datetime | None = None) -> datetime:
@@ -354,6 +354,60 @@ def _position_guardian(
                 "new_stop_loss": round(protective_stop, 4),
             }
         )
+    return result
+
+
+def _confirm_reversal_exit(
+    position_key: str,
+    management: dict | None,
+    streaks: dict[str, int],
+    *,
+    required: int = 2,
+) -> dict | None:
+    """Require consecutive qualified opposite-thesis observations before exit.
+
+    A single noisy reversal signal is never sufficient. Any interruption resets
+    the streak. This state is deliberately in-memory: after a process restart,
+    the engine must reconfirm rather than trust stale reversal evidence.
+    """
+    key = str(position_key or "").strip()
+    required = max(2, int(required))
+
+    if management is None:
+        if key:
+            streaks.pop(key, None)
+        return None
+
+    result = dict(management)
+    thesis_exit = bool(
+        result.get("exit_requested")
+        and str(result.get("exit_reason") or "") == "thesis_reversal"
+    )
+
+    if not thesis_exit:
+        if key:
+            streaks.pop(key, None)
+        result["confirmation_streak"] = 0
+        result["confirmation_required"] = required
+        return result
+
+    streak = (streaks.get(key, 0) if key else 0) + 1
+    if key:
+        streaks[key] = streak
+    result["confirmation_streak"] = streak
+    result["confirmation_required"] = required
+
+    if streak < required:
+        result["proposed_exit_reason"] = "thesis_reversal"
+        result["exit_requested"] = False
+        result["exit_reason"] = None
+        result["action"] = "hold"
+        result["reason"] = "opposite_thesis_confirmation_pending"
+        return result
+
+    if key:
+        streaks.pop(key, None)
+    result["reason"] = "confirmed_opposite_thesis"
     return result
 
 
@@ -702,6 +756,7 @@ class XAUPaperTradingEngine:
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings()
+        self._reversal_streaks: dict[str, int] = {}
 
     def _active_account(self, db) -> XAUPaperAccount | None:
         return (
@@ -1622,8 +1677,12 @@ class XAUPaperTradingEngine:
 
             position_management = None
             if position:
+                reversal_key = str(position.setup_key or position.id)
                 exit_quote = _paper_management_quote(position.side, spot)
-                if exit_quote is not None:
+                if exit_quote is None:
+                    # Missing/closed fill market interrupts reversal confirmation.
+                    self._reversal_streaks.pop(reversal_key, None)
+                else:
                     exit_reason = None
                     if position.side == "long":
                         if exit_quote <= position.stop_loss:
@@ -1642,7 +1701,15 @@ class XAUPaperTradingEngine:
                             fusion,
                             exit_quote,
                         )
-                        new_stop = _number(position_management.get("new_stop_loss"))
+                        position_management = _confirm_reversal_exit(
+                            reversal_key,
+                            position_management,
+                            self._reversal_streaks,
+                            required=2,
+                        )
+                        new_stop = _number(
+                            (position_management or {}).get("new_stop_loss")
+                        )
                         if new_stop is not None:
                             old_stop = float(position.stop_loss)
                             position.stop_loss = new_stop
@@ -1651,21 +1718,25 @@ class XAUPaperTradingEngine:
                                 position.side,
                                 old_stop,
                                 new_stop,
-                                position_management.get("reason"),
-                                position_management.get("current_r"),
+                                (position_management or {}).get("reason"),
+                                (position_management or {}).get("current_r"),
                             )
-                        if position_management.get("exit_requested"):
+                        if (position_management or {}).get("exit_requested"):
                             exit_reason = str(
-                                position_management.get("exit_reason")
+                                (position_management or {}).get("exit_reason")
                                 or "thesis_reversal"
                             )
+                    else:
+                        self._reversal_streaks.pop(reversal_key, None)
 
                     if exit_reason is None and position.opened_at:
                         held_minutes = _position_age_minutes(position.opened_at, now_utc)
                         if held_minutes >= float(self.settings.xau_paper_max_hold_minutes):
                             exit_reason = "time_stop"
+                            self._reversal_streaks.pop(reversal_key, None)
 
                     if exit_reason:
+                        self._reversal_streaks.pop(reversal_key, None)
                         exit_fill = _paper_exit_fill_price(
                             position.side,
                             exit_quote,
