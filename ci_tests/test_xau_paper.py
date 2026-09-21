@@ -1004,6 +1004,8 @@ def test_shadow_research_memory_is_separate_and_similarity_filtered():
     }
     signals = [
         SimpleNamespace(
+            accepted=False,
+            rejection_reason="cognitive_veto",
             meta={
                 "state_vector": dict(base_vector),
                 "shadow": {
@@ -1012,6 +1014,8 @@ def test_shadow_research_memory_is_separate_and_similarity_filtered():
             }
         ),
         SimpleNamespace(
+            accepted=False,
+            rejection_reason="cognitive_wait",
             meta={
                 "state_vector": {**base_vector, "directional_pressure": 0.7},
                 "shadow": {
@@ -1020,6 +1024,8 @@ def test_shadow_research_memory_is_separate_and_similarity_filtered():
             }
         ),
         SimpleNamespace(
+            accepted=False,
+            rejection_reason="cognitive_observe",
             meta={
                 "state_vector": {
                     **base_vector,
@@ -1090,3 +1096,55 @@ def test_replay_research_memory_filters_by_state_similarity():
     assert memory["sample_count"] == 2
     assert memory["positive_rate"] == 0.5
     assert memory["nearest_similarity"] >= memory["average_similarity"]
+
+
+
+def test_shadow_research_memory_excludes_execution_and_accepted_signals():
+    vector = {
+        "candidate": "long_setup",
+        "alignment": "bullish",
+        "session": "new_york",
+        "regime": "trend_bull",
+        "directional_pressure": 0.8,
+        "return_10m_pct": 0.1,
+        "return_30m_pct": 0.2,
+        "acceleration": 0.03,
+        "volatility_pct": 0.15,
+        "rsi_5m_norm": 0.2,
+        "rsi_15m_norm": 0.1,
+        "breakout": "up",
+        "macro_bias": 1.0,
+        "macro_confidence": 0.7,
+        "spread_bps": 0.5,
+        "spot_proxy_basis_bps": 0.0,
+        "data_quality": 0.95,
+    }
+    signals = [
+        SimpleNamespace(
+            accepted=True,
+            rejection_reason="",
+            meta={"state_vector": dict(vector), "shadow": {"60m": {"directional_return_bps": 99.0}}},
+        ),
+        SimpleNamespace(
+            accepted=False,
+            rejection_reason="market_closed_or_rollover",
+            meta={"state_vector": dict(vector), "shadow": {"60m": {"directional_return_bps": 88.0}}},
+        ),
+        SimpleNamespace(
+            accepted=False,
+            rejection_reason="spread_too_wide",
+            meta={"state_vector": dict(vector), "shadow": {"60m": {"directional_return_bps": 77.0}}},
+        ),
+        SimpleNamespace(
+            accepted=False,
+            rejection_reason="cognitive_veto",
+            meta={"state_vector": dict(vector), "shadow": {"60m": {"directional_return_bps": -6.0}}},
+        ),
+    ]
+
+    memory = _shadow_research_memory(signals, vector)
+
+    assert memory["sample_count"] == 1
+    assert memory["positive_rate"] == 0.0
+    assert memory["decision_filtered"] is True
+    assert "cognitive_veto" in memory["eligible_rejection_reasons"]
