@@ -46,6 +46,7 @@ from src.modules.research.api import (
     recommendations,
 )
 from src.modules.strategy.api import factors
+from src.modules.xau import api as xau_api
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.runtime.config import Settings
 from src.web.response import ResponseWrapperMiddleware
@@ -197,6 +198,14 @@ app.include_router(
     assistant_api.router,
     prefix="/api/assistant",
     tags=["assistant"],
+    dependencies=protected,
+)
+
+
+app.include_router(
+    xau_api.router,
+    prefix="/api/xau",
+    tags=["xau"],
     dependencies=protected,
 )
 
