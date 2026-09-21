@@ -5,6 +5,8 @@ HTTP 中间件、认证依赖和各模块 router；具体业务规则仍由 ``mo
 ``platform`` 承担，避免把应用入口演变成新的通用业务层。
 """
 
+import asyncio
+
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -44,6 +46,8 @@ from src.modules.research.api import (
     recommendations,
 )
 from src.modules.strategy.api import factors
+from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
+from src.platform.runtime.config import Settings
 from src.web.response import ResponseWrapperMiddleware
 
 app = FastAPI(
@@ -230,6 +234,41 @@ def oauth_protected_resource_metadata(request: Request, _resource_path: str = ""
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/runtime-readiness")
+async def runtime_readiness():
+    """Non-secret readiness probe for Railway and deployment diagnostics."""
+    settings = Settings()
+    toolbox = {
+        "configured": bool(settings.ahmed_toolbox_url),
+        "reachable": False,
+        "tool_count": 0,
+        "error": None,
+    }
+
+    if settings.ahmed_toolbox_url:
+        try:
+            client = AhmedToolboxClient(
+                settings.ahmed_toolbox_url,
+                token=settings.ahmed_toolbox_token,
+                timeout_seconds=settings.ahmed_toolbox_timeout_seconds,
+            )
+            tools = await asyncio.to_thread(client.list_tools)
+            toolbox["reachable"] = True
+            toolbox["tool_count"] = len(tools)
+        except Exception as exc:  # noqa: BLE001 - readiness must report, not crash
+            toolbox["error"] = type(exc).__name__
+
+    ready = bool(settings.ai_api_key) and bool(toolbox["reachable"])
+    return {
+        "status": "ready" if ready else "partial",
+        "ai": {
+            "model": settings.ai_model,
+            "api_key_configured": bool(settings.ai_api_key),
+        },
+        "toolbox": toolbox,
+    }
 
 
 @app.get("/api/version")
