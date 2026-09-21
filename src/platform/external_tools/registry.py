@@ -29,6 +29,7 @@ _TEXT_LIMIT = 18_000
 
 def _pan_tool_name(remote_name: str, namespace: str = "ext") -> str:
     slug = _NAME_RE.sub("_", remote_name.lower()).strip("_")
+    slug = re.sub(r"_+", "_", slug)
     if not slug or not slug[0].isalpha():
         slug = f"tool_{slug}"
     candidate = f"{namespace}_{slug}"
