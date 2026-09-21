@@ -72,9 +72,13 @@ def _number(value, default=None):
 
 
 def _paper_entry_price(side: str, spot: dict) -> float | None:
+    """Paper entries require an actual indicative bid/ask side.
+
+    Mid-only references are useful for context, but are not accepted as fills.
+    """
     if side == "long":
-        return _number(spot.get("ask")) or _number(spot.get("price"))
-    return _number(spot.get("bid")) or _number(spot.get("price"))
+        return _number(spot.get("ask"))
+    return _number(spot.get("bid"))
 
 
 def _paper_mark_price(side: str, spot: dict) -> float | None:
@@ -536,7 +540,7 @@ class XAUPaperTradingEngine:
             return None
 
         side = "long" if candidate == "long_setup" else "short"
-        entry = _number(spot.get("ask")) if side == "long" else _number(spot.get("bid"))
+        entry = _paper_entry_price(side, spot)
         if entry is None:
             signal.accepted = False
             signal.rejection_reason = "bid_ask_unavailable"
