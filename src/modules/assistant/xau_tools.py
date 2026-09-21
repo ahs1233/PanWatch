@@ -117,6 +117,9 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
             f"state={fusion.get('state')}; "
             f"technical={fusion.get('technical_candidate')}; "
             f"macro_relation={fusion.get('macro_relation')}; "
+            f"regime={fusion.get('regime')}; "
+            f"confidence={fusion.get('cognitive_confidence')}; "
+            f"meta={fusion.get('meta_decision')}; "
             f"event_risk={fusion.get('event_risk')}; "
             f"execution={fusion.get('execution_status')}. "
             "This is a research state, not an execution instruction."
@@ -264,8 +267,9 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
             tool_name=fusion_spec.name,
             title=fusion_spec.title,
             summary=(
-                "Full XAU research fusion across live technical structure, macro "
-                "context and explicit data/event gates; research-only."
+                "Full XAU cognition across market perception, regime detection, "
+                "competing hypotheses, macro context, adversarial review, calibrated "
+                "confidence, execution timing and explicit data/event gates; research-only."
             ),
             use_cases=[
                 "full gold analysis",
@@ -296,7 +300,7 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
             output_summary="Research-only XAU technical + macro decision fusion.",
             risk=ToolRisk.READ,
             confirmation_required=False,
-            implementation_version="xau-fusion-0.1",
+            implementation_version="xau-fusion-1.0",
         )
 ,
         ToolDescriptor(
