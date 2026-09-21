@@ -64,3 +64,14 @@ async def paper_summary(
 async def paper_scan():
     """Run one paper-only scan. Never routes a live order."""
     return await XAUPaperTradingEngine().scan()
+
+
+
+@router.get("/paper/weeks")
+async def paper_weeks(
+    limit: int = Query(default=12, ge=1, le=52),
+):
+    return {
+        "weeks": XAUPaperTradingEngine().history(limit=limit),
+        "execution_allowed": False,
+    }
