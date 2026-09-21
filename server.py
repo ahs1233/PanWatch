@@ -22,6 +22,7 @@ from src.platform.persistence.models import (
 from src.platform.observability.log_handler import DBLogHandler
 from src.platform.runtime.config import Settings, AppConfig, StockConfig
 from src.platform.marketdata.models import MarketCode
+from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.ai.ai_client import AIClient
 from src.platform.ai.ai_failover import build_failover_client
 from src.platform.notifications.notifier import NotifierManager
@@ -1456,6 +1457,84 @@ async def trigger_agent_for_stock(
     }
 
 
+
+async def verify_runtime_integrations() -> None:
+    """Run one harmless startup smoke test for configured AI + external research.
+
+    The probe never logs API keys or bearer tokens. Failures are reported but do
+    not block PanWatch startup.
+    """
+    settings = Settings()
+
+    if settings.ai_api_key:
+        try:
+            ai = AIClient(
+                base_url=settings.ai_base_url,
+                api_key=settings.ai_api_key,
+                model=settings.ai_model,
+            )
+            reply = await asyncio.wait_for(
+                ai.chat(
+                    "You are a connectivity probe. Reply with exactly OK.",
+                    "Reply exactly OK.",
+                    temperature=0,
+                ),
+                timeout=25,
+            )
+            logger.info(
+                "[runtime-smoke] AI ok model=%s reply_ok=%s",
+                settings.ai_model,
+                reply.strip().upper() == "OK",
+            )
+        except Exception as exc:
+            logger.error(
+                "[runtime-smoke] AI failed model=%s error=%s",
+                settings.ai_model,
+                type(exc).__name__,
+            )
+    else:
+        logger.warning("[runtime-smoke] AI skipped: API key not configured")
+
+    if settings.ahmed_toolbox_url:
+        try:
+            client = AhmedToolboxClient(
+                settings.ahmed_toolbox_url,
+                token=settings.ahmed_toolbox_token,
+                timeout_seconds=settings.ahmed_toolbox_timeout_seconds,
+            )
+            tools = await asyncio.wait_for(asyncio.to_thread(client.list_tools), timeout=20)
+            names = [str(item.get("name") or "") for item in tools]
+            logger.info(
+                "[runtime-smoke] ToolBox ok tool_count=%s scrapling_fetch=%s",
+                len(names),
+                "scrapling__fetch" in names,
+            )
+            if "scrapling__fetch" in names:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.call_tool,
+                        "scrapling__fetch",
+                        {"url": "https://example.com"},
+                    ),
+                    timeout=30,
+                )
+                is_error = bool(result.get("isError"))
+                text_parts = [
+                    str(item.get("text") or "")
+                    for item in (result.get("content") or [])
+                    if isinstance(item, dict)
+                ]
+                logger.info(
+                    "[runtime-smoke] Scrapling fetch ok=%s example_domain=%s",
+                    not is_error,
+                    "Example Domain" in "\n".join(text_parts),
+                )
+        except Exception as exc:
+            logger.error("[runtime-smoke] ToolBox failed error=%s", type(exc).__name__)
+    else:
+        logger.warning("[runtime-smoke] ToolBox skipped: URL not configured")
+
+
 @asynccontextmanager
 async def lifespan(app):
     """应用生命周期: 初始化 + 启动调度器"""
@@ -1472,6 +1551,7 @@ async def lifespan(app):
     setup_proxy()  # 设置进程 env 代理(HTTP_PROXY/NO_PROXY);所有 httpx(trust_env=True)据此走代理
     setup_ssl()
     setup_playwright()
+    await verify_runtime_integrations()
 
     # 从环境变量初始化认证（Docker 部署用）
     from src.modules.administration.api.auth import init_auth_from_env
