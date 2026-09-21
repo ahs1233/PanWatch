@@ -1653,7 +1653,7 @@ async def lifespan(app):
         seed_sample_stocks()
         xau_research_scheduler = XAUResearchScheduler(
             timezone=settings.app_timezone,
-            interval_seconds=60,
+            interval_seconds=settings.xau_fast_scan_seconds,
         )
         xau_research_scheduler.start()
         external_paper_store = init_xau_paper_store(settings)
