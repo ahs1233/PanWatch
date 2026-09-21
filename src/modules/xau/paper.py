@@ -12,8 +12,6 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy.exc import IntegrityError
-
 from src.modules.xau.service import (
     build_decision_fusion,
     get_macro_context,
@@ -471,15 +469,7 @@ class XAUPaperTradingEngine:
             },
         )
         db.add(signal)
-        try:
-            db.flush()
-        except IntegrityError:
-            db.rollback()
-            return (
-                db.query(XAUPaperSignal)
-                .filter(XAUPaperSignal.setup_key == setup_key)
-                .first()
-            )
+        db.flush()
         return signal
 
     def _try_open(
