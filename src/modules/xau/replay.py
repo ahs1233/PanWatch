@@ -10,6 +10,7 @@ eligible, and never feeds its outcomes into trade-calibration metrics.
 
 from __future__ import annotations
 
+import asyncio
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,7 +19,10 @@ from typing import Any, Callable
 
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
+from src.modules.xau.paper_store import open_xau_paper_session
+from src.platform.marketdata.xau_biquote import BiquoteXAUOHLCProvider
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
+from src.platform.marketdata.xau_research_provider import YahooGoldResearchProvider
 from src.platform.persistence.models import XAUReplayEpisode
 
 
@@ -427,3 +431,109 @@ def persist_replay_episodes(db, episodes: list[ReplayEpisode]) -> int:
     if added:
         db.flush()
     return added
+
+
+async def _fetch_default_replay_history(
+    *,
+    limit: int = 1000,
+) -> tuple[dict[XAUTimeframe, list[XAUBar]], str]:
+    """Fetch one internally consistent replay dataset.
+
+    Biquote spot/MT5 structure is preferred for all timeframes. If any required
+    timeframe fails or is too short, replay falls back to Yahoo GC=F for all
+    frames rather than mixing instruments inside one historical episode.
+    """
+    limit = max(60, min(int(limit), 1000))
+    biquote = BiquoteXAUOHLCProvider()
+
+    async def biquote_one(timeframe: XAUTimeframe):
+        return await asyncio.to_thread(
+            biquote.bars,
+            timeframe,
+            limit=limit,
+        )
+
+    try:
+        results = await asyncio.gather(
+            *(biquote_one(tf) for tf in (XAUTimeframe.M1, XAUTimeframe.M5, XAUTimeframe.M15))
+        )
+        bars = {
+            XAUTimeframe.M1: results[0],
+            XAUTimeframe.M5: results[1],
+            XAUTimeframe.M15: results[2],
+        }
+        if all(len(rows) >= 30 for rows in bars.values()):
+            return bars, "biquote.io:MT5-ohlc"
+    except Exception:
+        pass
+
+    yahoo = YahooGoldResearchProvider()
+
+    async def yahoo_one(timeframe: XAUTimeframe):
+        return await asyncio.to_thread(yahoo.bars, timeframe)
+
+    results = await asyncio.gather(
+        *(yahoo_one(tf) for tf in (XAUTimeframe.M1, XAUTimeframe.M5, XAUTimeframe.M15))
+    )
+    bars = {
+        XAUTimeframe.M1: results[0],
+        XAUTimeframe.M5: results[1],
+        XAUTimeframe.M15: results[2],
+    }
+    if not all(len(rows) >= 30 for rows in bars.values()):
+        raise RuntimeError("insufficient historical XAU replay bars")
+    return bars, "yfinance:GC=F"
+
+
+async def refresh_replay_memory(
+    *,
+    horizon_minutes: int = 60,
+    step_minutes: int = 5,
+    limit: int = 1000,
+) -> dict[str, Any]:
+    """Fetch historical bars, run no-lookahead replay and persist new episodes."""
+    bars, source = await _fetch_default_replay_history(limit=limit)
+    replay_source = f"{source}:walk-forward"
+    episodes = walk_forward_replay(
+        bars,
+        horizon_minutes=horizon_minutes,
+        step_minutes=step_minutes,
+        source=replay_source,
+    )
+
+    db = open_xau_paper_session()
+    try:
+        added = persist_replay_episodes(db, episodes)
+        db.commit()
+        total = (
+            db.query(XAUReplayEpisode)
+            .filter(XAUReplayEpisode.source == replay_source)
+            .count()
+        )
+    finally:
+        db.close()
+
+    observed_times = [episode.observed_at for episode in episodes]
+    return {
+        "status": "ok",
+        "source": source,
+        "replay_source": replay_source,
+        "bars": {
+            timeframe.value: len(rows)
+            for timeframe, rows in bars.items()
+        },
+        "generated_episodes": len(episodes),
+        "added_episodes": added,
+        "stored_episodes_for_source": total,
+        "horizon_minutes": int(horizon_minutes),
+        "step_minutes": int(step_minutes),
+        "first_observed_at": (
+            min(observed_times).isoformat() if observed_times else None
+        ),
+        "last_observed_at": (
+            max(observed_times).isoformat() if observed_times else None
+        ),
+        "research_only": True,
+        "execution_allowed": False,
+        "lookahead_protected": True,
+    }
