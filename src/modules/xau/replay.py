@@ -24,6 +24,7 @@ from src.modules.xau.cognition import build_cognitive_state
 from src.modules.xau.paper_store import (
     open_xau_paper_session,
     open_xau_replay_session,
+    paper_store_is_external,
     replay_store_is_external,
 )
 from src.platform.marketdata.xau_biquote import BiquoteXAUOHLCProvider
@@ -641,7 +642,13 @@ async def refresh_replay_memory(
         "research_only": True,
         "execution_allowed": False,
         "lookahead_protected": True,
-        "durable_external_store": True,
+        "durable_external_store": (
+            replay_store_is_external()
+            or (
+                storage_mode == "external_paper_signal_compat"
+                and paper_store_is_external()
+            )
+        ),
         "storage_mode": storage_mode,
     }
 
@@ -661,11 +668,13 @@ class XAUReplayScheduler:
                 limit=self.settings.xau_replay_bar_limit,
             )
             logger.info(
-                "[XAU replay] source=%s generated=%s added=%s stored=%s range=%s..%s research_only=true",
+                "[XAU replay] source=%s generated=%s added=%s stored=%s storage=%s durable=%s range=%s..%s research_only=true",
                 result.get("source"),
                 result.get("generated_episodes"),
                 result.get("added_episodes"),
                 result.get("stored_episodes_for_source"),
+                result.get("storage_mode"),
+                result.get("durable_external_store"),
                 result.get("first_observed_at"),
                 result.get("last_observed_at"),
             )
