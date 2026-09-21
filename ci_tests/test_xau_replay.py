@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.modules.xau import replay
+from src.modules.xau.paper_store import _provision_replay_table
 from src.modules.xau.replay import (
     _fetch_default_replay_history,
     build_replay_technical_state,
@@ -271,5 +272,20 @@ def test_paper_signal_compat_replay_storage_is_idempotent_and_isolated():
         assert all(row.candidate.startswith("replay_") for row in rows)
         assert all(row.setup_key.startswith("replay:") for row in rows)
         assert all((row.meta or {}).get("lookahead_protected") is True for row in rows)
+    finally:
+        db.close()
+
+
+
+def test_replay_table_provisioning_is_non_destructive_and_idempotent():
+    engine = create_engine("sqlite:///:memory:")
+
+    assert _provision_replay_table(engine) is True
+    assert _provision_replay_table(engine) is True
+
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        assert db.query(XAUReplayEpisode).count() == 0
     finally:
         db.close()
