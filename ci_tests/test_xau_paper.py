@@ -289,7 +289,7 @@ def test_entry_gate_reason_matches_engine_policy():
         },
         has_open_position=False,
         max_spread_bps=3.0,
-    ) == (False, "market_closed_rollover")
+    ) == (False, "market_closed_or_rollover")
 
     assert _entry_gate_reason(
         candidate="long_setup",
