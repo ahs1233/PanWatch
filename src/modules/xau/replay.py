@@ -21,7 +21,7 @@ from typing import Any, Callable
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
-from src.modules.xau.paper_store import open_xau_paper_session
+from src.modules.xau.paper_store import open_xau_replay_session, replay_store_is_external
 from src.platform.marketdata.xau_biquote import BiquoteXAUOHLCProvider
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
 from src.platform.marketdata.xau_research_provider import YahooGoldResearchProvider
@@ -506,7 +506,7 @@ async def refresh_replay_memory(
         source=replay_source,
     )
 
-    db = open_xau_paper_session()
+    db = open_xau_replay_session()
     try:
         added = persist_replay_episodes(db, episodes)
         db.commit()
@@ -541,6 +541,7 @@ async def refresh_replay_memory(
         "research_only": True,
         "execution_allowed": False,
         "lookahead_protected": True,
+        "durable_external_store": replay_store_is_external(),
     }
 
 
