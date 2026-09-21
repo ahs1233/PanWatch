@@ -82,6 +82,8 @@ interface PaperSettings {
   risk_pct: number
   reward_risk: number
   max_leverage: number
+  max_spread_bps: number
+  max_hold_minutes: number
   scan_seconds: number
   timezone: string
   entry_states: string[]
@@ -312,7 +314,7 @@ export default function PaperTradingPage() {
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Risk model</div>
           <div className="mt-2 text-[18px] font-bold">{num((data?.settings?.risk_pct || 0) * 100, 1)}% / trade</div>
           <div className="mt-1 text-[10px] text-muted-foreground">
-            {num(data?.settings?.reward_risk, 1)}R target · {num(data?.settings?.max_leverage, 1)}× max
+            {num(data?.settings?.reward_risk, 1)}R · {num(data?.settings?.max_leverage, 1)}× · ≤{num(data?.settings?.max_spread_bps, 1)} bps · {num(data?.settings?.max_hold_minutes, 0)}m
           </div>
         </div>
         <div className="card p-4">
