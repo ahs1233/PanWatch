@@ -33,6 +33,7 @@ from src.modules.paper_trading.paper_trading_scheduler import PaperTradingSchedu
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
 from src.modules.xau.scheduler import XAUResearchScheduler
 from src.modules.xau.paper import XAUPaperTradingScheduler
+from src.modules.xau.replay import XAUReplayScheduler
 from src.modules.xau.paper_store import init_xau_paper_store
 from src.modules.automation.agent_runs import record_agent_run
 from src.platform.observability.log_context import install_log_record_factory, log_context
@@ -59,6 +60,7 @@ paper_trading_scheduler: PaperTradingScheduler | None = None
 context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
 xau_research_scheduler: XAUResearchScheduler | None = None
 xau_paper_scheduler: XAUPaperTradingScheduler | None = None
+xau_replay_scheduler: XAUReplayScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -1668,7 +1670,7 @@ async def lifespan(app):
 
     seed_agents()
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler
 
     if xau_mode:
         # Keep the process focused on XAU/USD. The original stock catalogue,
@@ -1684,6 +1686,8 @@ async def lifespan(app):
         logger.info("XAU paper durable store external=%s", external_paper_store)
         xau_paper_scheduler = XAUPaperTradingScheduler(settings)
         xau_paper_scheduler.start()
+        xau_replay_scheduler = XAUReplayScheduler(settings)
+        xau_replay_scheduler.start()
         logger.info("XAU profile active: legacy stock background jobs are disabled")
     else:
         try:
@@ -1775,6 +1779,8 @@ async def lifespan(app):
         logger.info("XAU research scheduler stopped")
     if xau_paper_scheduler:
         xau_paper_scheduler.shutdown()
+    if xau_replay_scheduler:
+        xau_replay_scheduler.shutdown()
         logger.info("XAU paper scheduler stopped")
 
 
