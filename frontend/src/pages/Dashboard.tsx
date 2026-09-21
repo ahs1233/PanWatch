@@ -21,6 +21,20 @@ interface XAUFrame {
   observed_at: string
 }
 
+interface IndicativeSpot {
+  price: number
+  bid: number | null
+  ask: number | null
+  spread: number | null
+  spread_bps: number | null
+  observed_at: string
+  age_seconds: number
+  source: string
+  is_stale: boolean
+  indicative: boolean
+  execution_eligible: boolean
+}
+
 interface XAUSnapshot {
   instrument: string
   name: string
@@ -30,6 +44,10 @@ interface XAUSnapshot {
   execution_feed_connected: boolean
   execution_status: string
   price: number | null
+  indicative_spot: IndicativeSpot | null
+  indicative_spot_error?: string | null
+  spot_minus_proxy: number | null
+  spot_minus_proxy_bps: number | null
   change_pct_1m: number | null
   observed_at: string | null
   status: string
@@ -177,8 +195,8 @@ export default function DashboardPage() {
             Gold / U.S. Dollar
           </h1>
           <p className="mt-1 max-w-3xl text-[13px] leading-6 text-muted-foreground">
-            Fast 1m / 5m / 15m technical state, macro context and external research. The current market feed is
-            GC=F and is intentionally blocked from execution use.
+            Live indicative XAU/USD spot reference, 1m / 5m / 15m technical structure, macro context and external
+            research. GC=F remains the technical research proxy and is never treated as an execution quote.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -199,8 +217,8 @@ export default function DashboardPage() {
           <div>
             <div className="text-[13px] font-semibold text-foreground">Execution gate is locked</div>
             <div className="mt-1 text-[12px] leading-5 text-muted-foreground">
-              A real spot XAUUSD bid/ask feed is not connected yet. Research, AI analysis and technical state are
-              active, but live entry / SL / TP prices must not use the GC=F proxy.
+              An indicative spot bid/ask reference is connected, but it is not a broker execution quote. Live entry,
+              SL and TP automation remains locked until a venue-specific tradable XAUUSD feed is connected.
             </div>
           </div>
         </div>
@@ -214,12 +232,17 @@ export default function DashboardPage() {
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <div className="card p-4">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">GC=F research price</div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Indicative XAU/USD spot</div>
           <div className="mt-2 font-mono text-[24px] font-bold text-foreground">
-            {fmt(snapshot?.price)}
+            {fmt(snapshot?.indicative_spot?.price)}
           </div>
-          <div className={`mt-1 font-mono text-[11px] ${directionClass((snapshot?.change_pct_1m || 0) >= 0 ? 'bullish' : 'bearish')}`}>
-            1m {pct(snapshot?.change_pct_1m, 3)}
+          <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+            Bid {fmt(snapshot?.indicative_spot?.bid)} · Ask {fmt(snapshot?.indicative_spot?.ask)}
+          </div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            {snapshot?.indicative_spot
+              ? `${snapshot.indicative_spot.source} · ${snapshot.indicative_spot.is_stale ? 'STALE' : 'FRESH'} · spread ${fmt(snapshot.indicative_spot.spread_bps, 2)} bps`
+              : 'Spot reference unavailable'}
           </div>
         </div>
 
@@ -254,7 +277,7 @@ export default function DashboardPage() {
         <div className="card p-4">
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Execution feed</div>
           <div className="mt-2 text-[18px] font-bold text-amber-500">LOCKED</div>
-          <div className="mt-1 text-[11px] text-muted-foreground">Spot bid/ask not connected</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">Indicative spot ≠ tradable broker quote</div>
         </div>
       </div>
 
