@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 class XAUResearchScheduler:
-    def __init__(self, timezone: str = "UTC", interval_seconds: int = 60):
+    def __init__(self, timezone: str = "UTC", interval_seconds: int = 10):
         self.scheduler = AsyncIOScheduler(timezone=timezone)
-        self.interval_seconds = max(30, int(interval_seconds))
+        self.interval_seconds = max(5, int(interval_seconds))
         self._running = False
         self._last_signature = None
 
@@ -28,7 +28,7 @@ class XAUResearchScheduler:
             return
         self._running = True
         try:
-            snapshot = await get_xau_snapshot(force=True)
+            snapshot = await get_xau_snapshot(force=False)
             signature = (
                 str(snapshot.get("status")),
                 str(snapshot.get("candidate")),
