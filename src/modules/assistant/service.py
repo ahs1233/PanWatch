@@ -57,6 +57,7 @@ from .schemas import (
 )
 from .tool_descriptors import PANWATCH_TOOL_DESCRIPTORS
 from .tools import build_panwatch_tool_registry
+from .xau_tools import register_xau_research_tools
 
 
 logger = logging.getLogger(__name__)
@@ -374,6 +375,7 @@ class AssistantService:
         """Compose local tools plus the optional read-only Ahmed ToolBox surface."""
         tools = build_panwatch_tool_registry(self._repository.session)
         descriptors = list(PANWATCH_TOOL_DESCRIPTORS)
+        descriptors.extend(register_xau_research_tools(tools))
 
         toolbox_url = self._settings.ahmed_toolbox_url.strip()
         if not toolbox_url:
