@@ -13,7 +13,7 @@ on:
       - "src/modules/assistant/service.py"
       - "src/modules/automation/tradingagents/xau_support.py"
       - "src/platform/runtime/config.py"
-      - "tests/test_ahmed_toolbox_xau_integration.py"
+      - "ci_tests/test_ahmed_toolbox_xau_integration.py"
       - ".github/workflows/ahmed-toolbox-xau-ci.yml"
 
 jobs:
@@ -52,4 +52,4 @@ jobs:
       - name: Run focused tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m pytest -q tests/test_ahmed_toolbox_xau_integration.py
+        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py
