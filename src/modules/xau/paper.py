@@ -473,6 +473,14 @@ def _trade_diagnostics(trades: list[XAUPaperTrade]) -> dict:
     }
 
 
+def _shadow_horizon_due(elapsed_minutes: float, horizon_minutes: int) -> tuple[bool, float]:
+    """Return whether a shadow horizon can be measured without hindsight drift."""
+    horizon = max(1.0, float(horizon_minutes))
+    grace = max(2.0, min(15.0, horizon * 0.10))
+    elapsed = max(0.0, float(elapsed_minutes))
+    return horizon <= elapsed <= horizon + grace, grace
+
+
 def _shadow_metrics(signals: list[XAUPaperSignal]) -> dict:
     """Aggregate counterfactual outcomes for accepted and rejected setups."""
     buckets: dict[str, dict[str, list[float]]] = {}
@@ -732,8 +740,8 @@ class XAUPaperTradingEngine:
                 # Never backfill a 15m outcome with the price observed hours
                 # later after a restart/outage; missing evidence is preferable
                 # to hindsight-contaminated learning data.
-                grace_minutes = max(2.0, min(15.0, horizon * 0.10))
-                if elapsed > horizon + grace_minutes:
+                due, grace_minutes = _shadow_horizon_due(elapsed, horizon)
+                if not due:
                     continue
 
                 directional_return_bps = (
