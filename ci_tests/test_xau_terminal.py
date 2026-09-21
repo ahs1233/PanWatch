@@ -197,10 +197,19 @@ def test_decision_fusion_support_conflict_and_event_gate():
             "bias_label": "bullish",
             "confidence": 0.9,
             "event_risk": True,
+            "event_kind": "scheduled",
+            "event_name": "US CPI",
+            "event_time_utc": "2026-09-21T15:45:00+00:00",
+            "event_age_minutes": None,
+            "event_confidence": 0.9,
+            "event_validation": "scheduled_event_window",
         },
     )
     assert event["state"] == "event_gate"
     assert event["research_ready"] is False
+    assert event["event_kind"] == "scheduled"
+    assert event["event_name"] == "US CPI"
+    assert event["event_validation"] == "scheduled_event_window"
     assert "high_impact_macro_event" in event["reasons"]
 
 

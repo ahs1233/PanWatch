@@ -878,6 +878,12 @@ class XAUPaperTradingEngine:
                 "macro_bias": fusion.get("macro_bias"),
                 "macro_confidence": fusion.get("macro_confidence"),
                 "event_risk": fusion.get("event_risk"),
+                "event_kind": fusion.get("event_kind"),
+                "event_name": fusion.get("event_name"),
+                "event_time_utc": fusion.get("event_time_utc"),
+                "event_age_minutes": fusion.get("event_age_minutes"),
+                "event_confidence": fusion.get("event_confidence"),
+                "event_validation": fusion.get("event_validation"),
                 "alignment": technical.get("alignment"),
                 "micro_direction": (technical.get("micro") or {}).get("direction"),
                 "spot": {
@@ -1107,12 +1113,16 @@ class XAUPaperTradingScheduler:
             account = result.get("account") or {}
             position = result.get("position") or {}
             logger.info(
-                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s",
+                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s event_risk=%s event_kind=%s event_validation=%s",
                 result.get("week_key"),
                 account.get("current_equity"),
                 position.get("side") if position else "flat",
                 result.get("opened"),
                 bool(result.get("closed_trade")),
+                (result.get("fusion") or {}).get("state"),
+                (result.get("fusion") or {}).get("event_risk"),
+                (result.get("fusion") or {}).get("event_kind"),
+                (result.get("fusion") or {}).get("event_validation"),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[XAU paper] scan failed: %s", type(exc).__name__)

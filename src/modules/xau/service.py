@@ -454,6 +454,12 @@ def build_decision_fusion(
         "macro_confidence": macro.get("confidence"),
         "macro_relation": macro_relation,
         "event_risk": event_risk,
+        "event_kind": macro.get("event_kind"),
+        "event_name": macro.get("event_name"),
+        "event_time_utc": macro.get("event_time_utc"),
+        "event_age_minutes": macro.get("event_age_minutes"),
+        "event_confidence": macro.get("event_confidence"),
+        "event_validation": macro.get("event_validation"),
         "research_ready": research_ready,
         "execution_allowed": False,
         "execution_status": technical.get(

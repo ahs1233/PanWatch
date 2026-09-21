@@ -123,6 +123,12 @@ interface PaperEligibility {
   macro_bias: number
   macro_confidence: number | null
   event_risk: boolean
+  event_kind: string | null
+  event_name: string | null
+  event_time_utc: string | null
+  event_age_minutes: number | null
+  event_confidence: number | null
+  event_validation: string | null
   alignment: string
   micro_direction: string
   spot: {
@@ -578,7 +584,11 @@ export default function PaperTradingPage() {
         )}
 
         <div className="mt-3 text-[10px] text-muted-foreground">
-          Event risk: {eligibility?.event_risk ? 'ACTIVE' : 'clear'} · quote age {num(eligibility?.spot?.age_seconds, 0)}s · live execution remains locked.
+          Event risk: {eligibility?.event_risk ? 'ACTIVE' : 'clear'} · validation {human(eligibility?.event_validation)}
+          {eligibility?.event_name ? ` · ${eligibility.event_name}` : ''}
+          {eligibility?.event_time_utc ? ` · ${dateTime(eligibility.event_time_utc)}` : ''}
+          {eligibility?.event_kind === 'breaking' && eligibility?.event_age_minutes != null ? ` · age ${num(eligibility.event_age_minutes, 0)}m` : ''}
+          {' · '}quote age {num(eligibility?.spot?.age_seconds, 0)}s · live execution remains locked.
         </div>
       </div>
 
