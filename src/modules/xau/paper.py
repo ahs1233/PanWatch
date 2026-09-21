@@ -2338,8 +2338,11 @@ class XAUPaperTradingScheduler:
             sensors = data_quality.get("sensors") or {}
             fill = sensors.get("fill_readiness") or {}
             guardian = result.get("position_management") or {}
+            shadow_memory = memory.get("shadow_memory") or {}
+            replay_memory = memory.get("replay_memory") or {}
+            cognitive_memory = cognition.get("memory") or {}
             logger.info(
-                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s regime=%s confidence=%s quality=%s quality_issues=%s analysis_ref=%s analysis_age=%s fill_score=%s fill_issues=%s guardian=%s guardian_reason=%s reversal_streak=%s/%s meta=%s memory=%s similar=%s event_risk=%s event_kind=%s event_validation=%s event_policy=%s",
+                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s regime=%s confidence=%s quality=%s quality_issues=%s analysis_ref=%s analysis_age=%s fill_score=%s fill_issues=%s guardian=%s guardian_reason=%s reversal_streak=%s/%s meta=%s memory=%s similar=%s shadow=%s/%s shadow_overlap=%s replay=%s/%s replay_overlap=%s research_adj=%s trade_adj=%s event_risk=%s event_kind=%s event_validation=%s event_policy=%s",
                 result.get("week_key"),
                 account.get("current_equity"),
                 position.get("side") if position else "flat",
@@ -2361,6 +2364,14 @@ class XAUPaperTradingScheduler:
                 fusion.get("meta_decision"),
                 memory.get("source"),
                 memory.get("similar_samples"),
+                shadow_memory.get("sample_count"),
+                shadow_memory.get("raw_sample_count"),
+                shadow_memory.get("overlap_discarded"),
+                replay_memory.get("sample_count"),
+                replay_memory.get("raw_sample_count"),
+                replay_memory.get("overlap_discarded"),
+                cognitive_memory.get("research_confidence_adjustment"),
+                cognitive_memory.get("trade_confidence_adjustment"),
                 fusion.get("event_risk"),
                 fusion.get("event_kind"),
                 fusion.get("event_validation"),
