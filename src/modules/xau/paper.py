@@ -186,6 +186,14 @@ def _paper_exit_quote(side: str, spot: dict) -> float | None:
     return _number(spot.get("ask"))
 
 
+def _weekly_reset_fill_price(side: str, spot: dict | None) -> float | None:
+    """Weekly rollover requires a fresh executable-side paper quote."""
+    spot = spot or {}
+    if not spot or bool(spot.get("is_stale")):
+        return None
+    return _paper_exit_quote(side, spot)
+
+
 def _position_age_minutes(opened_at: datetime, now_utc: datetime) -> float:
     opened = opened_at
     if opened.tzinfo is not None:
@@ -1027,9 +1035,7 @@ class XAUPaperTradingEngine:
                 # Never manufacture a weekly-reset fill from a stale/mid-only
                 # reference. Keep the old weekly account active until a fresh
                 # executable-side paper quote becomes available.
-                exit_quote = None
-                if spot and not bool(spot.get("is_stale")):
-                    exit_quote = _paper_exit_quote(old_position.side, spot)
+                exit_quote = _weekly_reset_fill_price(old_position.side, spot)
                 if exit_quote is None:
                     logger.info(
                         "[XAU paper] weekly rollover deferred: no fresh bid/ask fill old_week=%s new_week=%s",
