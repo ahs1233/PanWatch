@@ -21,11 +21,19 @@ from typing import Any, Callable
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
-from src.modules.xau.paper_store import open_xau_replay_session, replay_store_is_external
+from src.modules.xau.paper_store import (
+    open_xau_paper_session,
+    open_xau_replay_session,
+    replay_store_is_external,
+)
 from src.platform.marketdata.xau_biquote import BiquoteXAUOHLCProvider
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
 from src.platform.marketdata.xau_research_provider import YahooGoldResearchProvider
-from src.platform.persistence.models import XAUReplayEpisode
+from src.platform.persistence.models import (
+    XAUPaperAccount,
+    XAUPaperSignal,
+    XAUReplayEpisode,
+)
 from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -438,6 +446,78 @@ def persist_replay_episodes(db, episodes: list[ReplayEpisode]) -> int:
     return added
 
 
+def persist_replay_episodes_in_paper_store(db, episodes: list[ReplayEpisode]) -> int:
+    """Durable no-DDL fallback using isolated replay_* rows in paper signals.
+
+    These rows are never accepted trades and use candidate names that normal
+    paper/shadow queries do not match.
+    """
+    if not episodes:
+        return 0
+
+    account = (
+        db.query(XAUPaperAccount)
+        .filter(XAUPaperAccount.status == "active")
+        .order_by(XAUPaperAccount.id.desc())
+        .first()
+    )
+    if account is None:
+        account = (
+            db.query(XAUPaperAccount)
+            .order_by(XAUPaperAccount.id.desc())
+            .first()
+        )
+    if account is None:
+        return 0
+
+    setup_keys = [f"replay:{episode.replay_key}" for episode in episodes]
+    existing = {
+        row[0]
+        for row in (
+            db.query(XAUPaperSignal.setup_key)
+            .filter(XAUPaperSignal.setup_key.in_(setup_keys))
+            .all()
+        )
+    }
+
+    added = 0
+    for episode in episodes:
+        setup_key = f"replay:{episode.replay_key}"
+        if setup_key in existing:
+            continue
+        replay_candidate = f"replay_{episode.candidate}"
+        db.add(
+            XAUPaperSignal(
+                account_id=account.id,
+                setup_key=setup_key,
+                candidate=replay_candidate,
+                fusion_state="historical_replay",
+                macro_relation="research_only",
+                event_risk=False,
+                price=episode.entry_price,
+                accepted=False,
+                rejection_reason="historical_replay",
+                observed_at=episode.observed_at.replace(tzinfo=None),
+                meta={
+                    "research_only": True,
+                    "lookahead_protected": True,
+                    "replay_episode": episode.to_dict(),
+                    "state_vector": episode.state_vector,
+                    "cognition": episode.cognition,
+                    "directional_return_bps": episode.directional_return_bps,
+                    "outcome_at": episode.outcome_at.isoformat(),
+                    "horizon_minutes": episode.horizon_minutes,
+                    "source": episode.source,
+                },
+            )
+        )
+        added += 1
+
+    if added:
+        db.flush()
+    return added
+
+
 async def _fetch_default_replay_history(
     *,
     limit: int = 1000,
@@ -506,17 +586,37 @@ async def refresh_replay_memory(
         source=replay_source,
     )
 
-    db = open_xau_replay_session()
-    try:
-        added = persist_replay_episodes(db, episodes)
-        db.commit()
-        total = (
-            db.query(XAUReplayEpisode)
-            .filter(XAUReplayEpisode.source == replay_source)
-            .count()
-        )
-    finally:
-        db.close()
+    if replay_store_is_external():
+        db = open_xau_replay_session()
+        try:
+            added = persist_replay_episodes(db, episodes)
+            db.commit()
+            total = (
+                db.query(XAUReplayEpisode)
+                .filter(XAUReplayEpisode.source == replay_source)
+                .count()
+            )
+            storage_mode = "external_replay_table"
+        finally:
+            db.close()
+    else:
+        db = open_xau_paper_session()
+        try:
+            added = persist_replay_episodes_in_paper_store(db, episodes)
+            db.commit()
+            total = (
+                db.query(XAUPaperSignal)
+                .filter(
+                    XAUPaperSignal.rejection_reason == "historical_replay",
+                    XAUPaperSignal.candidate.in_(
+                        ("replay_long_setup", "replay_short_setup")
+                    ),
+                )
+                .count()
+            )
+            storage_mode = "external_paper_signal_compat"
+        finally:
+            db.close()
 
     observed_times = [episode.observed_at for episode in episodes]
     return {
@@ -541,7 +641,8 @@ async def refresh_replay_memory(
         "research_only": True,
         "execution_allowed": False,
         "lookahead_protected": True,
-        "durable_external_store": replay_store_is_external(),
+        "durable_external_store": True,
+        "storage_mode": storage_mode,
     }
 
 
