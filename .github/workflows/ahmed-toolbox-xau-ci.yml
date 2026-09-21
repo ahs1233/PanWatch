@@ -16,6 +16,7 @@ on:
       - "src/platform/runtime/config.py"
       - "ci_tests/test_ahmed_toolbox_xau_integration.py"
       - "ci_tests/test_xau_cognition.py"
+      - "ci_tests/test_xau_replay.py"
       - ".github/workflows/ahmed-toolbox-xau-ci.yml"
 
 jobs:
@@ -60,7 +61,7 @@ jobs:
       - name: Run focused tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py
+        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py ci_tests/test_xau_replay.py
 
   frontend:
     runs-on: ubuntu-latest
