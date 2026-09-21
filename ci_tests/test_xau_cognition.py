@@ -477,6 +477,8 @@ def test_shadow_memory_is_bounded_research_prior_not_trade_calibration():
                 "average_similarity": 1.0,
                 "decision_filtered": True,
                 "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
             },
         },
     )
@@ -502,6 +504,7 @@ def test_replay_memory_requires_larger_sample_and_is_bounded():
                 "average_similarity": 1.0,
                 "research_only": True,
                 "lookahead_protected": True,
+                "temporally_decorrelated": True,
             },
         },
     )
@@ -520,6 +523,7 @@ def test_replay_memory_requires_larger_sample_and_is_bounded():
                 "average_similarity": 1.0,
                 "research_only": True,
                 "lookahead_protected": True,
+                "temporally_decorrelated": True,
             },
         },
     )
@@ -577,6 +581,8 @@ def test_shadow_prior_ignores_return_magnitude_and_uses_direction_only():
                 "average_similarity": 1.0,
                 "decision_filtered": True,
                 "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
             },
         },
     )
