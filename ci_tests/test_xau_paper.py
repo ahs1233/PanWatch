@@ -15,6 +15,7 @@ from src.modules.xau.paper import (
     _paper_mark_price,
     _paper_context_mark_price,
     _paper_exit_quote,
+    _paper_management_quote,
     _weekly_reset_fill_price,
     _paper_exit_fill_price,
     _performance_metrics,
@@ -793,3 +794,25 @@ def test_position_guardian_uses_reversal_hysteresis_above_entry_threshold():
     assert below["exit_requested"] is False
     assert above["exit_requested"] is True
     assert above["reversal_threshold"] == 0.68
+
+
+
+def test_position_management_requires_explicit_ready_fill_state():
+    closed = {
+        "price": 4340.0,
+        "bid": 4339.9,
+        "ask": 4340.1,
+        "is_stale": False,
+        "fill_state": "market_closed_or_rollover",
+    }
+    ready = {
+        **closed,
+        "fill_state": "ready",
+    }
+
+    assert _paper_management_quote("long", closed) is None
+    assert _paper_management_quote("short", closed) is None
+    assert _paper_management_quote("long", ready) == 4339.9
+    assert _paper_management_quote("short", ready) == 4340.1
+    assert _weekly_reset_fill_price("long", closed) is None
+    assert _weekly_reset_fill_price("long", ready) == 4339.9
