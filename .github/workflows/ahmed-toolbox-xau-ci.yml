@@ -1,0 +1,53 @@
+name: Ahmed ToolBox + XAU CI
+
+on:
+  push:
+    branches:
+      - feat/ahmed-toolbox-xau
+  pull_request:
+    paths:
+      - "src/platform/external_tools/**"
+      - "src/platform/marketdata/xau_*"
+      - "src/modules/strategy/xau_intraday.py"
+      - "src/modules/assistant/xau_tools.py"
+      - "src/modules/assistant/service.py"
+      - "src/modules/automation/tradingagents/xau_support.py"
+      - "src/platform/runtime/config.py"
+      - "tests/test_ahmed_toolbox_xau_integration.py"
+      - ".github/workflows/ahmed-toolbox-xau-ci.yml"
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install focused dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest httpx "pydantic>=2"
+          python -m pip install -e ./packages/pan-agent-runtime
+          python -m pip install -e ./packages/pan-agent-tool-research
+
+      - name: Compile changed Python
+        run: |
+          python -m compileall -q \
+            src/platform/external_tools \
+            src/platform/marketdata/xau_models.py \
+            src/platform/marketdata/xau_research_provider.py \
+            src/modules/strategy/xau_intraday.py \
+            src/modules/assistant/xau_tools.py \
+            src/modules/assistant/service.py \
+            src/modules/automation/tradingagents/xau_support.py \
+            src/platform/runtime/config.py
+
+      - name: Run focused tests
+        run: pytest -q tests/test_ahmed_toolbox_xau_integration.py
