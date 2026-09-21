@@ -782,6 +782,42 @@ class XAUPaperTradingEngine:
         finally:
             db.close()
 
+    def history(self, limit: int = 12) -> list[dict]:
+        db = open_xau_paper_session()
+        try:
+            accounts = (
+                db.query(XAUPaperAccount)
+                .order_by(XAUPaperAccount.started_at.desc(), XAUPaperAccount.id.desc())
+                .limit(max(1, min(int(limit), 52)))
+                .all()
+            )
+            out: list[dict] = []
+            for account in accounts:
+                trades = (
+                    db.query(XAUPaperTrade)
+                    .filter(XAUPaperTrade.account_id == account.id)
+                    .order_by(XAUPaperTrade.closed_at.asc(), XAUPaperTrade.id.asc())
+                    .all()
+                )
+                item = _serialize_account(account) or {}
+                initial = float(account.initial_capital or 0.0)
+                equity = float(account.current_equity or initial)
+                item["return_pct"] = (
+                    round((equity - initial) / initial * 100.0, 4)
+                    if initial > 0
+                    else 0.0
+                )
+                item["win_rate"] = (
+                    round(float(account.winning_trades or 0) / float(account.total_trades) * 100.0, 2)
+                    if account.total_trades
+                    else 0.0
+                )
+                item["performance"] = _performance_metrics(trades)
+                out.append(item)
+            return out
+        finally:
+            db.close()
+
     def public_settings(self) -> dict:
         return {
             "enabled": self.settings.xau_paper_enabled,
