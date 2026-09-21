@@ -1139,6 +1139,7 @@ class XAUPaperPosition(Base):
 
     __tablename__ = "xau_paper_positions"
     __table_args__ = (
+        UniqueConstraint("setup_key", name="uq_xau_paper_position_setup"),
         Index("ix_xau_paper_position_status", "status"),
         Index("ix_xau_paper_position_account", "account_id"),
     )
