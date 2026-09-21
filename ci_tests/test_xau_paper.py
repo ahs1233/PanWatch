@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from src.modules.xau.paper import (
     XAUPaperTradingEngine,
     _paper_entry_price,
@@ -185,7 +187,7 @@ def test_spread_bps_is_derived_from_bid_ask_when_missing():
     spread = _spot_spread_bps(spot)
 
     assert spread is not None
-    assert spread == round((0.4 / 4350.0) * 10_000.0, 10)
+    assert spread == pytest.approx((0.4 / 4350.0) * 10_000.0, rel=1e-10)
 
 
 def test_position_age_minutes_handles_naive_and_aware_datetimes():
