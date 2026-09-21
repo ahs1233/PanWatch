@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from sqlalchemy import create_engine, inspect
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from src.platform.persistence.database import Base, SessionLocal
@@ -35,6 +36,24 @@ def _sqlalchemy_url(url: str) -> str:
     if value.startswith("postgresql://"):
         return "postgresql+psycopg://" + value[len("postgresql://") :]
     return value
+
+
+def _provision_replay_table(engine) -> bool:
+    """Create the replay table non-destructively when DDL is permitted."""
+    try:
+        if not inspect(engine).has_table("xau_replay_episodes"):
+            Base.metadata.create_all(
+                bind=engine,
+                tables=[XAUReplayEpisode.__table__],
+            )
+        return inspect(engine).has_table("xau_replay_episodes")
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "XAU replay PostgreSQL provisioning unavailable (%s); "
+            "falling back to local SQLite",
+            type(exc).__name__,
+        )
+        return False
 
 
 def init_xau_paper_store(settings: Settings | None = None) -> bool:
@@ -74,8 +93,7 @@ def init_xau_paper_store(settings: Settings | None = None) -> bool:
         Base.metadata.create_all(bind=_external_engine, tables=paper_tables)
         XAUPaperSessionLocal = sessionmaker(bind=_external_engine, expire_on_commit=False)
 
-        inspector = inspect(_external_engine)
-        _external_replay_available = inspector.has_table("xau_replay_episodes")
+        _external_replay_available = _provision_replay_table(_external_engine)
         if _external_replay_available:
             XAUReplaySessionLocal = sessionmaker(
                 bind=_external_engine,
@@ -85,7 +103,7 @@ def init_xau_paper_store(settings: Settings | None = None) -> bool:
         else:
             # Main SQLite is initialized independently by init_db() and includes
             # XAUReplayEpisode via Base.metadata. This fallback keeps research
-            # replay available without risking XAU runtime startup.
+            # replay available when the external role lacks DDL privileges.
             XAUReplaySessionLocal = SessionLocal
             logger.warning(
                 "XAU replay table is not provisioned in external PostgreSQL; "
