@@ -176,7 +176,7 @@ async def get_indicative_spot(force: bool = False) -> dict[str, Any]:
             return _spot_cache[1]
 
         provider = CompositeXAUIndicativeSpotProvider()
-        quote = await asyncio.to_thread(provider.fetch)
+        quote, provider_health = await asyncio.to_thread(provider.fetch_with_diagnostics)
         age_seconds = max(
             0.0,
             (datetime.now(timezone.utc) - quote.observed_at).total_seconds(),
@@ -191,6 +191,7 @@ async def get_indicative_spot(force: bool = False) -> dict[str, Any]:
             "age_seconds": age_seconds,
             "source": quote.source,
             "is_stale": bool(quote.is_stale or age_seconds > 180.0),
+            "provider_health": provider_health,
             "indicative": True,
             "execution_eligible": False,
         }
