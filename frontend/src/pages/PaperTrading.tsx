@@ -114,6 +114,38 @@ interface PaperWeeksResponse {
   execution_allowed: boolean
 }
 
+interface PaperEligibility {
+  eligible: boolean
+  gate_reason: string
+  candidate: string
+  fusion_state: string
+  macro_relation: string
+  macro_bias: number
+  macro_confidence: number | null
+  event_risk: boolean
+  alignment: string
+  micro_direction: string
+  spot: {
+    price: number | null
+    bid: number | null
+    ask: number | null
+    spread_bps: number | null
+    source: string | null
+    age_seconds: number | null
+    is_stale: boolean | null
+  }
+  projected: {
+    side: 'long' | 'short'
+    entry_price: number
+    stop_loss: number
+    target_price: number
+    quantity_oz: number
+    risk_usd: number
+  } | null
+  position: PaperPosition | null
+  execution_allowed: boolean
+}
+
 interface PaperSummary {
   account: PaperAccount | null
   position: PaperPosition | null
@@ -247,21 +279,26 @@ export default function PaperTradingPage() {
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState('')
   const [weeks, setWeeks] = useState<PaperWeekHistory[]>([])
+  const [eligibility, setEligibility] = useState<PaperEligibility | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const [result, history] = await Promise.all([
+      const [result, history, liveEligibility] = await Promise.all([
         fetchAPI<PaperSummary>('/xau/paper/summary?trade_limit=50&signal_limit=50', {
           timeoutMs: 30000,
         }),
         fetchAPI<PaperWeeksResponse>('/xau/paper/weeks?limit=12', {
           timeoutMs: 30000,
         }),
+        fetchAPI<PaperEligibility>('/xau/paper/eligibility', {
+          timeoutMs: 30000,
+        }),
       ])
       setData(result)
       setWeeks(history.weeks || [])
+      setEligibility(liveEligibility)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Paper league unavailable')
     } finally {
@@ -425,6 +462,112 @@ export default function PaperTradingPage() {
           <div className="mt-1 text-[10px] text-muted-foreground">
             Avg MFE {money(data?.performance?.average_mfe_usd)} · MAE {money(data?.performance?.average_mae_usd)}
           </div>
+        </div>
+      </div>
+
+      <div className="card mb-4 p-4">
+        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-[14px] font-semibold">Live entry eligibility</h2>
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${eligibility?.eligible ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}>
+                {eligibility?.eligible ? 'ELIGIBLE' : 'BLOCKED'}
+              </span>
+              <span className="rounded-full bg-accent/50 px-2.5 py-1 text-[10px] text-muted-foreground">
+                PAPER ONLY
+              </span>
+            </div>
+            <div className="mt-1 text-[12px] text-muted-foreground">
+              Exact same gates used by the paper engine. No separate UI scoring.
+            </div>
+          </div>
+          <div className="text-left md:text-right">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Gate reason</div>
+            <div className={`mt-1 text-[13px] font-semibold ${eligibility?.eligible ? 'text-emerald-500' : 'text-amber-500'}`}>
+              {human(eligibility?.gate_reason)}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8">
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Candidate</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.candidate)}</div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Fusion</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.fusion_state)}</div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Alignment</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.alignment)}</div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Micro</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.micro_direction)}</div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Macro</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.macro_relation)}</div>
+            <div className="mt-0.5 text-[9px] text-muted-foreground">
+              confidence {num(eligibility?.macro_confidence, 2)}
+            </div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Bid / Ask</div>
+            <div className="mt-1 font-mono text-[12px]">
+              {num(eligibility?.spot?.bid)} / {num(eligibility?.spot?.ask)}
+            </div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Spread</div>
+            <div className="mt-1 font-mono text-[12px]">{num(eligibility?.spot?.spread_bps, 2)} bps</div>
+            <div className="mt-0.5 text-[9px] text-muted-foreground">
+              limit ≤{num(data?.settings?.max_spread_bps, 1)}
+            </div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Spot</div>
+            <div className="mt-1 font-mono text-[12px]">{num(eligibility?.spot?.price)}</div>
+            <div className="mt-0.5 truncate text-[9px] text-muted-foreground">
+              {eligibility?.spot?.source || '--'}
+            </div>
+          </div>
+        </div>
+
+        {eligibility?.projected && (
+          <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-emerald-500/15 bg-emerald-500/5 p-3 md:grid-cols-6">
+            <div>
+              <div className="text-[10px] text-muted-foreground">Projected side</div>
+              <div className={`mt-1 text-[12px] font-semibold uppercase ${eligibility.projected.side === 'long' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                {eligibility.projected.side}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Entry</div>
+              <div className="mt-1 font-mono text-[12px]">{num(eligibility.projected.entry_price)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Stop</div>
+              <div className="mt-1 font-mono text-[12px] text-rose-500">{num(eligibility.projected.stop_loss)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Target</div>
+              <div className="mt-1 font-mono text-[12px] text-emerald-500">{num(eligibility.projected.target_price)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Size</div>
+              <div className="mt-1 font-mono text-[12px]">{num(eligibility.projected.quantity_oz, 4)} oz</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Risk</div>
+              <div className="mt-1 font-mono text-[12px]">{money(eligibility.projected.risk_usd)}</div>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-3 text-[10px] text-muted-foreground">
+          Event risk: {eligibility?.event_risk ? 'ACTIVE' : 'clear'} · quote age {num(eligibility?.spot?.age_seconds, 0)}s · live execution remains locked.
         </div>
       </div>
 
