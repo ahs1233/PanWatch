@@ -495,6 +495,68 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
             ) * 10_000.0
         consensus["primary_delta_bps"] = consensus_delta_bps
 
+    # Analytical reference is intentionally separate from paper/live fill data.
+    # If the primary indicative quote is stale, a fresh micro tape can still
+    # support regime/perception analysis, but never execution.
+    analysis_reference = None
+    if spot and not bool(spot.get("is_stale")) and spot.get("price") is not None:
+        analysis_reference = {
+            "price": spot.get("price"),
+            "source": spot.get("source"),
+            "observed_at": spot.get("observed_at"),
+            "age_seconds": spot.get("age_seconds"),
+            "is_stale": False,
+            "kind": "indicative_spot",
+            "execution_eligible": False,
+        }
+    elif (
+        micro
+        and micro.get("status") == "ready"
+        and not bool(micro.get("is_stale"))
+        and micro.get("price") is not None
+    ):
+        analysis_reference = {
+            "price": micro.get("price"),
+            "source": micro.get("source"),
+            "observed_at": micro.get("last_point_at") or micro.get("observed_at"),
+            "age_seconds": micro.get("age_seconds"),
+            "is_stale": False,
+            "kind": "micro_fallback",
+            "execution_eligible": False,
+        }
+    elif proxy_price is not None:
+        proxy_observed_at = latest.get("observed_at")
+        proxy_age_seconds = None
+        try:
+            proxy_dt = _event_timestamp(proxy_observed_at)
+            if proxy_dt is not None:
+                proxy_age_seconds = max(
+                    0.0,
+                    (datetime.now(timezone.utc) - proxy_dt).total_seconds(),
+                )
+        except Exception:
+            proxy_age_seconds = None
+        analysis_reference = {
+            "price": proxy_price,
+            "source": latest.get("source"),
+            "observed_at": proxy_observed_at,
+            "age_seconds": proxy_age_seconds,
+            "is_stale": bool(terminal_blocked),
+            "kind": "structural_proxy",
+            "execution_eligible": False,
+        }
+
+    if analysis_reference and consensus and consensus.get("reference_median"):
+        try:
+            ref = float(consensus["reference_median"])
+            price = float(analysis_reference["price"])
+            if ref > 0:
+                analysis_reference["consensus_delta_bps"] = (
+                    (price - ref) / ref
+                ) * 10_000.0
+        except (TypeError, ValueError):
+            pass
+
     warnings = list(assessment.warnings)
     if not all_biquote:
         warnings.append("biquote_ohlc_fallback_active")
@@ -527,6 +589,7 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "price": proxy_price,
         "indicative_spot": spot,
         "indicative_spot_error": spot_error,
+        "analysis_reference": analysis_reference,
         "spot_consensus": consensus,
         "spot_consensus_error": consensus_error,
         "micro": micro,
