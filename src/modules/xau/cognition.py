@@ -83,8 +83,10 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
     micro = technical.get("micro") or {}
     frames = technical.get("frames") or {}
 
-    spot_age = _number(spot.get("age_seconds"), 999.0)
-    micro_age = _number(micro.get("age_seconds"), 999.0)
+    spot_age_raw = spot.get("age_seconds")
+    micro_age_raw = micro.get("age_seconds")
+    spot_age = _number(spot_age_raw, 0.0) if spot_age_raw is not None else None
+    micro_age = _number(micro_age_raw, 0.0) if micro_age_raw is not None else None
     spread_bps = _number(spot.get("spread_bps"), 0.0)
     basis_bps = abs(_number(technical.get("spot_minus_proxy_bps"), 0.0))
     consensus = technical.get("spot_consensus") or {}
@@ -98,10 +100,10 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         score -= 0.40
         issues.append("spot_missing")
     else:
-        if spot.get("is_stale") or spot_age > 30:
+        if spot.get("is_stale") or (spot_age is not None and spot_age > 30):
             score -= 0.30
             issues.append("spot_stale")
-        elif spot_age > 15:
+        elif spot_age is not None and spot_age > 15:
             score -= 0.08
             issues.append("spot_aging")
         if spot.get("bid") is None or spot.get("ask") is None:
@@ -114,7 +116,7 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
     if not micro or micro.get("status") == "blocked" or micro.get("is_stale"):
         score -= 0.18
         issues.append("micro_unreliable")
-    elif micro_age > 120:
+    elif micro_age is not None and micro_age > 120:
         score -= 0.12
         issues.append("micro_aging")
 
@@ -147,8 +149,8 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         issues.append("cross_source_spot_basis_elevated")
 
     sensors = {
-        "spot_age_seconds": None if spot_age >= 999 else round(spot_age, 2),
-        "micro_age_seconds": None if micro_age >= 999 else round(micro_age, 2),
+        "spot_age_seconds": round(spot_age, 2) if spot_age is not None else None,
+        "micro_age_seconds": round(micro_age, 2) if micro_age is not None else None,
         "spread_bps": round(spread_bps, 4),
         "spot_proxy_basis_bps": round(basis_bps, 4),
         "spot_consensus_delta_bps": round(consensus_delta_bps, 4),
