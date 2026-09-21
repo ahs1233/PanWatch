@@ -285,20 +285,25 @@ export default function PaperTradingPage() {
     setLoading(true)
     setError('')
     try {
-      const [result, history, liveEligibility] = await Promise.all([
+      const [result, history] = await Promise.all([
         fetchAPI<PaperSummary>('/xau/paper/summary?trade_limit=50&signal_limit=50', {
           timeoutMs: 30000,
         }),
         fetchAPI<PaperWeeksResponse>('/xau/paper/weeks?limit=12', {
           timeoutMs: 30000,
         }),
-        fetchAPI<PaperEligibility>('/xau/paper/eligibility', {
-          timeoutMs: 30000,
-        }),
       ])
       setData(result)
       setWeeks(history.weeks || [])
-      setEligibility(liveEligibility)
+
+      try {
+        const liveEligibility = await fetchAPI<PaperEligibility>('/xau/paper/eligibility', {
+          timeoutMs: 30000,
+        })
+        setEligibility(liveEligibility)
+      } catch {
+        setEligibility(null)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Paper league unavailable')
     } finally {
@@ -470,8 +475,14 @@ export default function PaperTradingPage() {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-[14px] font-semibold">Live entry eligibility</h2>
-              <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${eligibility?.eligible ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}>
-                {eligibility?.eligible ? 'ELIGIBLE' : 'BLOCKED'}
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${
+                eligibility == null
+                  ? 'bg-accent/60 text-muted-foreground'
+                  : eligibility.eligible
+                    ? 'bg-emerald-500/10 text-emerald-500'
+                    : 'bg-amber-500/10 text-amber-500'
+              }`}>
+                {eligibility == null ? 'UNAVAILABLE' : eligibility.eligible ? 'ELIGIBLE' : 'BLOCKED'}
               </span>
               <span className="rounded-full bg-accent/50 px-2.5 py-1 text-[10px] text-muted-foreground">
                 PAPER ONLY
@@ -484,7 +495,7 @@ export default function PaperTradingPage() {
           <div className="text-left md:text-right">
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Gate reason</div>
             <div className={`mt-1 text-[13px] font-semibold ${eligibility?.eligible ? 'text-emerald-500' : 'text-amber-500'}`}>
-              {human(eligibility?.gate_reason)}
+              {eligibility == null ? 'Live check unavailable' : human(eligibility.gate_reason)}
             </div>
           </div>
         </div>
