@@ -73,6 +73,25 @@ def _number(value, default=None):
         return default
 
 
+_TRANSIENT_SIGNAL_REJECTIONS = frozenset({
+    "bid_ask_unavailable",
+    "indicative_spot_stale",
+    "spread_too_wide",
+})
+
+
+def _can_revalidate_signal(
+    existing_accepted: bool,
+    existing_reason: str,
+    accepted_now: bool,
+) -> bool:
+    return (
+        not existing_accepted
+        and accepted_now
+        and existing_reason in _TRANSIENT_SIGNAL_REJECTIONS
+    )
+
+
 def _paper_entry_price(side: str, spot: dict) -> float | None:
     """Paper entries require an actual indicative bid/ask side.
 
@@ -548,15 +567,10 @@ class XAUPaperTradingEngine:
             .first()
         )
         if existing:
-            transient_rejections = {
-                "bid_ask_unavailable",
-                "indicative_spot_stale",
-                "spread_too_wide",
-            }
-            if (
-                not existing.accepted
-                and accepted
-                and existing.rejection_reason in transient_rejections
+            if _can_revalidate_signal(
+                bool(existing.accepted),
+                str(existing.rejection_reason or ""),
+                accepted,
             ):
                 previous_reason = existing.rejection_reason
                 previous_observed_at = existing.observed_at
