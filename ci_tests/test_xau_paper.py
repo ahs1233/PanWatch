@@ -869,6 +869,7 @@ def test_reversal_confirmation_resets_on_interruption():
         "setup-1",
         _qualified_reversal_management(),
         streaks,
+        observation_id="obs-a",
         required=2,
     )
 
@@ -887,6 +888,7 @@ def test_reversal_confirmation_resets_on_interruption():
         "setup-1",
         _qualified_reversal_management(),
         streaks,
+        observation_id="obs-b",
         required=2,
     )
 
@@ -901,6 +903,7 @@ def test_reversal_confirmation_resets_when_fill_quote_disappears():
         "setup-1",
         _qualified_reversal_management(),
         streaks,
+        observation_id="obs-a",
         required=2,
     )
     missing = _confirm_reversal_exit(
@@ -947,3 +950,30 @@ def test_reversal_confirmation_does_not_double_count_same_market_observation():
     assert duplicate["reason"] == "opposite_thesis_waiting_new_observation"
     assert fresh["confirmation_streak"] == 2
     assert fresh["exit_requested"] is True
+
+
+
+def test_reversal_confirmation_never_advances_without_observation_id():
+    streaks = {}
+    first = _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        observation_id=None,
+        required=2,
+    )
+    second = _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        observation_id="",
+        required=2,
+    )
+
+    assert first["exit_requested"] is False
+    assert first["confirmation_streak"] == 0
+    assert first["confirmation_observation_missing"] is True
+    assert first["reason"] == "opposite_thesis_missing_observation"
+    assert second["exit_requested"] is False
+    assert second["confirmation_streak"] == 0
+    assert "setup-1" not in streaks
