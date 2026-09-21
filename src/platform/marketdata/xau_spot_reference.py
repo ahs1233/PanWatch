@@ -190,7 +190,12 @@ class XAUSSpotReference:
 
 
 class CompositeXAUIndicativeSpotProvider:
-    """Prefer a fresh bid/ask quote, then fail soft to fresh mid references."""
+    """Prefer a fresh bid/ask quote, then fail soft to fresh mid references.
+
+    fetch_with_diagnostics() records provider health so production can explain
+    why a lower-quality fallback was selected instead of silently hiding the
+    upstream failure.
+    """
 
     def __init__(self) -> None:
         self.providers = (
@@ -199,19 +204,47 @@ class CompositeXAUIndicativeSpotProvider:
             XAUSSpotReference(),
         )
 
-    def fetch(self, timeout_seconds: float = 10.0) -> XAUIndicativeSpot:
-        errors: list[str] = []
+    def fetch_with_diagnostics(
+        self,
+        timeout_seconds: float = 10.0,
+    ) -> tuple[XAUIndicativeSpot, list[dict[str, Any]]]:
+        diagnostics: list[dict[str, Any]] = []
         fallback: XAUIndicativeSpot | None = None
 
         for provider in self.providers:
+            provider_name = type(provider).__name__
             try:
                 quote = provider.fetch(timeout_seconds=timeout_seconds)
             except Exception as exc:  # noqa: BLE001 - fail over to next reference
-                errors.append(f"{type(provider).__name__}:{type(exc).__name__}")
+                diagnostics.append(
+                    {
+                        "provider": provider_name,
+                        "status": "error",
+                        "error_type": type(exc).__name__,
+                    }
+                )
                 continue
 
-            if not quote.is_stale and quote.bid is not None and quote.ask is not None:
-                return quote
+            age_seconds = max(
+                0.0,
+                (datetime.now(timezone.utc) - quote.observed_at).total_seconds(),
+            )
+            has_bid_ask = quote.bid is not None and quote.ask is not None
+            diagnostics.append(
+                {
+                    "provider": provider_name,
+                    "status": "ok",
+                    "source": quote.source,
+                    "is_stale": bool(quote.is_stale),
+                    "age_seconds": round(age_seconds, 3),
+                    "has_bid_ask": has_bid_ask,
+                    "spread_bps": quote.spread_bps,
+                }
+            )
+
+            if not quote.is_stale and has_bid_ask:
+                diagnostics[-1]["selected"] = True
+                return quote, diagnostics
 
             if fallback is None:
                 fallback = quote
@@ -219,5 +252,19 @@ class CompositeXAUIndicativeSpotProvider:
                 fallback = quote
 
         if fallback is not None:
-            return fallback
+            for row in diagnostics:
+                if row.get("source") == fallback.source and row.get("status") == "ok":
+                    row["selected"] = True
+                    break
+            return fallback, diagnostics
+
+        errors = [
+            f"{row.get('provider')}:{row.get('error_type')}"
+            for row in diagnostics
+            if row.get("status") == "error"
+        ]
         raise RuntimeError("all XAU spot references failed: " + ",".join(errors))
+
+    def fetch(self, timeout_seconds: float = 10.0) -> XAUIndicativeSpot:
+        quote, _ = self.fetch_with_diagnostics(timeout_seconds=timeout_seconds)
+        return quote
