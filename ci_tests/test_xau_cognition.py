@@ -183,3 +183,90 @@ def test_sensor_disagreement_reduces_data_quality():
 
     assert degraded["data_quality"]["score"] < clean["data_quality"]["score"]
     assert "spot_structure_disagreement" in degraded["data_quality"]["issues"]
+
+
+
+def test_regime_is_probabilistic_not_single_rule_label():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+    )
+    probabilities = state["regime"]["probabilities"]
+    assert len(probabilities) >= 6
+    assert abs(sum(probabilities.values()) - 1.0) < 0.01
+    assert state["regime"]["label"] in probabilities
+    assert 0.0 < state["regime"]["confidence"] < 1.0
+
+
+def test_state_vector_similarity_prefers_nearby_market_state():
+    technical = _technical()
+    macro = {"bias": -1, "confidence": 0.7, "event_risk": False}
+    current = build_market_state_vector(technical, macro)
+    same = dict(current)
+    far = {
+        **current,
+        "candidate": "long_setup",
+        "alignment": "bullish",
+        "regime": "range_rotation",
+        "directional_pressure": 1.0,
+        "return_10m_pct": 0.45,
+        "return_30m_pct": 0.80,
+        "macro_bias": 1.0,
+        "rsi_5m_norm": 0.8,
+    }
+
+    assert state_vector_similarity(current, same) > 0.99
+    assert state_vector_similarity(current, same) > state_vector_similarity(current, far)
+
+
+def test_market_state_contains_session_quality_and_microstructure_context():
+    vector = build_market_state_vector(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+    )
+    assert vector["candidate"] == "short_setup"
+    assert vector["session"] in {
+        "asia",
+        "london_open",
+        "london_ny_overlap",
+        "new_york",
+        "late_us",
+    }
+    assert "data_quality" in vector
+    assert "spread_bps" in vector
+    assert "spot_proxy_basis_bps" in vector
+
+
+def test_low_quality_data_forces_adversarial_veto():
+    technical = _technical()
+    technical["indicative_spot"]["is_stale"] = True
+    technical["indicative_spot"]["age_seconds"] = 120
+    technical["blocked"] = True
+
+    state = build_cognitive_state(
+        technical,
+        {"bias": -1, "confidence": 0.8, "event_risk": False},
+    )
+    assert state["regime"]["label"] == "data_uncertain"
+    assert state["adversarial"]["veto"] is True
+    assert state["meta_controller"]["paper_entry_allowed"] is False
+
+
+def test_empirical_history_changes_confidence_basis():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 30,
+            "similar_samples": 30,
+            "expectancy_r": 0.4,
+            "profit_factor": 1.6,
+            "posterior_win_probability": 0.68,
+            "calibration_sample_count": 30,
+            "brier_score": 0.19,
+            "expected_calibration_error": 0.08,
+        },
+    )
+    assert state["confidence"]["calibration_basis"] == "empirical_bayesian_history"
+    assert state["confidence"]["sample_count"] == 30
+    assert state["confidence"]["brier_score"] == 0.19
