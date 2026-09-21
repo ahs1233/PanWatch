@@ -279,6 +279,7 @@ def _performance_metrics(trades: list[XAUPaperTrade]) -> dict:
             "average_mae_usd": 0.0,
             "average_win_r": 0.0,
             "average_loss_r": 0.0,
+            "win_rate": 0.0,
         }
 
     r_values = [float(item.r_multiple or 0.0) for item in trades]
@@ -302,6 +303,7 @@ def _performance_metrics(trades: list[XAUPaperTrade]) -> dict:
         ),
         "average_win_r": round(sum(wins) / len(wins), 4) if wins else 0.0,
         "average_loss_r": round(sum(losses) / len(losses), 4) if losses else 0.0,
+        "win_rate": round(len(wins) / len(trades), 4),
     }
 
 
@@ -423,6 +425,25 @@ def _autopsy_counts(trades: list[XAUPaperTrade]) -> dict[str, int]:
         if label:
             counts[label] = counts.get(label, 0) + 1
     return counts
+
+
+def _trade_diagnostics(trades: list[XAUPaperTrade]) -> dict:
+    predictions: list[tuple[float, int]] = []
+    autopsied = 0
+    for trade in trades:
+        autopsy = (trade.meta or {}).get("autopsy") or {}
+        predicted = autopsy.get("predicted_confidence")
+        outcome = autopsy.get("calibration_outcome")
+        if predicted is not None and outcome is not None:
+            predictions.append((float(predicted), int(outcome)))
+            autopsied += 1
+
+    calibration = _calibration_metrics(predictions)
+    return {
+        **calibration,
+        "autopsied_trades": autopsied,
+        "autopsy_counts": _autopsy_counts(trades),
+    }
 
 
 def _serialize_signal(signal: XAUPaperSignal) -> dict:
