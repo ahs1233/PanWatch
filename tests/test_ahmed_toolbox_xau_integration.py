@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import runpy
 
 from pan_agent import ToolExposure, ToolRegistry
 
 from src.modules.assistant.xau_tools import register_xau_research_tools
-from src.modules.automation.tradingagents.xau_support import (
-    XAU_TRADINGAGENTS_ANALYSTS,
-    configure_xau_tradingagents,
-)
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.platform.external_tools.registry import register_ahmed_toolbox_tools
 from src.platform.marketdata.xau_models import XAUBar, XAUQuote, XAUTimeframe
@@ -159,6 +157,19 @@ def test_xau_macro_conflict_is_warning_not_hard_gate():
 
 
 def test_tradingagents_xau_config_disables_company_fundamentals():
+    module = runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "modules"
+            / "automation"
+            / "tradingagents"
+            / "xau_support.py"
+        )
+    )
+    configure_xau_tradingagents = module["configure_xau_tradingagents"]
+    xau_analysts = module["XAU_TRADINGAGENTS_ANALYSTS"]
+
     original = {
         "selected_analysts": ["market", "social", "news", "fundamentals"],
         "other": "preserved",
@@ -166,7 +177,7 @@ def test_tradingagents_xau_config_disables_company_fundamentals():
 
     result = configure_xau_tradingagents(original)
 
-    assert result["selected_analysts"] == XAU_TRADINGAGENTS_ANALYSTS
+    assert result["selected_analysts"] == xau_analysts
     assert "fundamentals" not in result["selected_analysts"]
     assert result["other"] == "preserved"
     assert original["selected_analysts"][-1] == "fundamentals"
