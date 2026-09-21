@@ -46,6 +46,7 @@ class XAUResearchScheduler:
                         "age": row.get("age_seconds"),
                         "bidask": row.get("has_bid_ask"),
                         "error": row.get("error_type"),
+                        "http": row.get("http_status"),
                         "selected": row.get("selected"),
                     }
                     for row in provider_health
