@@ -147,6 +147,55 @@ def test_live_micro_replaces_only_stale_gc_1m_gate(monkeypatch):
     assert result["micro"]["source"] == "test-micro"
 
 
+def test_decision_fusion_support_conflict_and_event_gate():
+    technical = {
+        "candidate": "long_setup",
+        "blocked": False,
+        "status": "ready_with_spot_micro",
+        "technical_mode": "spot_micro_plus_spot_5m_15m",
+        "execution_status": "LOCKED_NO_TRADABLE_SPOT_FEED",
+        "block_reasons": [],
+    }
+
+    support = service.build_decision_fusion(
+        technical,
+        {
+            "bias": 1,
+            "bias_label": "bullish",
+            "confidence": 0.8,
+            "event_risk": False,
+        },
+    )
+    assert support["state"] == "setup_macro_support"
+    assert support["research_ready"] is True
+    assert support["execution_allowed"] is False
+
+    conflict = service.build_decision_fusion(
+        technical,
+        {
+            "bias": -1,
+            "bias_label": "bearish",
+            "confidence": 0.9,
+            "event_risk": False,
+        },
+    )
+    assert conflict["state"] == "setup_macro_conflict"
+    assert conflict["macro_relation"] == "conflict"
+
+    event = service.build_decision_fusion(
+        technical,
+        {
+            "bias": 1,
+            "bias_label": "bullish",
+            "confidence": 0.9,
+            "event_risk": True,
+        },
+    )
+    assert event["state"] == "event_gate"
+    assert event["research_ready"] is False
+    assert "high_impact_macro_event" in event["reasons"]
+
+
 def test_macro_json_parser_accepts_plain_object():
     parsed = service._parse_json(
         '{"bias":1,"confidence":0.7,"event_risk":false,"summary":"x","drivers":[]}'
