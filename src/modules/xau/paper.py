@@ -779,6 +779,41 @@ def _shadow_metrics(signals: list[XAUPaperSignal]) -> dict:
     return out
 
 
+def _decorrelate_research_episodes(
+    episodes: list[tuple[float, float, str, datetime | None, datetime | None]],
+    *,
+    limit: int,
+) -> tuple[list[tuple[float, float, str, datetime | None, datetime | None]], int]:
+    """Keep the most similar non-overlapping research windows."""
+    ranked = sorted(episodes, key=lambda item: item[0], reverse=True)
+    chosen: list[tuple[float, float, str, datetime | None, datetime | None]] = []
+    intervals: list[tuple[datetime, datetime]] = []
+    overlap_discarded = 0
+
+    for item in ranked:
+        observed_at, outcome_at = item[3], item[4]
+        if (
+            isinstance(observed_at, datetime)
+            and isinstance(outcome_at, datetime)
+            and outcome_at > observed_at
+        ):
+            observed = _utc_naive(observed_at)
+            outcome = _utc_naive(outcome_at)
+            if any(
+                observed < selected_outcome and outcome > selected_observed
+                for selected_observed, selected_outcome in intervals
+            ):
+                overlap_discarded += 1
+                continue
+            intervals.append((observed, outcome))
+
+        chosen.append(item)
+        if len(chosen) >= max(1, int(limit)):
+            break
+
+    return chosen, overlap_discarded
+
+
 def _shadow_research_memory(
     signals: list[XAUPaperSignal],
     current_vector: dict,
@@ -797,7 +832,7 @@ def _shadow_research_memory(
         "cognitive_observe",
         "setup_macro_conflict",
     }
-    episodes: list[tuple[float, float, str]] = []
+    episodes: list[tuple[float, float, str, datetime | None, datetime | None]] = []
     for signal in signals:
         # Shadow learning is only for false-negative analysis of epistemic
         # decisions. Executed/accepted setups and operational gates such as
@@ -837,20 +872,38 @@ def _shadow_research_memory(
         if payload is None or horizon is None:
             continue
 
+        observed_at = getattr(signal, "observed_at", None)
+        try:
+            horizon_minutes = int(str(horizon).removesuffix("m"))
+        except (TypeError, ValueError):
+            horizon_minutes = 0
+        outcome_at = (
+            observed_at + timedelta(minutes=horizon_minutes)
+            if isinstance(observed_at, datetime) and horizon_minutes > 0
+            else None
+        )
         episodes.append(
             (
                 similarity,
                 float(payload.get("directional_return_bps")),
                 horizon,
+                observed_at,
+                outcome_at,
             )
         )
 
-    episodes.sort(key=lambda item: item[0], reverse=True)
-    episodes = episodes[: max(1, int(limit))]
+    raw_sample_count = len(episodes)
+    episodes, overlap_discarded = _decorrelate_research_episodes(
+        episodes,
+        limit=limit,
+    )
     if not episodes:
         return {
             "source": "shadow_research_only",
             "sample_count": 0,
+            "raw_sample_count": 0,
+            "overlap_discarded": 0,
+            "temporally_decorrelated": True,
             "positive_rate": None,
             "average_directional_return_bps": None,
             "similarity_weighted_return_bps": None,
@@ -863,16 +916,23 @@ def _shadow_research_memory(
         }
 
     total_weight = sum(item[0] for item in episodes) or 1.0
-    positive_rate = sum(1 for _, value, _ in episodes if value > 0) / len(episodes)
-    average_return = sum(value for _, value, _ in episodes) / len(episodes)
-    weighted_return = sum(sim * value for sim, value, _ in episodes) / total_weight
+    positive_rate = (
+        sum(1 for _, value, _, _, _ in episodes if value > 0) / len(episodes)
+    )
+    average_return = sum(value for _, value, _, _, _ in episodes) / len(episodes)
+    weighted_return = (
+        sum(sim * value for sim, value, _, _, _ in episodes) / total_weight
+    )
     horizon_mix: dict[str, int] = {}
-    for _, _, horizon in episodes:
+    for _, _, horizon, _, _ in episodes:
         horizon_mix[horizon] = horizon_mix.get(horizon, 0) + 1
 
     return {
         "source": "shadow_research_only",
         "sample_count": len(episodes),
+        "raw_sample_count": raw_sample_count,
+        "overlap_discarded": overlap_discarded,
+        "temporally_decorrelated": True,
         "positive_rate": round(positive_rate, 4),
         "average_directional_return_bps": round(average_return, 4),
         "similarity_weighted_return_bps": round(weighted_return, 4),
@@ -896,7 +956,7 @@ def _replay_research_memory(
     limit: int = 120,
 ) -> dict:
     """Research-only memory retrieved from no-lookahead replay episodes."""
-    scored: list[tuple[float, float]] = []
+    scored: list[tuple[float, float, str, datetime | None, datetime | None]] = []
     for episode in episodes:
         meta = getattr(episode, "meta", {}) or {}
         replay_payload = meta.get("replay_episode") or {}
@@ -918,14 +978,50 @@ def _replay_research_memory(
         similarity = state_vector_similarity(current_vector, saved_vector)
         if similarity < similarity_floor:
             continue
-        scored.append((similarity, float(directional_return)))
 
-    scored.sort(key=lambda item: item[0], reverse=True)
-    scored = scored[: max(1, int(limit))]
+        observed_at = (
+            getattr(episode, "observed_at", None)
+            or meta.get("observed_at")
+            or replay_payload.get("observed_at")
+        )
+        outcome_at = (
+            getattr(episode, "outcome_at", None)
+            or meta.get("outcome_at")
+            or replay_payload.get("outcome_at")
+        )
+        if isinstance(observed_at, str):
+            try:
+                observed_at = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+            except ValueError:
+                observed_at = None
+        if isinstance(outcome_at, str):
+            try:
+                outcome_at = datetime.fromisoformat(outcome_at.replace("Z", "+00:00"))
+            except ValueError:
+                outcome_at = None
+
+        scored.append(
+            (
+                similarity,
+                float(directional_return),
+                str(getattr(episode, "horizon_minutes", "") or ""),
+                observed_at,
+                outcome_at,
+            )
+        )
+
+    raw_sample_count = len(scored)
+    scored, overlap_discarded = _decorrelate_research_episodes(
+        scored,
+        limit=limit,
+    )
     if not scored:
         return {
             "source": "walk_forward_replay",
             "sample_count": 0,
+            "raw_sample_count": 0,
+            "overlap_discarded": 0,
+            "temporally_decorrelated": True,
             "positive_rate": None,
             "average_directional_return_bps": None,
             "similarity_weighted_return_bps": None,
@@ -939,16 +1035,20 @@ def _replay_research_memory(
     return {
         "source": "walk_forward_replay",
         "sample_count": len(scored),
+        "raw_sample_count": raw_sample_count,
+        "overlap_discarded": overlap_discarded,
+        "temporally_decorrelated": True,
         "positive_rate": round(
-            sum(1 for _, value in scored if value > 0) / len(scored),
+            sum(1 for _, value, _, _, _ in scored if value > 0) / len(scored),
             4,
         ),
         "average_directional_return_bps": round(
-            sum(value for _, value in scored) / len(scored),
+            sum(value for _, value, _, _, _ in scored) / len(scored),
             4,
         ),
         "similarity_weighted_return_bps": round(
-            sum(similarity * value for similarity, value in scored) / total_weight,
+            sum(similarity * value for similarity, value, _, _, _ in scored)
+            / total_weight,
             4,
         ),
         "average_similarity": round(
