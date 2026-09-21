@@ -475,6 +475,11 @@ def build_decision_fusion(
         memory=memory,
         min_confidence=threshold,
     )
+    cognition_active = bool(
+        settings.xau_cognition_enabled
+        and technical.get("frames")
+        and technical.get("indicative_spot")
+    )
     meta_decision = str(
         (cognition.get("meta_controller") or {}).get("decision") or "observe"
     )
@@ -500,7 +505,7 @@ def build_decision_fusion(
         reasons.append("macro_bias_is_neutral_or_mixed")
 
     state = base_state
-    if base_state in {"setup_macro_support", "setup_macro_neutral"}:
+    if cognition_active and base_state in {"setup_macro_support", "setup_macro_neutral"}:
         if meta_decision == "veto":
             state = "cognitive_veto"
             reasons.append("adversarial_or_quality_veto")
@@ -538,13 +543,16 @@ def build_decision_fusion(
         "event_source_url": macro.get("event_source_url"),
         "research_ready": research_ready,
         "cognition": cognition,
+        "cognition_active": cognition_active,
         "regime": (cognition.get("regime") or {}).get("label"),
         "cognitive_confidence": (
             (cognition.get("confidence") or {}).get("calibrated_confidence")
         ),
         "meta_decision": meta_decision,
-        "paper_entry_allowed": bool(
-            (cognition.get("meta_controller") or {}).get("paper_entry_allowed")
+        "paper_entry_allowed": (
+            bool((cognition.get("meta_controller") or {}).get("paper_entry_allowed"))
+            if cognition_active
+            else base_state in {"setup_macro_support", "setup_macro_neutral"}
         )
         and base_state in {"setup_macro_support", "setup_macro_neutral"},
         "execution_allowed": False,
