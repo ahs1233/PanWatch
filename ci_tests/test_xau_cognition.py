@@ -454,6 +454,9 @@ def test_shadow_memory_needs_enough_samples_before_affecting_confidence():
                 "average_similarity": 0.9,
                 "decision_filtered": True,
                 "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
+                "temporally_decorrelated": True,
             },
         },
     )
@@ -540,12 +543,19 @@ def test_combined_research_priors_are_clamped():
                 "positive_rate": 1.0,
                 "similarity_weighted_return_bps": 100.0,
                 "average_similarity": 1.0,
+                "decision_filtered": True,
+                "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
             },
             "replay_memory": {
                 "sample_count": 100,
                 "positive_rate": 1.0,
                 "similarity_weighted_return_bps": 100.0,
                 "average_similarity": 1.0,
+                "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
             },
         },
     )
@@ -594,3 +604,72 @@ def test_unfiltered_shadow_memory_never_affects_confidence():
         },
     )
     assert state["memory"]["shadow_confidence_adjustment"] == 0.0
+
+
+
+def test_unprotected_research_memory_never_affects_confidence():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 0,
+            "similar_samples": 0,
+            "shadow_memory": {
+                "sample_count": 100,
+                "positive_rate": 1.0,
+                "average_similarity": 1.0,
+                "decision_filtered": True,
+                "research_only": True,
+                "lookahead_protected": False,
+                "temporally_decorrelated": True,
+            },
+            "replay_memory": {
+                "sample_count": 100,
+                "positive_rate": 1.0,
+                "similarity_weighted_return_bps": 100.0,
+                "average_similarity": 1.0,
+                "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": False,
+            },
+        },
+    )
+    memory = state["memory"]
+    assert memory["shadow_confidence_adjustment"] == 0.0
+    assert memory["replay_confidence_adjustment"] == 0.0
+    assert memory["research_confidence_adjustment"] == 0.0
+
+
+def test_conflicting_research_priors_are_damped():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 0,
+            "similar_samples": 0,
+            "shadow_memory": {
+                "sample_count": 40,
+                "positive_rate": 1.0,
+                "average_similarity": 1.0,
+                "decision_filtered": True,
+                "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
+            },
+            "replay_memory": {
+                "sample_count": 80,
+                "positive_rate": 0.0,
+                "similarity_weighted_return_bps": -50.0,
+                "average_similarity": 1.0,
+                "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
+            },
+        },
+    )
+    memory = state["memory"]
+    assert memory["research_prior_conflict"] is True
+    assert abs(memory["research_confidence_adjustment"]) < (
+        abs(memory["shadow_confidence_adjustment"])
+        + abs(memory["replay_confidence_adjustment"])
+    )
