@@ -11,6 +11,7 @@ from src.modules.xau.paper import (
     _week_key,
 )
 from src.platform.runtime.config import Settings
+from src.modules.xau.paper_store import _sqlalchemy_url
 
 
 def test_long_and_short_use_conservative_bid_ask_fills():
@@ -93,3 +94,9 @@ def test_short_falls_back_to_atr_when_swing_is_invalid():
     assert target == 4330.0
     assert risk_usd > 0
     assert quantity * 4350.0 <= 10_000.0 + 1.0
+
+
+
+def test_paper_postgres_url_uses_psycopg_driver():
+    value = _sqlalchemy_url("postgresql://user:pass@example.test/panwatch")
+    assert value == "postgresql+psycopg://user:pass@example.test/panwatch"
