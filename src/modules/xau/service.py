@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
+from src.modules.xau.cognition import build_cognitive_state
 from src.platform.ai.ai_client import AIClient
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.marketdata.xau_biquote import (
@@ -33,11 +34,11 @@ logger = logging.getLogger(__name__)
 
 MACRO_EVENT_POLICY_VERSION = "calendar-v1+breaking-v1"
 
-_BARS_TTL = 45.0
-_SPOT_TTL = 55.0
-_MICRO_TTL = 55.0
-_SERIES_TTL = 55.0
-_MACRO_TTL = 300.0
+_BARS_TTL = 25.0
+_SPOT_TTL = 8.0
+_MICRO_TTL = 15.0
+_SERIES_TTL = 15.0
+_MACRO_TTL = 180.0
 _bars_cache = None
 _spot_cache = None
 _micro_cache = None
@@ -438,8 +439,11 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
 def build_decision_fusion(
     technical: dict[str, Any],
     macro: dict[str, Any],
+    *,
+    memory: dict[str, Any] | None = None,
+    min_confidence: float | None = None,
 ) -> dict[str, Any]:
-    """Combine technical and macro states using explicit gates, not weights."""
+    """Fuse technical, macro and cognitive layers into one inspectable state."""
 
     candidate = str(technical.get("candidate") or "none")
     technical_blocked = bool(technical.get("blocked"))
@@ -459,27 +463,55 @@ def build_decision_fusion(
     else:
         macro_relation = "conflict"
 
+    settings = Settings()
+    threshold = (
+        float(min_confidence)
+        if min_confidence is not None
+        else float(settings.xau_cognition_min_confidence)
+    )
+    cognition = build_cognitive_state(
+        technical,
+        macro,
+        memory=memory,
+        min_confidence=threshold,
+    )
+    meta_decision = str(
+        (cognition.get("meta_controller") or {}).get("decision") or "observe"
+    )
+
     reasons: list[str] = []
     if technical_blocked:
-        state = "data_gate"
+        base_state = "data_gate"
         reasons.extend(str(x) for x in technical.get("block_reasons") or [])
     elif event_risk:
-        state = "event_gate"
+        base_state = "event_gate"
         reasons.append("high_impact_macro_event")
     elif candidate == "none":
-        state = "no_setup"
+        base_state = "no_setup"
         reasons.append("no_aligned_technical_setup")
     elif macro_relation == "conflict":
-        state = "setup_macro_conflict"
+        base_state = "setup_macro_conflict"
         reasons.append("macro_bias_conflicts_with_technical_setup")
     elif macro_relation == "support":
-        state = "setup_macro_support"
+        base_state = "setup_macro_support"
         reasons.append("macro_bias_supports_technical_setup")
     else:
-        state = "setup_macro_neutral"
+        base_state = "setup_macro_neutral"
         reasons.append("macro_bias_is_neutral_or_mixed")
 
-    research_ready = state in {
+    state = base_state
+    if base_state in {"setup_macro_support", "setup_macro_neutral"}:
+        if meta_decision == "veto":
+            state = "cognitive_veto"
+            reasons.append("adversarial_or_quality_veto")
+        elif meta_decision == "wait":
+            state = "cognitive_wait"
+            reasons.append("execution_timing_wait")
+        elif meta_decision != "eligible":
+            state = "cognitive_observe"
+            reasons.append("meta_controller_not_eligible")
+
+    research_ready = base_state in {
         "setup_macro_support",
         "setup_macro_neutral",
         "setup_macro_conflict",
@@ -487,6 +519,7 @@ def build_decision_fusion(
 
     return {
         "state": state,
+        "base_state": base_state,
         "technical_candidate": candidate,
         "technical_status": technical.get("status"),
         "technical_mode": technical.get("technical_mode"),
@@ -504,6 +537,16 @@ def build_decision_fusion(
         "event_policy_version": macro.get("event_policy_version"),
         "event_source_url": macro.get("event_source_url"),
         "research_ready": research_ready,
+        "cognition": cognition,
+        "regime": (cognition.get("regime") or {}).get("label"),
+        "cognitive_confidence": (
+            (cognition.get("confidence") or {}).get("calibrated_confidence")
+        ),
+        "meta_decision": meta_decision,
+        "paper_entry_allowed": bool(
+            (cognition.get("meta_controller") or {}).get("paper_entry_allowed")
+        )
+        and base_state in {"setup_macro_support", "setup_macro_neutral"},
         "execution_allowed": False,
         "execution_status": technical.get(
             "execution_status",
@@ -511,7 +554,6 @@ def build_decision_fusion(
         ),
         "reasons": list(dict.fromkeys(reasons)),
     }
-
 
 def _tool_text(result: dict[str, Any]) -> str:
     parts = []
