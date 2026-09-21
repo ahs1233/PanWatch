@@ -21,6 +21,27 @@ interface XAUFrame {
   observed_at: string
 }
 
+interface XAUMicroContext {
+  status: string
+  direction: Direction
+  price: number
+  ema_fast: number
+  ema_slow: number
+  return_10m_pct: number | null
+  return_30m_pct: number | null
+  recent_high: number | null
+  recent_low: number | null
+  point_count: number
+  observed_at: string
+  last_point_at: string
+  age_seconds: number | null
+  coverage_seconds: number | null
+  source: string
+  is_stale: boolean
+  indicative: boolean
+  execution_eligible: boolean
+}
+
 interface IndicativeSpot {
   price: number
   bid: number | null
@@ -46,6 +67,9 @@ interface XAUSnapshot {
   price: number | null
   indicative_spot: IndicativeSpot | null
   indicative_spot_error?: string | null
+  micro: XAUMicroContext | null
+  micro_error?: string | null
+  technical_mode: string
   spot_minus_proxy: number | null
   spot_minus_proxy_bps: number | null
   change_pct_1m: number | null
@@ -54,6 +78,7 @@ interface XAUSnapshot {
   candidate: string
   blocked: boolean
   block_reasons: string[]
+  raw_proxy_block_reasons?: string[]
   warnings: string[]
   alignment: string
   atr_reference: number | null
@@ -225,7 +250,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
         <div className="card p-4">
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Indicative XAU/USD spot</div>
           <div className="mt-2 font-mono text-[24px] font-bold text-foreground">
@@ -238,6 +263,21 @@ export default function DashboardPage() {
             {snapshot?.indicative_spot
               ? `${snapshot.indicative_spot.source} · ${snapshot.indicative_spot.is_stale ? 'STALE' : 'FRESH'} · spread ${fmt(snapshot.indicative_spot.spread_bps, 2)} bps`
               : 'Spot reference unavailable'}
+          </div>
+        </div>
+
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Live spot micro</div>
+          <div className={`mt-2 text-[18px] font-bold uppercase ${directionClass(snapshot?.micro?.direction)}`}>
+            {snapshot?.micro?.direction || '--'}
+          </div>
+          <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+            10m {fmt(snapshot?.micro?.return_10m_pct, 3)}% · 30m {fmt(snapshot?.micro?.return_30m_pct, 3)}%
+          </div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            {snapshot?.micro
+              ? `${snapshot.micro.source} · ${snapshot.micro.point_count} pts · ${snapshot.micro.is_stale ? 'STALE' : 'FRESH'}`
+              : 'Micro-series unavailable'}
           </div>
         </div>
 
@@ -256,7 +296,11 @@ export default function DashboardPage() {
           <div className={`mt-2 text-[18px] font-bold uppercase ${directionClass(snapshot?.alignment)}`}>
             {snapshot?.alignment || '--'}
           </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">1m · 5m · 15m</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            {snapshot?.technical_mode === 'spot_micro_plus_gc_5m_15m'
+              ? 'Spot micro · GC 5m · GC 15m'
+              : 'GC 1m · GC 5m · GC 15m'}
+          </div>
         </div>
 
         <div className="card p-4">
