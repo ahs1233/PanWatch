@@ -415,3 +415,25 @@ def test_stale_fill_quote_does_not_poison_fresh_micro_analysis():
     assert fill["ready_for_paper_fill"] is False
     assert "fill_quote_stale" in fill["issues"]
     assert "fill_bid_ask_missing" in fill["issues"]
+
+
+
+def test_cognition_uses_explicit_rollover_fill_state_without_double_penalty():
+    technical = _technical()
+    technical["indicative_spot"].update({
+        "bid": None,
+        "ask": None,
+        "fill_state": "market_closed_or_rollover",
+        "fill_source": "biquote.io:MT5",
+        "fill_age_seconds": 900.0,
+        "market_state": "closed",
+    })
+    state = build_cognitive_state(
+        technical,
+        {"bias": -1, "confidence": 0.6, "event_risk": False},
+    )
+    fill = state["data_quality"]["sensors"]["fill_readiness"]
+    assert fill["score"] == 0.0
+    assert fill["market"]["state"] == "closed"
+    assert fill["issues"] == ["fill_market_closed"]
+    assert state["data_quality"]["score"] > 0.70
