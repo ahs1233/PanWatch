@@ -31,6 +31,7 @@ from src.modules.market.price_alert_scheduler import PriceAlertScheduler
 from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
 from src.modules.xau.scheduler import XAUResearchScheduler
+from src.modules.xau.paper import XAUPaperTradingScheduler
 from src.modules.automation.agent_runs import record_agent_run
 from src.platform.observability.log_context import install_log_record_factory, log_context
 from src.modules.automation.agent_catalog import (
@@ -55,6 +56,7 @@ price_alert_scheduler: PriceAlertScheduler | None = None
 paper_trading_scheduler: PaperTradingScheduler | None = None
 context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
 xau_research_scheduler: XAUResearchScheduler | None = None
+xau_paper_scheduler: XAUPaperTradingScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -1641,7 +1643,7 @@ async def lifespan(app):
 
     seed_agents()
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler
 
     if xau_mode:
         # Keep the process focused on XAU/USD. The original stock catalogue,
@@ -1653,6 +1655,8 @@ async def lifespan(app):
             interval_seconds=60,
         )
         xau_research_scheduler.start()
+        xau_paper_scheduler = XAUPaperTradingScheduler(settings)
+        xau_paper_scheduler.start()
         logger.info("XAU profile active: legacy stock background jobs are disabled")
     else:
         try:
@@ -1742,6 +1746,9 @@ async def lifespan(app):
     if xau_research_scheduler:
         xau_research_scheduler.shutdown()
         logger.info("XAU research scheduler stopped")
+    if xau_paper_scheduler:
+        xau_paper_scheduler.shutdown()
+        logger.info("XAU paper scheduler stopped")
 
 
 # 模块级 app 实例，供 uvicorn reload 使用
