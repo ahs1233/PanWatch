@@ -13,6 +13,10 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.exc import IntegrityError
+from src.modules.xau.cognition import (
+    build_market_state_vector,
+    state_vector_similarity,
+)
 from src.modules.xau.service import (
     build_decision_fusion,
     get_macro_context,
@@ -29,7 +33,7 @@ from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
 
-PAPER_ENGINE_VERSION = "0.6.0"
+PAPER_ENGINE_VERSION = "0.7.0"
 
 
 def _utc_naive(now: datetime | None = None) -> datetime:
@@ -299,6 +303,126 @@ def _performance_metrics(trades: list[XAUPaperTrade]) -> dict:
         "average_win_r": round(sum(wins) / len(wins), 4) if wins else 0.0,
         "average_loss_r": round(sum(losses) / len(losses), 4) if losses else 0.0,
     }
+
+
+
+def _calibration_metrics(predictions: list[tuple[float, int]]) -> dict:
+    """Brier score + 5-bin ECE for historical confidence/outcome pairs."""
+    if not predictions:
+        return {
+            "calibration_sample_count": 0,
+            "brier_score": None,
+            "expected_calibration_error": None,
+        }
+
+    clean = [
+        (max(0.0, min(1.0, float(probability))), 1 if int(outcome) > 0 else 0)
+        for probability, outcome in predictions
+    ]
+    brier = sum((probability - outcome) ** 2 for probability, outcome in clean) / len(clean)
+
+    bins: list[list[tuple[float, int]]] = [[] for _ in range(5)]
+    for probability, outcome in clean:
+        index = min(4, int(probability * 5))
+        bins[index].append((probability, outcome))
+
+    ece = 0.0
+    for bucket in bins:
+        if not bucket:
+            continue
+        avg_probability = sum(item[0] for item in bucket) / len(bucket)
+        observed_rate = sum(item[1] for item in bucket) / len(bucket)
+        ece += (len(bucket) / len(clean)) * abs(avg_probability - observed_rate)
+
+    return {
+        "calibration_sample_count": len(clean),
+        "brier_score": round(brier, 4),
+        "expected_calibration_error": round(ece, 4),
+    }
+
+
+def _trade_autopsy(
+    position,
+    signal_meta: dict,
+    *,
+    exit_reason: str,
+    pnl: float,
+    r_multiple: float,
+) -> dict:
+    """Produce diagnostic attribution. Labels are hypotheses, not causal proof."""
+    risk = max(0.0, float(getattr(position, "risk_usd", 0.0) or 0.0))
+    mfe = float(getattr(position, "mfe_usd", 0.0) or 0.0)
+    mae = float(getattr(position, "mae_usd", 0.0) or 0.0)
+    mfe_r = mfe / risk if risk > 0 else 0.0
+    mae_r = mae / risk if risk > 0 else 0.0
+
+    cognition = signal_meta.get("cognition") or {}
+    confidence = cognition.get("confidence") or {}
+    regime = cognition.get("regime") or {}
+    hypotheses = cognition.get("hypotheses") or []
+    adversarial = cognition.get("adversarial") or {}
+    predicted_confidence = _number(
+        signal_meta.get("cognitive_confidence"),
+        _number(confidence.get("calibrated_confidence"), 0.5),
+    )
+    primary_hypothesis = (
+        str((hypotheses[0] or {}).get("name") or "unknown")
+        if hypotheses
+        else "unknown"
+    )
+
+    outcome = "win" if r_multiple > 0.05 else "loss" if r_multiple < -0.05 else "flat"
+    attributions: list[str] = []
+
+    if outcome == "win":
+        attributions.append("thesis_confirmed")
+        if mfe_r > 0 and r_multiple / mfe_r < 0.45:
+            attributions.append("low_profit_capture")
+    else:
+        if exit_reason == "time_stop":
+            attributions.append("no_follow_through")
+        elif exit_reason == "stop_loss" and mfe_r >= 0.50:
+            attributions.append("entry_timing_or_stop_too_tight")
+        elif exit_reason == "stop_loss":
+            attributions.append("directional_thesis_failed")
+        else:
+            attributions.append("setup_failed")
+
+        if regime.get("label") in {"transition", "range_rotation"} and primary_hypothesis == "trend_continuation":
+            attributions.append("regime_misclassification_candidate")
+        if adversarial.get("counter_evidence"):
+            attributions.append("counter_evidence_present_at_entry")
+        if predicted_confidence >= 0.72:
+            attributions.append("high_confidence_error")
+
+    calibration_outcome = 1 if outcome == "win" else 0
+    prediction_error = abs(predicted_confidence - calibration_outcome)
+    return {
+        "diagnostic_only": True,
+        "outcome": outcome,
+        "primary_attribution": attributions[0] if attributions else "unclassified",
+        "attributions": list(dict.fromkeys(attributions)),
+        "predicted_confidence": round(max(0.0, min(1.0, predicted_confidence)), 4),
+        "calibration_outcome": calibration_outcome,
+        "prediction_error": round(prediction_error, 4),
+        "regime": regime.get("label"),
+        "primary_hypothesis": primary_hypothesis,
+        "mfe_r": round(mfe_r, 4),
+        "mae_r": round(mae_r, 4),
+        "realized_r": round(r_multiple, 4),
+        "pnl": round(pnl, 4),
+        "exit_reason": exit_reason,
+    }
+
+
+def _autopsy_counts(trades: list[XAUPaperTrade]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for trade in trades:
+        autopsy = (trade.meta or {}).get("autopsy") or {}
+        label = str(autopsy.get("primary_attribution") or "").strip()
+        if label:
+            counts[label] = counts.get(label, 0) + 1
+    return counts
 
 
 def _serialize_signal(signal: XAUPaperSignal) -> dict:
