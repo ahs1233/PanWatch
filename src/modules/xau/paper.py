@@ -790,8 +790,26 @@ def _shadow_research_memory(
     Shadow outcomes are never treated as executed trades, never feed Brier/PnL
     calibration, and only provide a small contextual prior in cognition.
     """
+    eligible_rejections = {
+        "cognitive_veto",
+        "cognitive_wait",
+        "cognitive_observe",
+        "setup_macro_conflict",
+    }
     episodes: list[tuple[float, float, str]] = []
     for signal in signals:
+        # Shadow learning is only for false-negative analysis of epistemic
+        # decisions. Executed/accepted setups and operational gates such as
+        # spread, market closure, position_already_open, data/event gates must
+        # never train confidence.
+        if bool(getattr(signal, "accepted", False)):
+            continue
+        rejection_reason = str(
+            getattr(signal, "rejection_reason", "") or ""
+        )
+        if rejection_reason not in eligible_rejections:
+            continue
+
         meta = signal.meta or {}
         shadow = meta.get("shadow") or {}
         if not shadow:
@@ -838,6 +856,8 @@ def _shadow_research_memory(
             "average_similarity": None,
             "nearest_similarity": None,
             "horizon_mix": {},
+            "decision_filtered": True,
+            "eligible_rejection_reasons": sorted(eligible_rejections),
             "research_only": True,
         }
 
@@ -861,6 +881,8 @@ def _shadow_research_memory(
         ),
         "nearest_similarity": round(episodes[0][0], 4),
         "horizon_mix": horizon_mix,
+        "decision_filtered": True,
+        "eligible_rejection_reasons": sorted(eligible_rejections),
         "research_only": True,
     }
 
