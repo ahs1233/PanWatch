@@ -22,7 +22,11 @@ from src.modules.xau.service import (
     get_macro_context,
     get_xau_snapshot,
 )
-from src.modules.xau.paper_store import open_xau_paper_session, paper_store_is_external
+from src.modules.xau.paper_store import (
+    open_xau_paper_session,
+    open_xau_replay_session,
+    paper_store_is_external,
+)
 from src.platform.persistence.models import (
     XAUPaperAccount,
     XAUPaperPosition,
@@ -1058,13 +1062,23 @@ class XAUPaperTradingEngine:
             current_vector,
         )
 
-        replay_episodes = (
-            db.query(XAUReplayEpisode)
-            .filter(XAUReplayEpisode.candidate == candidate)
-            .order_by(XAUReplayEpisode.observed_at.desc(), XAUReplayEpisode.id.desc())
-            .limit(1000)
-            .all()
-        )
+        replay_db = open_xau_replay_session()
+        try:
+            replay_episodes = (
+                replay_db.query(XAUReplayEpisode)
+                .filter(XAUReplayEpisode.candidate == candidate)
+                .order_by(
+                    XAUReplayEpisode.observed_at.desc(),
+                    XAUReplayEpisode.id.desc(),
+                )
+                .limit(1000)
+                .all()
+            )
+        except Exception:
+            replay_episodes = []
+        finally:
+            replay_db.close()
+
         replay_memory = _replay_research_memory(
             replay_episodes,
             current_vector,
