@@ -72,3 +72,8 @@ def init_xau_paper_store(settings: Settings | None = None) -> bool:
 
 def paper_store_is_external() -> bool:
     return _external_engine is not None
+
+
+
+def open_xau_paper_session():
+    return XAUPaperSessionLocal()
