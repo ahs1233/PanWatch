@@ -391,6 +391,11 @@ class AssistantService:
                 ),
             )
             descriptors.extend(external_descriptors)
+            logger.info(
+                "Ahmed ToolBox discovery ready: external_tools=%s tool_research=%s",
+                len(external_descriptors),
+                bool(self._settings.tool_research_enabled),
+            )
         except Exception as exc:  # noqa: BLE001 - external research must fail soft
             logger.warning(
                 "Ahmed ToolBox discovery unavailable; using local tools only: %s",
