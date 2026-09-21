@@ -33,7 +33,7 @@ from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
 
-PAPER_ENGINE_VERSION = "0.7.0"
+PAPER_ENGINE_VERSION = "0.8.0"
 
 
 def _utc_naive(now: datetime | None = None) -> datetime:
@@ -199,6 +199,117 @@ def _pnl(side: str, entry: float, mark: float, quantity: float) -> float:
     if side == "long":
         return (mark - entry) * quantity
     return (entry - mark) * quantity
+
+
+def _position_guardian(
+    position,
+    fusion: dict,
+    exit_quote: float,
+) -> dict:
+    """Paper-only position management using fresh executable-side quotes.
+
+    The guardian never manufactures fills. It can tighten a protective stop
+    only when current bid/ask implies sufficient open profit, and it can request
+    an early exit only when the current decision stack independently qualifies
+    an opposite setup.
+    """
+    side = str(getattr(position, "side", "") or "")
+    entry = _number(getattr(position, "entry_price", None))
+    quantity = _number(getattr(position, "quantity_oz", None))
+    risk_usd = _number(getattr(position, "risk_usd", None))
+    current_stop = _number(getattr(position, "stop_loss", None))
+    target = _number(getattr(position, "target_price", None))
+    quote = _number(exit_quote)
+
+    result = {
+        "action": "hold",
+        "reason": "no_management_trigger",
+        "current_r": None,
+        "new_stop_loss": None,
+        "exit_requested": False,
+        "exit_reason": None,
+    }
+    if (
+        side not in {"long", "short"}
+        or entry is None
+        or quantity is None
+        or quantity <= 0
+        or risk_usd is None
+        or risk_usd <= 0
+        or current_stop is None
+        or quote is None
+    ):
+        result["reason"] = "insufficient_position_or_quote_data"
+        return result
+
+    pnl = _pnl(side, entry, quote, quantity)
+    current_r = pnl / risk_usd
+    result["current_r"] = round(current_r, 4)
+
+    initial_risk_distance = risk_usd / quantity
+    protective_stop = current_stop
+    stop_reason = None
+
+    if current_r >= 1.5:
+        candidate_stop = (
+            entry + 0.5 * initial_risk_distance
+            if side == "long"
+            else entry - 0.5 * initial_risk_distance
+        )
+        if side == "long":
+            improved = max(current_stop, candidate_stop)
+            if target is None or improved < target:
+                protective_stop = improved
+        else:
+            improved = min(current_stop, candidate_stop)
+            if target is None or improved > target:
+                protective_stop = improved
+        if protective_stop != current_stop:
+            stop_reason = "lock_half_r_after_1_5r"
+    elif current_r >= 1.0:
+        candidate_stop = entry
+        if side == "long":
+            protective_stop = max(current_stop, candidate_stop)
+        else:
+            protective_stop = min(current_stop, candidate_stop)
+        if protective_stop != current_stop:
+            stop_reason = "breakeven_after_1r"
+
+    candidate = str(fusion.get("technical_candidate") or "none")
+    opposite_candidate = "short_setup" if side == "long" else "long_setup"
+    meta_decision = str(fusion.get("meta_decision") or "observe")
+    confidence = _number(fusion.get("cognitive_confidence"), 0.0) or 0.0
+    opposite_qualified = bool(
+        candidate == opposite_candidate
+        and fusion.get("paper_entry_allowed")
+        and meta_decision == "eligible"
+        and confidence >= 0.62
+    )
+
+    if opposite_qualified:
+        result.update(
+            {
+                "action": "exit",
+                "reason": "qualified_opposite_thesis",
+                "exit_requested": True,
+                "exit_reason": "thesis_reversal",
+                "opposite_candidate": candidate,
+                "confidence": round(confidence, 4),
+            }
+        )
+        if protective_stop != current_stop:
+            result["new_stop_loss"] = round(protective_stop, 4)
+        return result
+
+    if protective_stop != current_stop:
+        result.update(
+            {
+                "action": "tighten_stop",
+                "reason": stop_reason,
+                "new_stop_loss": round(protective_stop, 4),
+            }
+        )
+    return result
 
 
 def _paper_exit_fill_price(
@@ -414,6 +525,8 @@ def _trade_autopsy(
             attributions.append("entry_timing_or_stop_too_tight")
         elif exit_reason == "stop_loss":
             attributions.append("directional_thesis_failed")
+        elif exit_reason == "thesis_reversal":
+            attributions.append("thesis_invalidated_before_hard_stop")
         else:
             attributions.append("setup_failed")
 
@@ -1444,6 +1557,7 @@ class XAUPaperTradingEngine:
                     analysis_reference,
                 )
 
+            position_management = None
             if position and spot and not bool(spot.get("is_stale")):
                 exit_quote = _paper_exit_quote(position.side, spot)
                 if exit_quote is not None:
@@ -1458,6 +1572,30 @@ class XAUPaperTradingEngine:
                             exit_reason = "stop_loss"
                         elif exit_quote <= position.target_price:
                             exit_reason = "target_price"
+
+                    if exit_reason is None:
+                        position_management = _position_guardian(
+                            position,
+                            fusion,
+                            exit_quote,
+                        )
+                        new_stop = _number(position_management.get("new_stop_loss"))
+                        if new_stop is not None:
+                            old_stop = float(position.stop_loss)
+                            position.stop_loss = new_stop
+                            logger.info(
+                                "[XAU paper] guardian stop side=%s old=%.4f new=%.4f reason=%s current_r=%s",
+                                position.side,
+                                old_stop,
+                                new_stop,
+                                position_management.get("reason"),
+                                position_management.get("current_r"),
+                            )
+                        if position_management.get("exit_requested"):
+                            exit_reason = str(
+                                position_management.get("exit_reason")
+                                or "thesis_reversal"
+                            )
 
                     if exit_reason is None and position.opened_at:
                         held_minutes = _position_age_minutes(position.opened_at, now_utc)
@@ -1482,6 +1620,7 @@ class XAUPaperTradingEngine:
                             {
                                 "spot_source": spot.get("source"),
                                 "fusion_state": fusion.get("state"),
+                                "position_management": position_management,
                             },
                         )
                         position = None
@@ -1531,6 +1670,7 @@ class XAUPaperTradingEngine:
                 "fusion": fusion,
                 "memory": memory,
                 "shadow_updates": shadow_updates,
+                "position_management": position_management,
                 "execution_allowed": False,
             }
         except Exception:
