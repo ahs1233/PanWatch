@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     xau_replay_horizon_minutes: int = Field(default=60, ge=15, le=240)
     xau_replay_step_minutes: int = Field(default=5, ge=1, le=60)
     xau_replay_bar_limit: int = Field(default=1000, ge=60, le=1000)
+    xau_replay_lookback_days: int = Field(default=5, ge=1, le=30)
 
     # Telegram
     notify_telegram_bot_token: str = ""
