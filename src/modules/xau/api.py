@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from .service import get_macro_context, get_xau_snapshot
+from .service import build_decision_fusion, get_macro_context, get_xau_snapshot
 
 router = APIRouter()
 
@@ -43,4 +43,5 @@ async def terminal(force: bool = Query(default=False)):
             "frames": {},
         }
     macro_context = await get_macro_context(force=force)
-    return {"technical": technical, "macro": macro_context}
+    fusion = build_decision_fusion(technical, macro_context)
+    return {"technical": technical, "macro": macro_context, "fusion": fusion}
