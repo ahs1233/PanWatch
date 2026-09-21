@@ -50,6 +50,7 @@ _consensus_cache = None
 _micro_cache = None
 _series_cache = None
 _macro_cache = None
+_macro_refresh_task = None
 _bars_lock = asyncio.Lock()
 _spot_lock = asyncio.Lock()
 _consensus_lock = asyncio.Lock()
@@ -809,7 +810,7 @@ def _parse_json(value: str) -> dict[str, Any]:
             return {}
 
 
-async def get_macro_context(force: bool = False) -> dict[str, Any]:
+async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
     global _macro_cache
     now = time.monotonic()
     if not force and _macro_cache and now - _macro_cache[0] < _MACRO_TTL:
@@ -950,5 +951,83 @@ async def get_macro_context(force: bool = False) -> dict[str, Any]:
 
         data.update(_resolve_event_gate(ai_event_gate, calendar_event))
 
+        data["cache_stale"] = False
+        data["refresh_pending"] = False
         _macro_cache = (time.monotonic(), data)
         return data
+
+
+def _neutral_macro_context() -> dict[str, Any]:
+    return {
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "query": "",
+        "bias": 0,
+        "bias_label": "neutral",
+        "confidence": 0.0,
+        "event_risk": False,
+        "event_kind": "none",
+        "event_name": None,
+        "event_time_utc": None,
+        "event_age_minutes": None,
+        "event_confidence": 0.0,
+        "event_validation": "macro_refresh_pending",
+        "event_policy_version": MACRO_EVENT_POLICY_VERSION,
+        "event_source_url": None,
+        "calendar_ok": False,
+        "calendar_error": None,
+        "summary": "Macro context is refreshing in the background.",
+        "drivers": [],
+        "search_ok": False,
+        "search_error": None,
+        "cache_stale": True,
+        "refresh_pending": True,
+    }
+
+
+def _consume_macro_refresh_result(task) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("XAU macro background refresh failed: %s", type(exc).__name__)
+
+
+async def get_macro_context(force: bool = False) -> dict[str, Any]:
+    """Return macro context without blocking the fast/paper path on cold research.
+
+    Normal callers get a fresh cached snapshot immediately. When the cache is
+    stale or absent, a background refresh is scheduled and the latest cached
+    snapshot (or a neutral bootstrap) is returned. Explicit force=True is the
+    only mode that waits for the expensive calendar/search/AI refresh.
+    """
+    global _macro_refresh_task
+
+    now = time.monotonic()
+    if _macro_cache and now - _macro_cache[0] < _MACRO_TTL:
+        data = dict(_macro_cache[1])
+        data["cache_stale"] = False
+        data["refresh_pending"] = bool(
+            _macro_refresh_task and not _macro_refresh_task.done()
+        )
+        return data
+
+    if force:
+        if _macro_refresh_task and not _macro_refresh_task.done():
+            return await _macro_refresh_task
+        return await _refresh_macro_context(force=True)
+
+    if _macro_refresh_task is None or _macro_refresh_task.done():
+        _macro_refresh_task = asyncio.create_task(
+            _refresh_macro_context(force=True),
+            name="xau_macro_background_refresh",
+        )
+        _macro_refresh_task.add_done_callback(_consume_macro_refresh_result)
+
+    if _macro_cache:
+        data = dict(_macro_cache[1])
+        data["cache_stale"] = True
+        data["refresh_pending"] = True
+        return data
+
+    return _neutral_macro_context()
