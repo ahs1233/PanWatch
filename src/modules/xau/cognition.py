@@ -1,19 +1,21 @@
-"""Deterministic multi-layer cognition for XAU/USD research and paper trading.
+"""Fast, inspectable multi-layer cognition for XAU/USD research and paper trading.
 
-This module is deliberately LLM-free so it can run in the hot path.  It turns the
-current technical/macro snapshot plus closed-trade memory into an inspectable
-reasoning stack: perception -> regime -> hypotheses -> adversarial review ->
-confidence calibration -> execution plan -> meta-controller.
+The hot path is deterministic and LLM-free.  Slow macro/AI research is consumed
+as cached context.  The engine builds a market-state vector, probabilistic
+regimes, competing hypotheses, adversarial review, empirically-shrunk
+confidence, execution timing, and a meta-controller.
 
-It never places live orders and never marks indicative data execution-eligible.
+Nothing in this module can place a live order or make indicative prices
+execution-eligible.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-COGNITION_VERSION = "1.0.0"
+COGNITION_VERSION = "2.0.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -32,49 +34,114 @@ def _direction_value(value: Any) -> int:
     return 1 if text == "bullish" else -1 if text == "bearish" else 0
 
 
-def _softmax(scores: dict[str, float]) -> dict[str, float]:
+def _softmax(scores: dict[str, float], temperature: float = 1.0) -> dict[str, float]:
     if not scores:
         return {}
+    temperature = max(0.20, float(temperature))
     ceiling = max(scores.values())
-    transformed = {key: exp(value - ceiling) for key, value in scores.items()}
+    transformed = {
+        key: exp((value - ceiling) / temperature)
+        for key, value in scores.items()
+    }
     total = sum(transformed.values()) or 1.0
     return {key: round(value / total, 4) for key, value in transformed.items()}
 
 
-def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str]]:
+def _parse_time(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _market_session(observed_at: Any) -> str:
+    value = _parse_time(observed_at) or datetime.now(timezone.utc)
+    hour = value.hour
+    if 0 <= hour < 7:
+        return "asia"
+    if 7 <= hour < 12:
+        return "london_open"
+    if 12 <= hour < 16:
+        return "london_ny_overlap"
+    if 16 <= hour < 21:
+        return "new_york"
+    return "late_us"
+
+
+def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str, Any]]:
     score = 1.0
     issues: list[str] = []
     spot = technical.get("indicative_spot") or {}
     micro = technical.get("micro") or {}
     frames = technical.get("frames") or {}
 
+    spot_age = _number(spot.get("age_seconds"), 999.0)
+    micro_age = _number(micro.get("age_seconds"), 999.0)
+    spread_bps = _number(spot.get("spread_bps"), 0.0)
+    basis_bps = abs(_number(technical.get("spot_minus_proxy_bps"), 0.0))
+
     if technical.get("blocked"):
         score -= 0.35
         issues.append("technical_data_gate")
     if not spot:
-        score -= 0.35
+        score -= 0.40
         issues.append("spot_missing")
     else:
-        if spot.get("is_stale"):
+        if spot.get("is_stale") or spot_age > 30:
             score -= 0.30
             issues.append("spot_stale")
+        elif spot_age > 15:
+            score -= 0.08
+            issues.append("spot_aging")
         if spot.get("bid") is None or spot.get("ask") is None:
             score -= 0.15
             issues.append("bid_ask_missing")
+        if spread_bps > 3.0:
+            score -= min(0.20, (spread_bps - 3.0) * 0.025)
+            issues.append("spread_elevated")
+
     if not micro or micro.get("status") == "blocked" or micro.get("is_stale"):
-        score -= 0.15
+        score -= 0.18
         issues.append("micro_unreliable")
+    elif micro_age > 120:
+        score -= 0.12
+        issues.append("micro_aging")
 
     missing_frames = [name for name in ("1m", "5m", "15m") if name not in frames]
     if missing_frames:
-        score -= 0.08 * len(missing_frames)
+        score -= 0.09 * len(missing_frames)
         issues.extend(f"{name}_missing" for name in missing_frames)
 
     if any("fallback" in str(item) for item in technical.get("warnings") or []):
         score -= 0.08
         issues.append("fallback_source_active")
 
-    return round(_clip(score), 4), list(dict.fromkeys(issues))
+    # Large disagreement between the indicative spot and the structural 1m
+    # reference is a sensor-consistency warning, not a directional signal.
+    if basis_bps >= 8.0:
+        score -= 0.22
+        issues.append("spot_structure_disagreement")
+    elif basis_bps >= 4.0:
+        score -= 0.08
+        issues.append("spot_structure_basis_elevated")
+
+    sensors = {
+        "spot_age_seconds": None if spot_age >= 999 else round(spot_age, 2),
+        "micro_age_seconds": None if micro_age >= 999 else round(micro_age, 2),
+        "spread_bps": round(spread_bps, 4),
+        "spot_proxy_basis_bps": round(basis_bps, 4),
+        "frame_count": len(frames),
+        "technical_mode": technical.get("technical_mode"),
+    }
+    return round(_clip(score), 4), list(dict.fromkeys(issues)), sensors
 
 
 def _perception(technical: dict[str, Any]) -> dict[str, Any]:
@@ -93,7 +160,8 @@ def _perception(technical: dict[str, Any]) -> dict[str, Any]:
     directional_pressure = sum(directions) / max(1, len(directions))
     ret10 = _number(micro.get("return_10m_pct"), 0.0)
     ret30 = _number(micro.get("return_30m_pct"), 0.0)
-    acceleration = ret10 - (ret30 / 3.0 if ret30 else 0.0)
+    baseline_10m = ret30 / 3.0 if ret30 else 0.0
+    acceleration = ret10 - baseline_10m
 
     atr5 = _number(five.get("atr_pct"), 0.0)
     atr15 = _number(fifteen.get("atr_pct"), 0.0)
@@ -123,34 +191,167 @@ def _perception(technical: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _regime(perception: dict[str, Any], technical: dict[str, Any]) -> dict[str, Any]:
+def _regime(
+    perception: dict[str, Any],
+    technical: dict[str, Any],
+    macro: dict[str, Any],
+    data_quality: float,
+) -> dict[str, Any]:
     pressure = _number(perception.get("directional_pressure"))
     vol = _number(perception.get("volatility_pct"))
+    acceleration = _number(perception.get("acceleration"))
     breakout = str(perception.get("breakout") or "none")
     alignment = str(technical.get("alignment") or "mixed")
+    event_risk = bool(macro.get("event_risk"))
 
-    if technical.get("blocked"):
-        label, confidence = "data_uncertain", 0.95
-    elif breakout in {"up", "down"} and alignment in {"bullish", "bearish"}:
-        label, confidence = "breakout_expansion", 0.82
-    elif abs(pressure) >= 0.6 and alignment in {"bullish", "bearish"}:
-        label, confidence = (
-            "trend_bull" if pressure > 0 else "trend_bear",
-            0.74 + min(0.16, abs(pressure) * 0.16),
-        )
-    elif abs(pressure) <= 0.25 and vol <= 0.18:
-        label, confidence = "compression_range", 0.72
-    elif alignment == "mixed":
-        label, confidence = "transition", 0.66
+    scores = {
+        "trend_bull": 0.15 + max(0.0, pressure) * 2.0,
+        "trend_bear": 0.15 + max(0.0, -pressure) * 2.0,
+        "breakout_expansion": 0.10,
+        "compression_range": 0.10,
+        "range_rotation": 0.15,
+        "transition": 0.15,
+        "shock_repricing": 0.05,
+        "data_uncertain": 0.05,
+    }
+
+    if alignment == "bullish":
+        scores["trend_bull"] += 0.75
+    elif alignment == "bearish":
+        scores["trend_bear"] += 0.75
     else:
-        label, confidence = "range", 0.60
+        scores["transition"] += 0.80
+        scores["range_rotation"] += 0.30
 
+    if breakout in {"up", "down"}:
+        scores["breakout_expansion"] += 1.20
+        if breakout == "up":
+            scores["trend_bull"] += 0.30
+        else:
+            scores["trend_bear"] += 0.30
+    else:
+        scores["range_rotation"] += 0.35
+
+    if abs(pressure) <= 0.25:
+        scores["range_rotation"] += 0.75
+        scores["compression_range"] += 0.50
+    if vol <= 0.12:
+        scores["compression_range"] += 0.85
+    elif vol >= 0.24:
+        scores["breakout_expansion"] += 0.45
+        scores["shock_repricing"] += 0.30
+
+    if pressure * acceleration < 0 and abs(acceleration) >= 0.02:
+        scores["transition"] += 0.65
+    if event_risk:
+        scores["shock_repricing"] += 2.50
+    if data_quality < 0.60 or technical.get("blocked"):
+        scores["data_uncertain"] += 2.60
+
+    probabilities = _softmax(scores, temperature=0.75)
+    label, confidence = max(probabilities.items(), key=lambda item: item[1])
     return {
         "label": label,
-        "confidence": round(_clip(confidence), 4),
+        "confidence": round(confidence, 4),
+        "probabilities": probabilities,
         "volatility_pct": round(vol, 5),
         "alignment": alignment,
     }
+
+
+def build_market_state_vector(
+    technical: dict[str, Any],
+    macro: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a compact state vector suitable for episodic similarity search."""
+
+    perception = _perception(technical)
+    quality, quality_issues, sensors = _data_quality(technical)
+    regime = _regime(perception, technical, macro, quality)
+    spot = technical.get("indicative_spot") or {}
+    observed_at = (
+        spot.get("observed_at")
+        or technical.get("observed_at")
+        or (technical.get("micro") or {}).get("observed_at")
+    )
+    candidate = str(technical.get("candidate") or "none")
+    session = _market_session(observed_at)
+
+    return {
+        "version": 2,
+        "candidate": candidate,
+        "alignment": str(technical.get("alignment") or "mixed"),
+        "session": session,
+        "regime": regime.get("label"),
+        "directional_pressure": _number(perception.get("directional_pressure")),
+        "return_10m_pct": _number(perception.get("return_10m_pct")),
+        "return_30m_pct": _number(perception.get("return_30m_pct")),
+        "acceleration": _number(perception.get("acceleration")),
+        "volatility_pct": _number(perception.get("volatility_pct")),
+        "rsi_5m_norm": (_number(perception.get("rsi_5m"), 50.0) - 50.0) / 50.0,
+        "rsi_15m_norm": (_number(perception.get("rsi_15m"), 50.0) - 50.0) / 50.0,
+        "breakout": str(perception.get("breakout") or "none"),
+        "macro_bias": max(-1.0, min(1.0, _number(macro.get("bias"), 0.0))),
+        "macro_confidence": _clip(_number(macro.get("confidence"), 0.0)),
+        "event_risk": 1.0 if macro.get("event_risk") else 0.0,
+        "spread_bps": _number(sensors.get("spread_bps"), 0.0),
+        "spot_age_seconds": _number(sensors.get("spot_age_seconds"), 60.0),
+        "micro_age_seconds": _number(sensors.get("micro_age_seconds"), 120.0),
+        "spot_proxy_basis_bps": _number(sensors.get("spot_proxy_basis_bps"), 0.0),
+        "data_quality": quality,
+        "quality_issues": quality_issues,
+    }
+
+
+def state_vector_similarity(current: dict[str, Any], historical: dict[str, Any]) -> float:
+    """Return 0..1 similarity for two XAU market-state vectors.
+
+    Scales are intentionally explicit and conservative so one noisy feature
+    cannot dominate the retrieval.
+    """
+
+    if not current or not historical:
+        return 0.0
+
+    numeric = (
+        ("directional_pressure", 2.0, 2.0),
+        ("return_10m_pct", 0.50, 1.2),
+        ("return_30m_pct", 1.00, 0.8),
+        ("acceleration", 0.40, 1.0),
+        ("volatility_pct", 0.35, 0.8),
+        ("rsi_5m_norm", 1.0, 0.8),
+        ("rsi_15m_norm", 1.0, 0.5),
+        ("macro_bias", 2.0, 0.8),
+        ("macro_confidence", 1.0, 0.4),
+        ("spread_bps", 5.0, 0.5),
+        ("spot_proxy_basis_bps", 10.0, 0.5),
+        ("data_quality", 1.0, 0.8),
+    )
+    categorical = (
+        ("candidate", 1.6),
+        ("alignment", 1.0),
+        ("session", 0.55),
+        ("regime", 1.3),
+        ("breakout", 0.65),
+    )
+
+    weighted_similarity = 0.0
+    total_weight = 0.0
+    for key, scale, weight in numeric:
+        a = _number(current.get(key), 0.0)
+        b = _number(historical.get(key), 0.0)
+        local = 1.0 - min(1.0, abs(a - b) / max(scale, 1e-9))
+        weighted_similarity += local * weight
+        total_weight += weight
+
+    for key, weight in categorical:
+        a = str(current.get(key) or "")
+        b = str(historical.get(key) or "")
+        local = 1.0 if a and a == b else 0.0
+        weighted_similarity += local * weight
+        total_weight += weight
+
+    return round(_clip(weighted_similarity / max(total_weight, 1e-9)), 4)
 
 
 def _hypotheses(
@@ -167,71 +368,150 @@ def _hypotheses(
     acceleration = _number(perception.get("acceleration"))
     breakout = str(perception.get("breakout") or "none")
     rsi5 = _number(perception.get("rsi_5m"), 50.0)
-    regime_label = str(regime.get("label") or "transition")
+    probs = regime.get("probabilities") or {}
+    session = _market_session(technical.get("observed_at"))
 
-    continuation = 0.0
-    continuation += 1.2 if setup_dir else -0.4
-    continuation += 0.9 * abs(pressure)
-    continuation += 0.55 if regime_label in {"trend_bull", "trend_bear", "breakout_expansion"} else 0.0
-    continuation += 0.45 if breakout in {"up", "down"} else 0.0
-    if setup_dir and macro_bias == setup_dir:
-        continuation += 0.45 * max(0.35, macro_conf)
-    elif setup_dir and macro_bias == -setup_dir:
-        continuation -= 0.55 * max(0.35, macro_conf)
-
-    mean_reversion = 0.15
-    mean_reversion += 0.75 if regime_label in {"range", "compression_range", "transition"} else 0.0
-    if rsi5 >= 70 or rsi5 <= 30:
-        mean_reversion += 0.75
-    if setup_dir and acceleration * setup_dir < 0:
-        mean_reversion += 0.4
-
-    sweep = 0.10
-    sweep += 0.55 if breakout in {"up", "down"} else 0.0
-    sweep += 0.4 if regime_label in {"transition", "breakout_expansion"} else 0.0
-    if rsi5 >= 75 or rsi5 <= 25:
-        sweep += 0.35
-
-    weights = _softmax(
-        {
-            "trend_continuation": continuation,
-            "mean_reversion": mean_reversion,
-            "liquidity_sweep": sweep,
-        }
+    continuation = (
+        0.25
+        + (1.0 if setup_dir else -0.30)
+        + 0.80 * abs(pressure)
+        + 1.20 * _number(probs.get("trend_bull" if setup_dir > 0 else "trend_bear"))
+        + 0.70 * _number(probs.get("breakout_expansion"))
     )
+    if setup_dir and macro_bias == setup_dir:
+        continuation += 0.50 * max(0.30, macro_conf)
+    elif setup_dir and macro_bias == -setup_dir:
+        continuation -= 0.70 * max(0.30, macro_conf)
+
+    mean_reversion = (
+        0.15
+        + 1.20 * _number(probs.get("range_rotation"))
+        + 0.90 * _number(probs.get("compression_range"))
+        + (0.70 if rsi5 >= 70 or rsi5 <= 30 else 0.0)
+        + (0.35 if setup_dir and acceleration * setup_dir < 0 else 0.0)
+    )
+
+    liquidity_sweep = (
+        0.10
+        + (0.65 if breakout in {"up", "down"} else 0.0)
+        + 0.70 * _number(probs.get("transition"))
+        + (0.40 if rsi5 >= 75 or rsi5 <= 25 else 0.0)
+    )
+
+    failed_breakout = (
+        0.05
+        + (0.75 if breakout in {"up", "down"} else 0.0)
+        + 0.80 * _number(probs.get("transition"))
+        + (0.45 if setup_dir and acceleration * setup_dir < 0 else 0.0)
+    )
+
+    volatility_expansion = (
+        0.05
+        + 1.45 * _number(probs.get("breakout_expansion"))
+        + (0.35 if breakout in {"up", "down"} else 0.0)
+    )
+
+    news_repricing = (
+        0.02
+        + 1.80 * _number(probs.get("shock_repricing"))
+        + (0.50 * macro_conf if macro_bias else 0.0)
+    )
+
+    exhaustion = (
+        0.05
+        + (0.80 if rsi5 >= 78 or rsi5 <= 22 else 0.0)
+        + (0.50 if setup_dir and acceleration * setup_dir < 0 else 0.0)
+    )
+
+    session_reversal = (
+        0.05
+        + (0.30 if session in {"london_open", "london_ny_overlap"} else 0.0)
+        + 0.50 * _number(probs.get("transition"))
+    )
+
+    scores = {
+        "trend_continuation": continuation,
+        "mean_reversion": mean_reversion,
+        "liquidity_sweep": liquidity_sweep,
+        "failed_breakout": failed_breakout,
+        "volatility_expansion": volatility_expansion,
+        "news_repricing": news_repricing,
+        "exhaustion": exhaustion,
+        "session_reversal": session_reversal,
+    }
+    weights = _softmax(scores, temperature=0.75)
+
     direction = "long" if setup_dir > 0 else "short" if setup_dir < 0 else "none"
-    opposing = "short" if direction == "long" else "long" if direction == "short" else "none"
-    ordered = sorted(weights.items(), key=lambda item: item[1], reverse=True)
-    out = []
-    for name, weight in ordered:
-        out.append(
-            {
-                "name": name,
-                "weight": weight,
-                "direction": direction if name == "trend_continuation" else opposing,
-            }
-        )
-    return out
+    opposite = "short" if direction == "long" else "long" if direction == "short" else "none"
+    macro_direction = "long" if macro_bias > 0 else "short" if macro_bias < 0 else direction
+
+    direction_map = {
+        "trend_continuation": direction,
+        "volatility_expansion": direction,
+        "news_repricing": macro_direction,
+        "mean_reversion": opposite,
+        "liquidity_sweep": opposite,
+        "failed_breakout": opposite,
+        "exhaustion": opposite,
+        "session_reversal": opposite,
+    }
+    evidence_map = {
+        "trend_continuation": ["timeframe_alignment", "directional_pressure"],
+        "volatility_expansion": ["breakout_probability", "volatility_regime"],
+        "news_repricing": ["macro_context", "shock_probability"],
+        "mean_reversion": ["range_probability", "rsi_extremity"],
+        "liquidity_sweep": ["breakout_state", "transition_probability"],
+        "failed_breakout": ["breakout_state", "momentum_deceleration"],
+        "exhaustion": ["rsi_extremity", "momentum_deceleration"],
+        "session_reversal": ["session_context", "transition_probability"],
+    }
+
+    ordered = sorted(weights.items(), key=lambda item: item[1], reverse=True)[:5]
+    return [
+        {
+            "name": name,
+            "weight": weight,
+            "direction": direction_map.get(name, "none"),
+            "evidence": evidence_map.get(name, []),
+        }
+        for name, weight in ordered
+    ]
 
 
 def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
     memory = memory or {}
     trade_count = int(_number(memory.get("trade_count"), 0.0))
+    similar_samples = int(_number(memory.get("similar_samples"), trade_count))
     expectancy = _number(memory.get("expectancy_r"), 0.0)
     profit_factor = memory.get("profit_factor")
-    profit_factor_value = _number(profit_factor, 1.0) if profit_factor is not None else 1.0
+    posterior = memory.get("posterior_win_probability")
+    empirical = memory.get("empirical_win_rate")
+    calibration_samples = int(_number(memory.get("calibration_sample_count"), 0.0))
+    brier = memory.get("brier_score")
+    ece = memory.get("expected_calibration_error")
 
-    strength = _clip(trade_count / 30.0)
+    sample_basis = max(similar_samples, calibration_samples)
+    strength = _clip(sample_basis / 40.0)
     edge = _clip(expectancy / 1.5, -1.0, 1.0)
+    profit_factor_value = _number(profit_factor, 1.0) if profit_factor is not None else 1.0
     pf_edge = _clip((profit_factor_value - 1.0) / 2.0, -1.0, 1.0)
-    adjustment = (0.06 * edge + 0.04 * pf_edge) * strength
+    confidence_adjustment = (0.035 * edge + 0.025 * pf_edge) * strength
 
     return {
         "trade_count": trade_count,
+        "similar_samples": similar_samples,
         "expectancy_r": round(expectancy, 4),
         "profit_factor": profit_factor,
+        "empirical_win_rate": empirical,
+        "posterior_win_probability": posterior,
+        "calibration_sample_count": calibration_samples,
+        "brier_score": brier,
+        "expected_calibration_error": ece,
+        "average_similarity": memory.get("average_similarity"),
+        "memory_source": memory.get("source"),
         "learning_strength": round(strength, 4),
-        "confidence_adjustment": round(adjustment, 4),
+        "confidence_adjustment": round(confidence_adjustment, 4),
+        "autopsy_counts": memory.get("autopsy_counts") or {},
     }
 
 
@@ -247,7 +527,7 @@ def _adversarial_review(
     setup_dir = 1 if candidate == "long_setup" else -1 if candidate == "short_setup" else 0
     macro_bias = int(max(-1, min(1, _number(macro.get("bias"), 0.0))))
     macro_conf = _clip(_number(macro.get("confidence"), 0.0))
-    primary = hypotheses[0] if hypotheses else {"name": "none", "weight": 0.0}
+    primary = hypotheses[0] if hypotheses else {"name": "none", "weight": 0.0, "direction": "none"}
     rsi5 = _number(perception.get("rsi_5m"), 50.0)
 
     counter_evidence: list[str] = []
@@ -261,20 +541,26 @@ def _adversarial_review(
         hard_veto = True
     if setup_dir and macro_bias == -setup_dir and macro_conf >= 0.65:
         counter_evidence.append("high_confidence_macro_conflict")
-    if primary.get("name") != "trend_continuation":
-        counter_evidence.append("continuation_not_primary_hypothesis")
-    if _number(primary.get("weight")) < 0.46:
+    if primary.get("direction") not in {
+        "long" if setup_dir > 0 else "short" if setup_dir < 0 else "none",
+        "none",
+    }:
+        counter_evidence.append("dominant_hypothesis_opposes_setup")
+    if _number(primary.get("weight")) < 0.30:
         counter_evidence.append("weak_primary_hypothesis")
     if setup_dir > 0 and rsi5 >= 74:
         counter_evidence.append("long_setup_overextended_rsi")
     elif setup_dir < 0 and rsi5 <= 26:
         counter_evidence.append("short_setup_overextended_rsi")
-    if regime.get("label") in {"transition", "data_uncertain"}:
-        counter_evidence.append("unstable_market_regime")
+    if _number((regime.get("probabilities") or {}).get("transition")) >= 0.30:
+        counter_evidence.append("transition_risk")
+    if regime.get("label") == "data_uncertain":
+        counter_evidence.append("unstable_data_regime")
+        hard_veto = True
 
     veto_score = 0.0
-    veto_score += 0.45 if hard_veto else 0.0
-    veto_score += min(0.45, 0.09 * len(counter_evidence))
+    veto_score += 0.50 if hard_veto else 0.0
+    veto_score += min(0.42, 0.085 * len(counter_evidence))
     veto_score = _clip(veto_score)
     veto = hard_veto or veto_score >= 0.64
 
@@ -296,38 +582,60 @@ def _confidence(
     primary_weight = _number((hypotheses[0] if hypotheses else {}).get("weight"), 0.0)
     regime_conf = _number(regime.get("confidence"), 0.0)
     macro_conf = _clip(_number(macro.get("confidence"), 0.0))
-    event_penalty = 0.22 if macro.get("event_risk") else 0.0
-    adversarial_penalty = 0.30 * _number(adversarial.get("veto_score"), 0.0)
+    event_penalty = 0.24 if macro.get("event_risk") else 0.0
+    adversarial_penalty = 0.32 * _number(adversarial.get("veto_score"), 0.0)
 
     raw = (
-        0.30 * data_quality
-        + 0.30 * primary_weight
+        0.32 * data_quality
+        + 0.28 * primary_weight
         + 0.20 * regime_conf
         + 0.10 * macro_conf
         + 0.10
         - event_penalty
         - adversarial_penalty
     )
-    # With little history, shrink confidence toward 0.50 rather than pretend
-    # that a deterministic score is already empirically calibrated.
-    learning_strength = _number(memory_state.get("learning_strength"), 0.0)
-    shrink = 0.20 * (1.0 - learning_strength)
-    calibrated = raw * (1.0 - shrink) + 0.50 * shrink
+    raw = _clip(raw, 0.05, 0.95)
+
+    historical_probability = memory_state.get("posterior_win_probability")
+    sample_count = int(_number(memory_state.get("calibration_sample_count"), 0.0))
+    similar_samples = int(_number(memory_state.get("similar_samples"), 0.0))
+    effective_samples = max(sample_count, similar_samples)
+    ece = memory_state.get("expected_calibration_error")
+    ece_value = _number(ece, 0.0) if ece is not None else 0.0
+
+    if historical_probability is not None and effective_samples > 0:
+        historical = _clip(_number(historical_probability), 0.05, 0.95)
+        reliability = min(0.72, effective_samples / 45.0)
+        reliability *= max(0.35, 1.0 - min(0.50, ece_value))
+        calibrated = raw * (1.0 - reliability) + historical * reliability
+        basis = "empirical_bayesian_history"
+    else:
+        # No history: deliberately shrink toward uncertainty instead of
+        # pretending a model score is a measured probability.
+        calibrated = raw * 0.76 + 0.50 * 0.24
+        basis = "prior_shrunk_no_history"
+
     calibrated += _number(memory_state.get("confidence_adjustment"), 0.0)
     calibrated = _clip(calibrated, 0.05, 0.95)
-
     band = "high" if calibrated >= 0.72 else "medium" if calibrated >= 0.58 else "low"
+
     return {
-        "raw_confidence": round(_clip(raw), 4),
+        "raw_confidence": round(raw, 4),
         "calibrated_confidence": round(calibrated, 4),
         "band": band,
-        "calibration_basis": "closed_trade_memory+deterministic_evidence",
+        "calibration_basis": basis,
+        "historical_probability": historical_probability,
+        "sample_count": effective_samples,
+        "brier_score": memory_state.get("brier_score"),
+        "expected_calibration_error": memory_state.get("expected_calibration_error"),
     }
 
 
 def _execution_plan(
     technical: dict[str, Any],
     perception: dict[str, Any],
+    regime: dict[str, Any],
+    hypotheses: list[dict[str, Any]],
     confidence: dict[str, Any],
     adversarial: dict[str, Any],
     min_confidence: float,
@@ -341,6 +649,9 @@ def _execution_plan(
     ema_fast = _number(five.get("ema_fast"), price)
     extension_atr = abs(price - ema_fast) / atr if atr > 0 and price > 0 else 0.0
     calibrated = _number(confidence.get("calibrated_confidence"), 0.0)
+    primary = hypotheses[0] if hypotheses else {}
+    primary_direction = str(primary.get("direction") or "none")
+    primary_name = str(primary.get("name") or "none")
 
     reasons: list[str] = []
     action = "STAND_DOWN"
@@ -348,9 +659,14 @@ def _execution_plan(
         reasons.append("no_directional_setup")
     elif adversarial.get("veto"):
         reasons.append("adversarial_veto")
+    elif primary_direction not in {side, "none"}:
+        reasons.append("dominant_hypothesis_opposes_entry")
     elif calibrated < min_confidence:
         action = "WAIT"
         reasons.append("confidence_below_threshold")
+    elif regime.get("label") in {"transition", "range_rotation"} and primary_name == "trend_continuation":
+        action = "WAIT_CONFIRMATION"
+        reasons.append("regime_requires_confirmation")
     elif extension_atr >= 0.80:
         action = "WAIT_PULLBACK"
         reasons.append("price_extended_from_5m_fast_ema")
@@ -375,6 +691,7 @@ def _execution_plan(
         "entry_zone": entry_zone,
         "invalidation_reference": invalidation,
         "extension_atr": round(extension_atr, 4),
+        "primary_hypothesis": primary_name,
         "reasons": reasons,
         "execution_allowed": False,
     }
@@ -390,10 +707,11 @@ def build_cognitive_state(
     """Build the complete inspectable XAU cognition stack."""
 
     min_confidence = _clip(float(min_confidence), 0.50, 0.90)
-    data_quality, quality_issues = _data_quality(technical)
+    data_quality, quality_issues, sensors = _data_quality(technical)
     perception = _perception(technical)
-    regime = _regime(perception, technical)
+    regime = _regime(perception, technical, macro, data_quality)
     hypotheses = _hypotheses(technical, macro, perception, regime)
+    market_state = build_market_state_vector(technical, macro)
     memory_state = _memory_adjustment(memory)
     adversarial = _adversarial_review(
         technical,
@@ -414,6 +732,8 @@ def build_cognitive_state(
     plan = _execution_plan(
         technical,
         perception,
+        regime,
+        hypotheses,
         confidence,
         adversarial,
         min_confidence,
@@ -422,7 +742,7 @@ def build_cognitive_state(
     action = str(plan.get("action") or "STAND_DOWN")
     if action == "ENTER_NOW":
         decision = "eligible"
-    elif action in {"WAIT", "WAIT_PULLBACK"}:
+    elif action in {"WAIT", "WAIT_PULLBACK", "WAIT_CONFIRMATION"}:
         decision = "wait"
     elif technical.get("candidate") in {"long_setup", "short_setup"}:
         decision = "veto"
@@ -431,9 +751,11 @@ def build_cognitive_state(
 
     return {
         "version": COGNITION_VERSION,
+        "market_state": market_state,
         "data_quality": {
             "score": data_quality,
             "issues": quality_issues,
+            "sensors": sensors,
         },
         "perception": perception,
         "regime": regime,
@@ -446,6 +768,7 @@ def build_cognitive_state(
             "decision": decision,
             "paper_entry_allowed": decision == "eligible",
             "min_confidence": round(min_confidence, 4),
+            "dominant_hypothesis": plan.get("primary_hypothesis"),
             "live_execution_allowed": False,
         },
     }
