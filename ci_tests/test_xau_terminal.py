@@ -738,3 +738,69 @@ def test_indicative_spot_marks_quotes_older_than_three_minutes_stale(monkeypatch
     result = asyncio.run(service.get_indicative_spot(force=True))
     assert result["age_seconds"] >= 180.0
     assert result["is_stale"] is True
+
+
+
+def test_composite_spot_provider_reports_fallback_health():
+    now = datetime.now(timezone.utc)
+
+    class Broken:
+        def fetch(self, timeout_seconds: float = 10.0):
+            raise RuntimeError("boom")
+
+    class MidOnly:
+        def fetch(self, timeout_seconds: float = 10.0):
+            return XAUIndicativeSpot(
+                price=4340.0,
+                bid=None,
+                ask=None,
+                observed_at=now,
+                source="mid-only",
+                is_stale=False,
+            )
+
+    provider = CompositeXAUIndicativeSpotProvider()
+    provider.providers = (Broken(), MidOnly())
+    quote, health = provider.fetch_with_diagnostics()
+
+    assert quote.source == "mid-only"
+    assert health[0]["status"] == "error"
+    assert health[0]["error_type"] == "RuntimeError"
+    assert health[1]["status"] == "ok"
+    assert health[1]["has_bid_ask"] is False
+    assert health[1]["selected"] is True
+
+
+def test_composite_spot_provider_prefers_fresh_bid_ask():
+    now = datetime.now(timezone.utc)
+
+    class MidOnly:
+        def fetch(self, timeout_seconds: float = 10.0):
+            return XAUIndicativeSpot(
+                price=4340.0,
+                bid=None,
+                ask=None,
+                observed_at=now,
+                source="mid-only",
+                is_stale=False,
+            )
+
+    class FreshBidAsk:
+        def fetch(self, timeout_seconds: float = 10.0):
+            return XAUIndicativeSpot(
+                price=4340.1,
+                bid=4340.0,
+                ask=4340.2,
+                observed_at=now,
+                source="fresh-bidask",
+                is_stale=False,
+            )
+
+    provider = CompositeXAUIndicativeSpotProvider()
+    provider.providers = (MidOnly(), FreshBidAsk())
+    quote, health = provider.fetch_with_diagnostics()
+
+    assert quote.source == "fresh-bidask"
+    assert quote.bid == 4340.0
+    assert quote.ask == 4340.2
+    assert health[-1]["selected"] is True
