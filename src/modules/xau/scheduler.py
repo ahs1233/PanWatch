@@ -36,12 +36,13 @@ class XAUResearchScheduler:
             )
             if signature != self._last_signature:
                 logger.info(
-                    "[XAU] state status=%s candidate=%s alignment=%s price_proxy=%s execution=%s",
+                    "[XAU] state status=%s candidate=%s alignment=%s price_proxy=%s execution=%s gates=%s",
                     snapshot.get("status"),
                     snapshot.get("candidate"),
                     snapshot.get("alignment"),
                     snapshot.get("price"),
                     snapshot.get("execution_status"),
+                    snapshot.get("block_reasons"),
                 )
                 self._last_signature = signature
             else:
