@@ -289,3 +289,56 @@ def test_replay_table_provisioning_is_non_destructive_and_idempotent():
         assert db.query(XAUReplayEpisode).count() == 0
     finally:
         db.close()
+
+
+
+def test_replay_prefers_deep_biquote_range_history(monkeypatch):
+    start = datetime(2026, 9, 15, 0, 0, tzinfo=timezone.utc)
+    counts = {
+        XAUTimeframe.M1: 400,
+        XAUTimeframe.M5: 100,
+        XAUTimeframe.M15: 50,
+    }
+
+    def fake_range(
+        self,
+        timeframe,
+        *,
+        start,
+        end,
+        timeout_seconds=12.0,
+        max_bars_per_request=900,
+        max_chunks=64,
+    ):
+        return _bars(
+            timeframe,
+            counts[timeframe],
+            start=start,
+            slope=0.1,
+        )
+
+    def should_not_use_recent(self, timeframe, *, limit=240, timeout_seconds=12.0):
+        raise AssertionError("recent fallback should not be used when deep range is healthy")
+
+    monkeypatch.setattr(
+        replay.BiquoteXAUOHLCProvider,
+        "bars_range",
+        fake_range,
+    )
+    monkeypatch.setattr(
+        replay.BiquoteXAUOHLCProvider,
+        "bars",
+        should_not_use_recent,
+    )
+
+    history, source = asyncio.run(
+        _fetch_default_replay_history(
+            limit=1000,
+            lookback_days=5,
+        )
+    )
+
+    assert source == "biquote.io:MT5-ohlc-range"
+    assert len(history[XAUTimeframe.M1]) == 400
+    assert len(history[XAUTimeframe.M5]) == 100
+    assert len(history[XAUTimeframe.M15]) == 50
