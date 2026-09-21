@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from src.modules.xau.cognition import build_cognitive_state
+from src.modules.xau.cognition import (
+    build_cognitive_state,
+    build_market_state_vector,
+    state_vector_similarity,
+)
 
 
 def _technical(candidate="short_setup", *, blocked=False, rsi=44.0, spot_price=4340.0):
@@ -64,7 +68,8 @@ def test_cognition_builds_all_layers_and_can_allow_clean_setup():
     )
 
     assert state["regime"]["label"] in {"trend_bear", "breakout_expansion"}
-    assert state["hypotheses"][0]["name"] == "trend_continuation"
+    assert abs(sum(state["regime"]["probabilities"].values()) - 1.0) < 0.01
+    assert state["hypotheses"][0]["direction"] in {"short", "none"}
     assert state["adversarial"]["veto"] is False
     assert state["confidence"]["calibrated_confidence"] >= 0.50
     assert state["meta_controller"]["decision"] in {"eligible", "wait"}
@@ -110,3 +115,71 @@ def test_overextended_short_is_challenged_by_adversarial_layer():
         {"bias": -1, "confidence": 0.6, "event_risk": False},
     )
     assert "short_setup_overextended_rsi" in state["adversarial"]["counter_evidence"]
+
+
+
+def test_market_state_vector_similarity_prefers_nearby_episode():
+    technical = _technical()
+    macro = {"bias": -1, "confidence": 0.7, "event_risk": False}
+    current = build_market_state_vector(technical, macro)
+    identical = dict(current)
+    distant = dict(current)
+    distant.update({
+        "candidate": "long_setup",
+        "alignment": "bullish",
+        "session": "asia",
+        "regime": "range_rotation",
+        "directional_pressure": 1.0,
+        "macro_bias": 1.0,
+        "rsi_5m_norm": 0.8,
+    })
+
+    assert state_vector_similarity(current, identical) == 1.0
+    assert state_vector_similarity(current, distant) < 0.75
+
+
+def test_probabilistic_regime_exposes_distribution_not_binary_label():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.6, "event_risk": False},
+    )
+    probabilities = state["regime"]["probabilities"]
+    assert len(probabilities) >= 6
+    assert state["regime"]["label"] == max(probabilities, key=probabilities.get)
+    assert abs(sum(probabilities.values()) - 1.0) < 0.01
+
+
+def test_historical_probability_changes_calibration_basis():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 20,
+            "similar_samples": 20,
+            "expectancy_r": 0.4,
+            "profit_factor": 1.6,
+            "posterior_win_probability": 0.68,
+            "calibration_sample_count": 20,
+            "brier_score": 0.18,
+            "expected_calibration_error": 0.08,
+        },
+    )
+    assert state["confidence"]["calibration_basis"] == "empirical_bayesian_history"
+    assert state["confidence"]["historical_probability"] == 0.68
+    assert state["confidence"]["sample_count"] == 20
+
+
+def test_sensor_disagreement_reduces_data_quality():
+    technical = _technical()
+    technical["spot_minus_proxy_bps"] = 12.0
+    degraded = build_cognitive_state(
+        technical,
+        {"bias": -1, "confidence": 0.6, "event_risk": False},
+    )
+    clean = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.6, "event_risk": False},
+    )
+
+    assert degraded["data_quality"]["score"] < clean["data_quality"]["score"]
+    assert "spot_structure_disagreement" in degraded["data_quality"]["issues"]
