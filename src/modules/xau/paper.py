@@ -7,7 +7,10 @@ execution_allowed=False throughout.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -40,6 +43,10 @@ from src.platform.runtime.config import Settings
 logger = logging.getLogger(__name__)
 
 PAPER_ENGINE_VERSION = "0.9.0"
+
+# Shared by scheduler and HTTP engine instances. Keep ownership in the worker:
+# cancelling an awaiting coroutine must not unlock a transaction still running.
+_paper_scan_lock = threading.Lock()
 
 
 def _utc_naive(now: datetime | None = None) -> datetime:
@@ -1954,6 +1961,10 @@ class XAUPaperTradingEngine:
     async def eligibility(self) -> dict:
         technical = await get_xau_snapshot(force=False)
         macro = await get_macro_context(force=False)
+        return await asyncio.to_thread(self._eligibility_sync, technical, macro)
+
+    def _eligibility_sync(self, technical: dict, macro: dict) -> dict:
+        # The session is created, used and closed on this worker thread.
         spot = technical.get("indicative_spot") or {}
 
         db = open_xau_paper_session()
@@ -2059,8 +2070,27 @@ class XAUPaperTradingEngine:
         if not self.settings.xau_paper_enabled:
             return {"status": "disabled", "execution_allowed": False}
 
+        started = time.monotonic()
         technical = await get_xau_snapshot(force=False)
         macro = await get_macro_context(force=False)
+        fetched = time.monotonic()
+        result = await asyncio.to_thread(self._scan_serialized, technical, macro, now)
+        result["timing_ms"] = {
+            "snapshot": round((fetched - started) * 1000, 2),
+            "paper_worker": round((time.monotonic() - fetched) * 1000, 2),
+            "total": round((time.monotonic() - started) * 1000, 2),
+        }
+        return result
+
+    def _scan_serialized(self, technical: dict, macro: dict, now: datetime | None) -> dict:
+        if not _paper_scan_lock.acquire(blocking=False):
+            return {"status": "busy", "reason": "paper_scan_in_progress", "execution_allowed": False}
+        try:
+            return self._scan_sync(technical, macro, now)
+        finally:
+            _paper_scan_lock.release()
+
+    def _scan_sync(self, technical: dict, macro: dict, now: datetime | None) -> dict:
         spot = technical.get("indicative_spot") or {}
         analysis_reference = technical.get("analysis_reference") or {}
         now_utc = _utc_naive(now)
@@ -2369,6 +2399,9 @@ class XAUPaperTradingScheduler:
         self._running = True
         try:
             result = await self.engine.scan()
+            logger.info("[XAU paper timing] status=%s timing_ms=%s", result.get("status"), result.get("timing_ms"))
+            if result.get("status") != "ok":
+                return
             account = result.get("account") or {}
             position = result.get("position") or {}
             fusion = result.get("fusion") or {}

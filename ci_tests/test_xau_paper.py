@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -34,6 +36,144 @@ from src.modules.xau.paper import (
 )
 from src.platform.runtime.config import Settings
 from src.modules.xau.paper_store import _sqlalchemy_url
+
+
+@pytest.mark.parametrize("operation", ["scan", "eligibility"])
+def test_database_work_does_not_block_event_loop(monkeypatch, operation):
+    from src.modules.xau import paper
+
+    entered, release = threading.Event(), threading.Event()
+    event_loop_thread = threading.get_ident()
+    worker_threads = []
+
+    async def snapshot(**kwargs):
+        return {}
+
+    def slow_database_work(*args):
+        worker_threads.append(threading.get_ident())
+        entered.set()
+        assert release.wait(3), "event loop could not release database worker"
+        return {"status": "ok", "execution_allowed": False}
+
+    monkeypatch.setattr(paper, "get_xau_snapshot", snapshot)
+    monkeypatch.setattr(paper, "get_macro_context", snapshot)
+    engine = XAUPaperTradingEngine(Settings(xau_paper_enabled=True))
+    monkeypatch.setattr(engine, "_scan_sync" if operation == "scan" else "_eligibility_sync", slow_database_work)
+
+    async def exercise():
+        pending = asyncio.create_task(getattr(engine, operation)())
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            assert not pending.done()
+            assert len(worker_threads) == 1
+            assert worker_threads[0] != event_loop_thread
+        finally:
+            release.set()
+        result = await pending
+        assert result["execution_allowed"] is False
+        if operation == "scan":
+            assert result["timing_ms"]["total"] >= result["timing_ms"]["paper_worker"]
+
+    asyncio.run(exercise())
+
+
+def test_cancelled_scan_keeps_transaction_guard_until_worker_finishes(monkeypatch):
+    from src.modules.xau import paper
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    async def snapshot(**kwargs):
+        return {}
+
+    def transaction(*args):
+        entered.set()
+        try:
+            assert release.wait(3)
+            return {"status": "ok", "execution_allowed": False}
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(paper, "get_xau_snapshot", snapshot)
+    monkeypatch.setattr(paper, "get_macro_context", snapshot)
+    first = XAUPaperTradingEngine(Settings(xau_paper_enabled=True))
+    second = XAUPaperTradingEngine(Settings(xau_paper_enabled=True))
+    monkeypatch.setattr(first, "_scan_sync", transaction)
+    monkeypatch.setattr(second, "_scan_sync", lambda *args: {"status": "ok"})
+
+    async def exercise():
+        pending = asyncio.create_task(first.scan())
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            result = await second.scan()
+            assert result["status"] == "busy"
+            assert result["execution_allowed"] is False
+        finally:
+            release.set()
+            assert await asyncio.to_thread(finished.wait, 2)
+
+    asyncio.run(exercise())
+    # asyncio.run drains its executor, so the first worker has released the guard.
+    assert asyncio.run(second.scan())["status"] == "ok"
+
+
+def test_scan_guard_is_released_after_database_failure(monkeypatch):
+    engine = XAUPaperTradingEngine()
+
+    def fail(*args):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(engine, "_scan_sync", fail)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        engine._scan_serialized({}, {}, None)
+    monkeypatch.setattr(engine, "_scan_sync", lambda *args: {"status": "ok"})
+    assert engine._scan_serialized({}, {}, None)["status"] == "ok"
+
+
+def test_worker_session_commits_paper_state_and_remains_readable(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from src.modules.xau import paper
+    from src.platform.persistence.database import Base
+
+    sql_engine = create_engine(f"sqlite:///{tmp_path / 'paper.db'}")
+    Base.metadata.create_all(sql_engine)
+    factory = sessionmaker(bind=sql_engine)
+    owner_thread = threading.get_ident()
+    session_threads = []
+
+    def open_session():
+        session_threads.append(threading.get_ident())
+        assert threading.get_ident() != owner_thread
+        return factory()
+
+    async def snapshot(**kwargs):
+        return {"blocked": True, "candidate": "none", "frames": {}}
+
+    monkeypatch.setattr(paper, "open_xau_paper_session", open_session)
+    monkeypatch.setattr(paper, "open_xau_replay_session", open_session)
+    monkeypatch.setattr(paper, "get_xau_snapshot", snapshot)
+    monkeypatch.setattr(paper, "get_macro_context", snapshot)
+    engine = XAUPaperTradingEngine(Settings(xau_paper_enabled=True))
+
+    async def exercise():
+        result = await engine.scan()
+        assert result["status"] == "ok"
+        assert result["opened"] is False
+        assert result["execution_allowed"] is False
+        eligibility = await engine.eligibility()
+        assert eligibility["eligible"] is False
+        summary = await asyncio.to_thread(engine.summary)
+        assert summary["account"]["week_key"] == result["week_key"]
+        assert summary["position"] is None
+
+    try:
+        asyncio.run(exercise())
+        assert session_threads
+    finally:
+        sql_engine.dispose()
 
 
 def test_long_and_short_use_conservative_bid_ask_fills():

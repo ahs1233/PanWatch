@@ -50,7 +50,7 @@ async def terminal(force: bool = Query(default=False)):
 
 
 @router.get("/paper/summary")
-async def paper_summary(
+def paper_summary(
     trade_limit: int = Query(default=30, ge=1, le=200),
     signal_limit: int = Query(default=30, ge=1, le=200),
 ):
@@ -68,7 +68,7 @@ async def paper_scan():
 
 
 @router.get("/paper/weeks")
-async def paper_weeks(
+def paper_weeks(
     limit: int = Query(default=12, ge=1, le=52),
 ):
     return {
