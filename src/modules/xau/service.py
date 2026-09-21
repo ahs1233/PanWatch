@@ -17,6 +17,7 @@ from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.platform.ai.ai_client import AIClient
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.marketdata.xau_models import XAUTimeframe
+from src.platform.marketdata.xau_micro_reference import XAUSIntradayReferenceProvider
 from src.platform.marketdata.xau_research_provider import YahooGoldResearchProvider
 from src.platform.marketdata.xau_spot_reference import CompositeXAUIndicativeSpotProvider
 from src.platform.runtime.config import Settings
@@ -25,12 +26,15 @@ logger = logging.getLogger(__name__)
 
 _BARS_TTL = 45.0
 _SPOT_TTL = 55.0
+_MICRO_TTL = 55.0
 _MACRO_TTL = 300.0
 _bars_cache = None
 _spot_cache = None
+_micro_cache = None
 _macro_cache = None
 _bars_lock = asyncio.Lock()
 _spot_lock = asyncio.Lock()
+_micro_lock = asyncio.Lock()
 _macro_lock = asyncio.Lock()
 
 
@@ -98,9 +102,92 @@ async def get_indicative_spot(force: bool = False) -> dict[str, Any]:
         return data
 
 
+def _ema_values(values: list[float], period: int) -> float:
+    if not values:
+        return 0.0
+    period = max(1, min(period, len(values)))
+    seed = sum(values[:period]) / period
+    multiplier = 2.0 / (period + 1.0)
+    current = seed
+    for value in values[period:]:
+        current = (value - current) * multiplier + current
+    return current
+
+
+def _return_pct(points, minutes: int) -> float | None:
+    if len(points) < 2:
+        return None
+    latest = points[-1]
+    target = latest.timestamp.timestamp() - minutes * 60
+    base = points[0]
+    for point in points:
+        if point.timestamp.timestamp() <= target:
+            base = point
+        else:
+            break
+    if base.price <= 0:
+        return None
+    return ((latest.price - base.price) / base.price) * 100.0
+
+
+async def get_micro_context(force: bool = False) -> dict[str, Any]:
+    global _micro_cache
+    now = time.monotonic()
+    if not force and _micro_cache and now - _micro_cache[0] < _MICRO_TTL:
+        return _micro_cache[1]
+
+    async with _micro_lock:
+        now = time.monotonic()
+        if not force and _micro_cache and now - _micro_cache[0] < _MICRO_TTL:
+            return _micro_cache[1]
+
+        provider = XAUSIntradayReferenceProvider()
+        series = await asyncio.to_thread(provider.fetch, hours=2)
+        prices = [point.price for point in series.points]
+        latest = series.points[-1]
+
+        fast = _ema_values(prices, 5)
+        slow = _ema_values(prices, 10)
+        ret10 = _return_pct(series.points, 10)
+        ret30 = _return_pct(series.points, 30)
+
+        direction = "neutral"
+        if len(prices) >= 10 and ret10 is not None:
+            if latest.price > fast > slow and ret10 > 0:
+                direction = "bullish"
+            elif latest.price < fast < slow and ret10 < 0:
+                direction = "bearish"
+
+        recent = prices[-15:] if len(prices) >= 15 else prices
+        status = "ready" if len(prices) >= 10 and not series.is_stale else "blocked"
+        data = {
+            "status": status,
+            "direction": direction,
+            "price": latest.price,
+            "ema_fast": fast,
+            "ema_slow": slow,
+            "return_10m_pct": ret10,
+            "return_30m_pct": ret30,
+            "recent_high": max(recent) if recent else None,
+            "recent_low": min(recent) if recent else None,
+            "point_count": len(prices),
+            "observed_at": series.observed_at.isoformat(),
+            "last_point_at": latest.timestamp.isoformat(),
+            "age_seconds": series.age_seconds,
+            "coverage_seconds": series.coverage_seconds,
+            "source": series.source,
+            "is_stale": series.is_stale,
+            "indicative": True,
+            "execution_eligible": False,
+        }
+        _micro_cache = (time.monotonic(), data)
+        return data
+
+
 async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     bars_task = asyncio.create_task(get_research_bars(force=force))
     spot_task = asyncio.create_task(get_indicative_spot(force=force))
+    micro_task = asyncio.create_task(get_micro_context(force=force))
 
     bars = await bars_task
     spot = None
@@ -109,6 +196,14 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         spot = await spot_task
     except Exception as exc:
         spot_error = type(exc).__name__
+
+    micro = None
+    micro_error = None
+    try:
+        micro = await micro_task
+    except Exception as exc:
+        micro_error = type(exc).__name__
+
     assessment = XAUIntradayEngine(require_execution_data=False).analyze(
         bars,
         now=datetime.now(timezone.utc),
@@ -137,7 +232,59 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     if len(m1) >= 2 and m1[-2].close:
         change_pct = ((m1[-1].close - m1[-2].close) / m1[-2].close) * 100.0
 
-    directions = [item.get("direction") for item in frames.values()]
+    raw_block_reasons = list(assessment.block_reasons)
+    one_minute_proxy_reasons = {
+        "stale_1m_bars",
+        "insufficient_1m_bars",
+    }
+    remaining_reasons = [
+        reason for reason in raw_block_reasons
+        if reason not in one_minute_proxy_reasons
+    ]
+    micro_can_replace_1m = bool(
+        micro
+        and micro.get("status") == "ready"
+        and not micro.get("is_stale")
+        and any(reason in one_minute_proxy_reasons for reason in raw_block_reasons)
+    )
+
+    terminal_blocked = assessment.blocked
+    terminal_status = assessment.status
+    terminal_candidate = assessment.candidate
+    technical_mode = "gc_proxy_1m_5m_15m"
+
+    if micro_can_replace_1m:
+        terminal_blocked = bool(remaining_reasons)
+        terminal_status = "blocked" if terminal_blocked else "ready_with_spot_micro"
+        technical_mode = "spot_micro_plus_gc_5m_15m"
+        terminal_candidate = "none"
+
+        five = frames.get("5m")
+        fifteen = frames.get("15m")
+        micro_direction = str(micro.get("direction") or "neutral")
+        if not terminal_blocked and five and fifteen:
+            if (
+                five.get("direction") == "bullish"
+                and fifteen.get("direction") == "bullish"
+                and micro_direction != "bearish"
+            ):
+                terminal_candidate = "long_setup"
+            elif (
+                five.get("direction") == "bearish"
+                and fifteen.get("direction") == "bearish"
+                and micro_direction != "bullish"
+            ):
+                terminal_candidate = "short_setup"
+
+    if micro_can_replace_1m:
+        directions = [
+            str(micro.get("direction") or "neutral"),
+            str((frames.get("5m") or {}).get("direction") or "neutral"),
+            str((frames.get("15m") or {}).get("direction") or "neutral"),
+        ]
+    else:
+        directions = [item.get("direction") for item in frames.values()]
+
     bullish = sum(1 for item in directions if item == "bullish")
     bearish = sum(1 for item in directions if item == "bearish")
     alignment = "bullish" if bullish >= 2 else "bearish" if bearish >= 2 else "mixed"
@@ -155,6 +302,12 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     )
 
     warnings = list(assessment.warnings)
+    if micro_can_replace_1m:
+        warnings.append("gc_1m_stale_replaced_by_live_spot_micro")
+    elif micro_error:
+        warnings.append("spot_micro_unavailable")
+    elif micro and micro.get("is_stale"):
+        warnings.append("spot_micro_stale")
     if spot_error:
         warnings.append("indicative_spot_unavailable")
     elif spot and spot.get("is_stale"):
@@ -171,14 +324,18 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "price": proxy_price,
         "indicative_spot": spot,
         "indicative_spot_error": spot_error,
+        "micro": micro,
+        "micro_error": micro_error,
+        "technical_mode": technical_mode,
         "spot_minus_proxy": basis,
         "spot_minus_proxy_bps": basis_bps,
         "change_pct_1m": change_pct,
         "observed_at": latest.get("observed_at"),
-        "status": assessment.status,
-        "candidate": assessment.candidate,
-        "blocked": assessment.blocked,
-        "block_reasons": list(assessment.block_reasons),
+        "status": terminal_status,
+        "candidate": terminal_candidate,
+        "blocked": terminal_blocked,
+        "block_reasons": remaining_reasons if micro_can_replace_1m else raw_block_reasons,
+        "raw_proxy_block_reasons": raw_block_reasons,
         "warnings": warnings,
         "alignment": alignment,
         "atr_reference": assessment.atr_reference,
