@@ -839,12 +839,14 @@ def test_reversal_exit_requires_two_consecutive_confirmations():
         "setup-1",
         _qualified_reversal_management(),
         streaks,
+        observation_id="obs-1",
         required=2,
     )
     second = _confirm_reversal_exit(
         "setup-1",
         _qualified_reversal_management(),
         streaks,
+        observation_id="obs-2",
         required=2,
     )
 
@@ -910,3 +912,38 @@ def test_reversal_confirmation_resets_when_fill_quote_disappears():
 
     assert missing is None
     assert "setup-1" not in streaks
+
+
+
+def test_reversal_confirmation_does_not_double_count_same_market_observation():
+    streaks = {}
+    first = _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        observation_id="micro-tick-100",
+        required=2,
+    )
+    duplicate = _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        observation_id="micro-tick-100",
+        required=2,
+    )
+    fresh = _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        observation_id="micro-tick-101",
+        required=2,
+    )
+
+    assert first["confirmation_streak"] == 1
+    assert first["exit_requested"] is False
+    assert duplicate["confirmation_streak"] == 1
+    assert duplicate["exit_requested"] is False
+    assert duplicate["confirmation_observation_reused"] is True
+    assert duplicate["reason"] == "opposite_thesis_waiting_new_observation"
+    assert fresh["confirmation_streak"] == 2
+    assert fresh["exit_requested"] is True
