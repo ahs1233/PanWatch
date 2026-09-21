@@ -29,6 +29,8 @@ from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
 
+PAPER_ENGINE_VERSION = "0.3.0"
+
 
 def _utc_naive(now: datetime | None = None) -> datetime:
     value = now or datetime.now(timezone.utc)
@@ -322,6 +324,14 @@ class XAUPaperTradingEngine:
         risk = float(position.risk_usd or 0.0)
         r_multiple = (pnl / risk) if risk > 0 else 0.0
 
+        trade_meta = dict(meta or {})
+        trade_meta.setdefault("engine_version", PAPER_ENGINE_VERSION)
+        if position.opened_at:
+            trade_meta["holding_minutes"] = round(
+                _position_age_minutes(position.opened_at, now_utc),
+                2,
+            )
+
         trade = XAUPaperTrade(
             account_id=account.id,
             setup_key=position.setup_key,
@@ -343,7 +353,7 @@ class XAUPaperTradingEngine:
             price_source=position.price_source,
             opened_at=position.opened_at,
             closed_at=now_utc,
-            meta=meta or {},
+            meta=trade_meta,
         )
         db.add(trade)
 
@@ -552,13 +562,54 @@ class XAUPaperTradingEngine:
             rejection_reason=rejection_reason,
             observed_at=now_utc,
             meta={
+                "engine_version": PAPER_ENGINE_VERSION,
                 "technical_mode": technical.get("technical_mode"),
                 "alignment": technical.get("alignment"),
+                "atr_reference": technical.get("atr_reference"),
+                "swing_high_reference": technical.get("swing_high_reference"),
+                "swing_low_reference": technical.get("swing_low_reference"),
+                "frames": {
+                    name: {
+                        key: frame.get(key)
+                        for key in (
+                            "direction",
+                            "close",
+                            "ema_fast",
+                            "ema_slow",
+                            "rsi14",
+                            "atr14",
+                            "breakout",
+                            "observed_at",
+                            "source",
+                        )
+                    }
+                    for name, frame in (technical.get("frames") or {}).items()
+                    if isinstance(frame, dict)
+                },
+                "micro": {
+                    key: (technical.get("micro") or {}).get(key)
+                    for key in (
+                        "direction",
+                        "price",
+                        "return_10m_pct",
+                        "return_30m_pct",
+                        "age_seconds",
+                        "source",
+                    )
+                },
                 "macro_bias": macro.get("bias"),
                 "macro_confidence": macro.get("confidence"),
+                "macro_relation": fusion.get("macro_relation"),
                 "fusion_reasons": fusion.get("reasons") or [],
-                "spot_source": spot.get("source"),
-                "spot_stale": spot.get("is_stale"),
+                "spot": {
+                    "price": spot.get("price"),
+                    "bid": spot.get("bid"),
+                    "ask": spot.get("ask"),
+                    "spread_bps": _spot_spread_bps(spot),
+                    "source": spot.get("source"),
+                    "age_seconds": spot.get("age_seconds"),
+                    "is_stale": spot.get("is_stale"),
+                },
                 "execution_allowed": False,
             },
         )
@@ -566,6 +617,14 @@ class XAUPaperTradingEngine:
             with db.begin_nested():
                 db.add(signal)
                 db.flush()
+            logger.info(
+                "[XAU paper] setup candidate=%s state=%s accepted=%s reason=%s price=%s",
+                signal.candidate,
+                signal.fusion_state,
+                signal.accepted,
+                signal.rejection_reason or "accepted",
+                signal.price,
+            )
             return signal
         except IntegrityError:
             return (
@@ -870,6 +929,7 @@ class XAUPaperTradingEngine:
     def public_settings(self) -> dict:
         return {
             "enabled": self.settings.xau_paper_enabled,
+            "engine_version": PAPER_ENGINE_VERSION,
             "initial_capital": self.settings.xau_paper_initial_capital,
             "risk_pct": self.settings.xau_paper_risk_pct,
             "reward_risk": self.settings.xau_paper_reward_risk,
