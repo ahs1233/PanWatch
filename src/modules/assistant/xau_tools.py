@@ -203,8 +203,9 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
         title="XAU weekly paper league",
         description=(
             "Read the current $10k weekly XAU/USD paper-trading account, open "
-            "position, closed trades, MFE/MAE, R multiples and setup audit trail. "
-            "This tool is simulation-only and can never route a live order."
+            "position, closed trades, MFE/MAE, R multiples, setup audit trail, "
+            "spread guard and max-hold rules. This tool is simulation-only and "
+            "can never route a live order."
         ),
         risk=ToolRisk.READ,
         confirmation_required=False,
