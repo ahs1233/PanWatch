@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import sys
 import time
 from contextlib import asynccontextmanager
 
@@ -169,7 +170,9 @@ def setup_logging():
                 pass
 
     # 控制台输出: 按 LOG_LEVEL 过滤,且丢弃三方库的低级别噪音
-    console = logging.StreamHandler()
+    # Railway classifies stderr as error-level transport output even for INFO records.
+    # Keep application INFO/DEBUG on stdout; WARNING/ERROR retain their Python level.
+    console = logging.StreamHandler(sys.stdout)
     console._panwatch_console = True  # type: ignore[attr-defined]
     console.setLevel(console_level)
     console.addFilter(_ConsoleNoiseFilter())
