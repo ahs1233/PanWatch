@@ -101,6 +101,17 @@ interface PaperPerformance {
   average_loss_r: number
 }
 
+interface PaperWeekHistory extends PaperAccount {
+  return_pct: number
+  win_rate: number
+  performance: PaperPerformance
+}
+
+interface PaperWeeksResponse {
+  weeks: PaperWeekHistory[]
+  execution_allowed: boolean
+}
+
 interface PaperSummary {
   account: PaperAccount | null
   position: PaperPosition | null
@@ -142,15 +153,22 @@ export default function PaperTradingPage() {
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState('')
+  const [weeks, setWeeks] = useState<PaperWeekHistory[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const result = await fetchAPI<PaperSummary>('/xau/paper/summary?trade_limit=50&signal_limit=50', {
-        timeoutMs: 30000,
-      })
+      const [result, history] = await Promise.all([
+        fetchAPI<PaperSummary>('/xau/paper/summary?trade_limit=50&signal_limit=50', {
+          timeoutMs: 30000,
+        }),
+        fetchAPI<PaperWeeksResponse>('/xau/paper/weeks?limit=12', {
+          timeoutMs: 30000,
+        }),
+      ])
       setData(result)
+      setWeeks(history.weeks || [])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Paper league unavailable')
     } finally {
@@ -426,6 +444,55 @@ export default function PaperTradingPage() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="card mb-4 p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-[14px] font-semibold">Weekly history</h2>
+          <span className="text-[10px] text-muted-foreground">Last {weeks.length || 0} league weeks</span>
+        </div>
+        {!weeks.length ? (
+          <div className="rounded-xl bg-accent/30 p-5 text-center text-[12px] text-muted-foreground">
+            Weekly history will build automatically as each Baghdad-time week closes.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[820px] text-[11px]">
+              <thead className="text-left text-muted-foreground">
+                <tr className="border-b border-border/60">
+                  <th className="pb-2 pr-3">Week</th>
+                  <th className="pb-2 pr-3">Equity</th>
+                  <th className="pb-2 pr-3">Return</th>
+                  <th className="pb-2 pr-3">Trades</th>
+                  <th className="pb-2 pr-3">Win rate</th>
+                  <th className="pb-2 pr-3">Expectancy</th>
+                  <th className="pb-2 pr-3">Profit factor</th>
+                  <th className="pb-2">Max DD</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weeks.map((week) => (
+                  <tr key={week.id} className="border-b border-border/40">
+                    <td className="py-3 pr-3 font-semibold">{week.week_key}</td>
+                    <td className="py-3 pr-3 font-mono">{money(week.current_equity)}</td>
+                    <td className={`py-3 pr-3 font-mono font-semibold ${week.return_pct >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {week.return_pct >= 0 ? '+' : ''}{num(week.return_pct, 2)}%
+                    </td>
+                    <td className="py-3 pr-3">{week.total_trades}</td>
+                    <td className="py-3 pr-3">{num(week.win_rate, 1)}%</td>
+                    <td className={`py-3 pr-3 font-mono ${week.performance.expectancy_r >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {num(week.performance.expectancy_r, 2)}R
+                    </td>
+                    <td className="py-3 pr-3 font-mono">
+                      {week.performance.profit_factor == null ? '--' : num(week.performance.profit_factor, 2)}
+                    </td>
+                    <td className="py-3 font-mono text-amber-500">{num(week.max_drawdown_pct, 2)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="card p-4">
