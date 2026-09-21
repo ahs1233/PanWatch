@@ -80,6 +80,8 @@ def _number(value, default=None):
 _TRANSIENT_SIGNAL_REJECTIONS = frozenset({
     "bid_ask_unavailable",
     "indicative_spot_stale",
+    "market_closed_or_rollover",
+    "stale_bid_ask",
     "spread_too_wide",
 })
 
@@ -117,6 +119,11 @@ def _entry_gate_reason(
         if market_state in {"closed", "market_closed", "maintenance", "rollover"}:
             return False, "market_closed_rollover"
 
+    fill_state = str(spot.get("fill_state") or "")
+    if fill_state == "market_closed_or_rollover":
+        return False, "market_closed_or_rollover"
+    if fill_state == "stale_bid_ask":
+        return False, "stale_bid_ask"
     if bool(spot.get("is_stale")):
         return False, "indicative_spot_stale"
     if _number(spot.get("bid")) is None or _number(spot.get("ask")) is None:
