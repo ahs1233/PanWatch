@@ -452,6 +452,7 @@ def test_shadow_memory_needs_enough_samples_before_affecting_confidence():
                 "positive_rate": 1.0,
                 "similarity_weighted_return_bps": 20.0,
                 "average_similarity": 0.9,
+                "decision_filtered": True,
                 "research_only": True,
             },
         },
@@ -472,6 +473,7 @@ def test_shadow_memory_is_bounded_research_prior_not_trade_calibration():
                 "positive_rate": 1.0,
                 "similarity_weighted_return_bps": 50.0,
                 "average_similarity": 1.0,
+                "decision_filtered": True,
                 "research_only": True,
             },
         },
@@ -548,3 +550,47 @@ def test_combined_research_priors_are_clamped():
         },
     )
     assert state["memory"]["research_confidence_adjustment"] <= 0.02
+
+
+
+def test_shadow_prior_ignores_return_magnitude_and_uses_direction_only():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 0,
+            "similar_samples": 0,
+            "calibration_sample_count": 0,
+            "shadow_memory": {
+                "sample_count": 40,
+                "positive_rate": 1.0,
+                "similarity_weighted_return_bps": -999.0,
+                "average_similarity": 1.0,
+                "decision_filtered": True,
+                "research_only": True,
+            },
+        },
+    )
+    memory = state["memory"]
+    assert memory["shadow_confidence_adjustment"] == 0.008
+    assert memory["trade_confidence_adjustment"] == 0.0
+
+
+def test_unfiltered_shadow_memory_never_affects_confidence():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 0,
+            "similar_samples": 0,
+            "shadow_memory": {
+                "sample_count": 100,
+                "positive_rate": 1.0,
+                "similarity_weighted_return_bps": 1000.0,
+                "average_similarity": 1.0,
+                "decision_filtered": False,
+                "research_only": True,
+            },
+        },
+    )
+    assert state["memory"]["shadow_confidence_adjustment"] == 0.0
