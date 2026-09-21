@@ -164,7 +164,8 @@ function EquityCurve({
     equity += trade.pnl
     values.push(equity)
   }
-  if (Math.abs((values.at(-1) || initialCapital) - currentEquity) > 0.005) {
+  const latestClosedEquity = values[values.length - 1] || initialCapital
+  if (Math.abs(latestClosedEquity - currentEquity) > 0.005) {
     values.push(currentEquity)
   }
 
