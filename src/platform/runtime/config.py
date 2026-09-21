@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     xau_paper_max_leverage: float = Field(default=1.0, ge=0.1, le=100.0)
     xau_paper_scan_seconds: int = Field(default=60, ge=30, le=3600)
     xau_paper_timezone: str = "Asia/Baghdad"
+    xau_paper_database_url: str = ""
 
     # Telegram
     notify_telegram_bot_token: str = ""
