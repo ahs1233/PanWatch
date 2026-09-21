@@ -57,7 +57,13 @@ class Settings(BaseSettings):
     xau_paper_max_leverage: float = Field(default=1.0, ge=0.1, le=100.0)
     xau_paper_max_spread_bps: float = Field(default=3.0, gt=0.0, le=100.0)
     xau_paper_max_hold_minutes: int = Field(default=240, ge=15, le=1440)
-    xau_paper_scan_seconds: int = Field(default=60, ge=30, le=3600)
+    # Multi-speed XAU runtime. Fast deterministic cognition stays in the hot path;
+    # macro/LLM context is cached separately in the slow path.
+    xau_fast_scan_seconds: int = Field(default=10, ge=5, le=60)
+    xau_cognition_enabled: bool = True
+    xau_cognition_min_confidence: float = Field(default=0.58, ge=0.50, le=0.90)
+
+    xau_paper_scan_seconds: int = Field(default=15, ge=5, le=3600)
     xau_paper_timezone: str = "Asia/Baghdad"
     xau_paper_database_url: str = ""
 
