@@ -17,7 +17,11 @@ from pan_agent_tool_research import (
     ToolDescriptor,
 )
 
-from src.modules.xau.service import get_xau_snapshot
+from src.modules.xau.service import (
+    build_decision_fusion,
+    get_macro_context,
+    get_xau_snapshot,
+)
 
 
 def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
@@ -93,6 +97,70 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
     )
     registry.register(spec, get_xau_intraday_research)
 
+    async def get_xau_decision_fusion(
+        _request: RunRequest,
+        _arguments: dict,
+    ) -> ToolResult:
+        try:
+            technical = await get_xau_snapshot(force=False)
+            macro = await get_macro_context(force=False)
+            fusion = build_decision_fusion(technical, macro)
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult.failure(
+                summary=f"XAU decision fusion unavailable: {type(exc).__name__}",
+                error_code="xau_decision_fusion_unavailable",
+            )
+
+        summary = (
+            "XAUUSD decision fusion: "
+            f"state={fusion.get('state')}; "
+            f"technical={fusion.get('technical_candidate')}; "
+            f"macro_relation={fusion.get('macro_relation')}; "
+            f"event_risk={fusion.get('event_risk')}; "
+            f"execution={fusion.get('execution_status')}. "
+            "This is a research state, not an execution instruction."
+        )
+        return ToolResult.success(
+            summary=summary,
+            data={
+                "fusion": fusion,
+                "technical": technical,
+                "macro": macro,
+                "execution_eligible": False,
+            },
+            sources=[
+                {
+                    "name": "XAUS live spot and sampled intraday series",
+                    "url": "https://xaus.com/api/",
+                },
+                {
+                    "name": "goldprice.dev indicative XAU/USD spot reference",
+                    "url": "https://goldprice.dev/docs",
+                },
+            ],
+            observed_at=datetime.now(timezone.utc),
+        )
+
+    fusion_spec = ToolSpec(
+        name="get_xau_decision_fusion",
+        title="XAU full decision fusion",
+        description=(
+            "Combine the current XAU/USD technical research state with current macro "
+            "research and explicit event/data gates. Returns support/conflict/neutral "
+            "relationship and a deterministic research state without arbitrary scoring. "
+            "Execution is always locked unless a separate tradable broker feed is added."
+        ),
+        risk=ToolRisk.READ,
+        confirmation_required=False,
+        exposure=ToolExposure.DEFERRED,
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    )
+    registry.register(fusion_spec, get_xau_decision_fusion)
+
     return [
         ToolDescriptor(
             tool_name=spec.name,
@@ -134,5 +202,43 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
             risk=ToolRisk.READ,
             confirmation_required=False,
             implementation_version="xau-research-0.2",
+        ),
+        ToolDescriptor(
+            tool_name=fusion_spec.name,
+            title=fusion_spec.title,
+            summary=(
+                "Full XAU research fusion across live technical structure, macro "
+                "context and explicit data/event gates; research-only."
+            ),
+            use_cases=[
+                "full gold analysis",
+                "XAUUSD macro technical fusion",
+                "gold trade research",
+                "event risk check",
+            ],
+            keywords=[
+                "XAUUSD",
+                "gold",
+                "macro",
+                "event risk",
+                "fusion",
+                "decision",
+                "technical",
+            ],
+            aliases=["xau fusion", "gold full analysis", "xau decision"],
+            domain="market_research",
+            capabilities=[
+                "xau_decision_fusion",
+                "macro_context",
+                "event_gate",
+                "technical_analysis",
+                "research_only",
+            ],
+            data_freshness=ToolDataFreshness.NEAR_REAL_TIME,
+            estimated_latency_ms=12_000,
+            output_summary="Research-only XAU technical + macro decision fusion.",
+            risk=ToolRisk.READ,
+            confirmation_required=False,
+            implementation_version="xau-fusion-0.1",
         )
     ]
