@@ -1459,12 +1459,32 @@ async def trigger_agent_for_stock(
 
 
 async def verify_runtime_integrations() -> None:
-    """Run one harmless startup smoke test for configured AI + external research.
+    """Run an opt-in harmless startup smoke test for AI + external research.
 
-    The probe never logs API keys or bearer tokens. Failures are reported but do
-    not block PanWatch startup.
+    Enable with RUNTIME_SMOKE_TEST=true. The probe never logs API keys or bearer
+    tokens and failures do not block PanWatch startup.
     """
+    if os.environ.get("RUNTIME_SMOKE_TEST", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+
     settings = Settings()
+
+    db = SessionLocal()
+    try:
+        default_model = db.query(AIModel).filter(AIModel.is_default == True).first()
+        default_service = (
+            db.query(AIService).filter(AIService.id == default_model.service_id).first()
+            if default_model
+            else None
+        )
+        logger.info(
+            "[runtime-smoke] Default AI persisted=%s service=%s model=%s",
+            bool(default_model and default_service),
+            default_service.name if default_service else "",
+            default_model.model if default_model else "",
+        )
+    finally:
+        db.close()
 
     if settings.ai_api_key:
         try:
@@ -1485,6 +1505,37 @@ async def verify_runtime_integrations() -> None:
                 "[runtime-smoke] AI ok model=%s reply_ok=%s",
                 settings.ai_model,
                 reply.strip().upper() == "OK",
+            )
+
+            probe_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "runtime_probe",
+                        "description": "Connectivity probe. Always call this function when requested.",
+                        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                    },
+                }
+            ]
+            final_message = None
+            async for event_type, payload in ai.chat_stream(
+                [
+                    {
+                        "role": "user",
+                        "content": "You must call the runtime_probe function now. Do not answer with normal text.",
+                    }
+                ],
+                tools=probe_tools,
+                temperature=0,
+                tool_choice="auto",
+            ):
+                if event_type == "message":
+                    final_message = payload
+            tool_calls = (final_message or {}).get("tool_calls") or []
+            logger.info(
+                "[runtime-smoke] AI streaming tool_call_ok=%s tool_name=%s",
+                bool(tool_calls),
+                tool_calls[0].get("name", "") if tool_calls else "",
             )
         except Exception as exc:
             logger.error(
