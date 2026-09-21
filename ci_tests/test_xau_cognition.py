@@ -698,3 +698,84 @@ def test_market_state_tags_structural_source_family():
 
     assert spot_vector["source_family"] == "xau_spot_structure"
     assert futures_vector["source_family"] == "gc_futures_proxy"
+
+
+
+def test_realized_trade_evidence_outranks_conflicting_research_prior():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 40,
+            "similar_samples": 40,
+            "expectancy_r": 0.9,
+            "profit_factor": 2.2,
+            "posterior_win_probability": 0.68,
+            "calibration_sample_count": 40,
+            "brier_score": 0.16,
+            "expected_calibration_error": 0.06,
+            "shadow_memory": {
+                "sample_count": 40,
+                "positive_rate": 0.0,
+                "average_similarity": 0.90,
+                "decision_filtered": True,
+                "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
+            },
+            "replay_memory": {
+                "sample_count": 40,
+                "positive_rate": 0.0,
+                "similarity_weighted_return_bps": -25.0,
+                "average_similarity": 0.90,
+                "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
+            },
+        },
+    )
+
+    memory = state["memory"]
+    assert memory["trade_confidence_adjustment"] > 0
+    assert memory["research_confidence_adjustment"] < 0
+    assert memory["trade_research_conflict"] is True
+    assert abs(memory["research_confidence_adjustment"]) < abs(
+        memory["trade_confidence_adjustment"]
+    )
+    assert memory["confidence_adjustment"] > 0
+
+
+def test_research_prior_can_still_inform_when_live_trade_history_is_sparse():
+    state = build_cognitive_state(
+        _technical(),
+        {"bias": -1, "confidence": 0.7, "event_risk": False},
+        memory={
+            "trade_count": 4,
+            "similar_samples": 4,
+            "expectancy_r": 0.4,
+            "profit_factor": 1.4,
+            "calibration_sample_count": 4,
+            "shadow_memory": {
+                "sample_count": 40,
+                "positive_rate": 0.0,
+                "average_similarity": 0.90,
+                "decision_filtered": True,
+                "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
+            },
+            "replay_memory": {
+                "sample_count": 40,
+                "positive_rate": 0.0,
+                "similarity_weighted_return_bps": -25.0,
+                "average_similarity": 0.90,
+                "research_only": True,
+                "lookahead_protected": True,
+                "temporally_decorrelated": True,
+            },
+        },
+    )
+
+    memory = state["memory"]
+    assert memory["trade_research_conflict"] is False
+    assert memory["research_confidence_adjustment"] < 0
