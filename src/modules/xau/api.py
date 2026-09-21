@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
+from .paper import XAUPaperTradingEngine
 from .service import build_decision_fusion, get_macro_context, get_xau_snapshot
 
 router = APIRouter()
@@ -45,3 +46,21 @@ async def terminal(force: bool = Query(default=False)):
     macro_context = await get_macro_context(force=force)
     fusion = build_decision_fusion(technical, macro_context)
     return {"technical": technical, "macro": macro_context, "fusion": fusion}
+
+
+
+@router.get("/paper/summary")
+async def paper_summary(
+    trade_limit: int = Query(default=30, ge=1, le=200),
+    signal_limit: int = Query(default=30, ge=1, le=200),
+):
+    return XAUPaperTradingEngine().summary(
+        trade_limit=trade_limit,
+        signal_limit=signal_limit,
+    )
+
+
+@router.post("/paper/scan")
+async def paper_scan():
+    """Run one paper-only scan. Never routes a live order."""
+    return await XAUPaperTradingEngine().scan()
