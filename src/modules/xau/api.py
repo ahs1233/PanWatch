@@ -32,7 +32,7 @@ async def terminal(force: bool = Query(default=False)):
             "instrument": "XAUUSD",
             "research_only": True,
             "execution_feed_connected": False,
-            "execution_status": "LOCKED_NO_SPOT_FEED",
+            "execution_status": "LOCKED_NO_TRADABLE_SPOT_FEED",
             "status": "unavailable",
             "candidate": "none",
             "blocked": True,
