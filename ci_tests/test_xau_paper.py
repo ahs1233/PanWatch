@@ -711,3 +711,22 @@ def test_weekly_reset_never_manufactures_mid_only_or_stale_fill():
         "short",
         {"price": 4340.0, "bid": 4339.9, "ask": 4340.1, "is_stale": False},
     ) == 4340.1
+
+
+
+def test_entry_gate_reports_market_rollover_explicitly():
+    allowed, reason = _entry_gate_reason(
+        candidate="long_setup",
+        fusion_state="setup_macro_support",
+        spot={
+            "price": 4350.0,
+            "bid": None,
+            "ask": None,
+            "is_stale": False,
+            "fill_state": "market_closed_or_rollover",
+        },
+        has_open_position=False,
+        max_spread_bps=3.0,
+    )
+    assert allowed is False
+    assert reason == "market_closed_or_rollover"
