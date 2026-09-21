@@ -338,17 +338,90 @@ class XAUPaperTradingEngine:
             query = query.filter(XAUPaperPosition.account_id == account_id)
         return query.order_by(XAUPaperPosition.id.desc()).first()
 
-    def _memory_snapshot(self, db, account_id: int) -> dict:
-        """Closed-trade memory used to calibrate the cognitive layer online."""
-        trades = (
+    def _memory_snapshot(
+        self,
+        db,
+        technical: dict,
+        macro: dict,
+    ) -> dict:
+        """Retrieve similar historical paper setups, then fall back to global memory."""
+        candidate = str(technical.get("candidate") or "none")
+        alignment = str(technical.get("alignment") or "mixed")
+        micro_direction = str((technical.get("micro") or {}).get("direction") or "neutral")
+        frames = technical.get("frames") or {}
+        five_direction = str((frames.get("5m") or {}).get("direction") or "neutral")
+        fifteen_direction = str((frames.get("15m") or {}).get("direction") or "neutral")
+        try:
+            macro_bias = max(-1, min(1, int(macro.get("bias", 0))))
+        except (TypeError, ValueError):
+            macro_bias = 0
+
+        signals = (
+            db.query(XAUPaperSignal)
+            .filter(
+                XAUPaperSignal.accepted == True,  # noqa: E712
+                XAUPaperSignal.candidate == candidate,
+            )
+            .order_by(XAUPaperSignal.observed_at.desc(), XAUPaperSignal.id.desc())
+            .limit(200)
+            .all()
+        )
+
+        scored: list[tuple[int, XAUPaperSignal]] = []
+        for signal in signals:
+            meta = signal.meta or {}
+            score = 0
+            if str(meta.get("alignment") or "") == alignment:
+                score += 3
+            saved_micro = meta.get("micro") or {}
+            if str(saved_micro.get("direction") or "") == micro_direction:
+                score += 2
+            saved_frames = meta.get("frames") or {}
+            if str((saved_frames.get("5m") or {}).get("direction") or "") == five_direction:
+                score += 2
+            if str((saved_frames.get("15m") or {}).get("direction") or "") == fifteen_direction:
+                score += 2
+            try:
+                saved_macro = max(-1, min(1, int(meta.get("macro_bias", 0))))
+            except (TypeError, ValueError):
+                saved_macro = 0
+            if saved_macro == macro_bias:
+                score += 1
+            scored.append((score, signal))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        similar_signals = [signal for score, signal in scored[:40] if score >= 5]
+        setup_keys = [signal.setup_key for signal in similar_signals]
+
+        similar_trades = []
+        if setup_keys:
+            similar_trades = (
+                db.query(XAUPaperTrade)
+                .filter(XAUPaperTrade.setup_key.in_(setup_keys))
+                .order_by(XAUPaperTrade.closed_at.desc(), XAUPaperTrade.id.desc())
+                .limit(40)
+                .all()
+            )
+
+        if similar_trades:
+            metrics = _performance_metrics(similar_trades)
+            metrics["source"] = "similar_closed_paper_setups"
+            metrics["similar_samples"] = len(similar_trades)
+            metrics["candidate"] = candidate
+            metrics["alignment"] = alignment
+            return metrics
+
+        global_trades = (
             db.query(XAUPaperTrade)
-            .filter(XAUPaperTrade.account_id == account_id)
             .order_by(XAUPaperTrade.closed_at.desc(), XAUPaperTrade.id.desc())
             .limit(100)
             .all()
         )
-        metrics = _performance_metrics(trades)
-        metrics["source"] = "closed_paper_trades"
+        metrics = _performance_metrics(global_trades)
+        metrics["source"] = "global_closed_paper_trades"
+        metrics["similar_samples"] = 0
+        metrics["candidate"] = candidate
+        metrics["alignment"] = alignment
         return metrics
 
     def _update_account_equity(
@@ -853,7 +926,7 @@ class XAUPaperTradingEngine:
         db = open_xau_paper_session()
         try:
             account = self._active_account(db)
-            memory = self._memory_snapshot(db, account.id) if account else {}
+            memory = self._memory_snapshot(db, technical, macro) if account else {}
             fusion = build_decision_fusion(
                 technical,
                 macro,
@@ -961,7 +1034,7 @@ class XAUPaperTradingEngine:
         db = open_xau_paper_session()
         try:
             account = self._ensure_week(db, spot, now=now)
-            memory = self._memory_snapshot(db, account.id)
+            memory = self._memory_snapshot(db, technical, macro)
             fusion = build_decision_fusion(
                 technical,
                 macro,
