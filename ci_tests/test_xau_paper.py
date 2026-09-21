@@ -8,6 +8,7 @@ from src.modules.xau.paper import (
     _paper_entry_price,
     _paper_mark_price,
     _paper_exit_fill_price,
+    _performance_metrics,
     _pnl,
     _week_key,
 )
@@ -153,3 +154,23 @@ def test_setup_key_dedupes_macro_state_changes_inside_same_15m_anchor():
 
     assert support == neutral
     assert support != short
+
+
+
+def test_performance_metrics_use_r_and_realized_pnl():
+    trades = [
+        SimpleNamespace(r_multiple=2.0, pnl=100.0, mfe_usd=140.0, mae_usd=-20.0),
+        SimpleNamespace(r_multiple=-1.0, pnl=-50.0, mfe_usd=15.0, mae_usd=-60.0),
+        SimpleNamespace(r_multiple=1.0, pnl=50.0, mfe_usd=80.0, mae_usd=-10.0),
+    ]
+
+    metrics = _performance_metrics(trades)
+
+    assert metrics["trade_count"] == 3
+    assert metrics["average_r"] == round(2.0 / 3.0, 4)
+    assert metrics["expectancy_r"] == round(2.0 / 3.0, 4)
+    assert metrics["profit_factor"] == 3.0
+    assert metrics["average_win_r"] == 1.5
+    assert metrics["average_loss_r"] == -1.0
+    assert metrics["average_mfe_usd"] == round(235.0 / 3.0, 4)
+    assert metrics["average_mae_usd"] == -30.0
