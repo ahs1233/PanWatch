@@ -20,6 +20,7 @@ from src.modules.xau.paper import (
     _paper_exit_fill_price,
     _performance_metrics,
     _shadow_metrics,
+    _shadow_research_memory,
     _shadow_horizon_due,
     _calibration_metrics,
     _trade_autopsy,
@@ -977,3 +978,66 @@ def test_reversal_confirmation_never_advances_without_observation_id():
     assert second["exit_requested"] is False
     assert second["confirmation_streak"] == 0
     assert "setup-1" not in streaks
+
+
+
+def test_shadow_research_memory_is_separate_and_similarity_filtered():
+    base_vector = {
+        "candidate": "long_setup",
+        "alignment": "bullish",
+        "session": "new_york",
+        "regime": "trend_bull",
+        "directional_pressure": 0.8,
+        "return_10m_pct": 0.1,
+        "return_30m_pct": 0.2,
+        "acceleration": 0.03,
+        "volatility_pct": 0.15,
+        "rsi_5m_norm": 0.2,
+        "rsi_15m_norm": 0.1,
+        "breakout": "up",
+        "macro_bias": 1.0,
+        "macro_confidence": 0.7,
+        "spread_bps": 0.5,
+        "spot_proxy_basis_bps": 0.0,
+        "data_quality": 0.95,
+    }
+    signals = [
+        SimpleNamespace(
+            meta={
+                "state_vector": dict(base_vector),
+                "shadow": {
+                    "60m": {"directional_return_bps": 12.0},
+                },
+            }
+        ),
+        SimpleNamespace(
+            meta={
+                "state_vector": {**base_vector, "directional_pressure": 0.7},
+                "shadow": {
+                    "30m": {"directional_return_bps": -4.0},
+                },
+            }
+        ),
+        SimpleNamespace(
+            meta={
+                "state_vector": {
+                    **base_vector,
+                    "candidate": "short_setup",
+                    "alignment": "bearish",
+                    "directional_pressure": -1.0,
+                    "macro_bias": -1.0,
+                },
+                "shadow": {
+                    "60m": {"directional_return_bps": 100.0},
+                },
+            }
+        ),
+    ]
+
+    memory = _shadow_research_memory(signals, base_vector)
+
+    assert memory["research_only"] is True
+    assert memory["sample_count"] == 2
+    assert memory["positive_rate"] == 0.5
+    assert memory["nearest_similarity"] >= memory["average_similarity"]
+    assert memory["horizon_mix"] == {"60m": 1, "30m": 1}
