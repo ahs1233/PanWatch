@@ -8,6 +8,7 @@ type Direction = 'bullish' | 'bearish' | 'neutral'
 
 interface XAUFrame {
   timeframe: string
+  source: string
   close: number
   ema_fast: number
   ema_slow: number
@@ -297,7 +298,7 @@ export default function DashboardPage() {
             {snapshot?.alignment || '--'}
           </div>
           <div className="mt-1 text-[11px] text-muted-foreground">
-            {snapshot?.technical_mode === 'spot_micro_plus_gc_5m_15m'
+            {snapshot?.technical_mode === 'spot_micro_plus_spot_5m_15m'
               ? 'Spot micro · GC 5m · GC 15m'
               : 'GC 1m · GC 5m · GC 15m'}
           </div>
@@ -332,7 +333,9 @@ export default function DashboardPage() {
               </div>
               <div className="text-right">
                 <div className="font-mono text-[18px] font-semibold">{fmt(frame.close)}</div>
-                <div className="text-[10px] text-muted-foreground">GC=F proxy</div>
+                <div className="text-[10px] text-muted-foreground">
+                  {frame.source?.includes('xaus.com') ? 'Sampled XAU spot' : 'GC=F proxy'}
+                </div>
               </div>
             </div>
 
