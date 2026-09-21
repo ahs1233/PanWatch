@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from src.modules.xau import service
+from src.modules.xau.service import _validated_event_gate
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
 from src.platform.marketdata import xau_spot_reference
 from src.platform.marketdata.xau_spot_reference import (
@@ -331,3 +332,114 @@ def test_composite_prefers_fresh_bid_ask_over_mid_only():
     assert result.source == "bid-ask"
     assert result.bid == 4350.10
     assert result.ask == 4350.40
+
+
+
+def test_event_gate_requires_scheduled_window_or_fresh_breaking_event():
+    now = datetime(2026, 9, 21, 15, 0, tzinfo=timezone.utc)
+
+    scheduled_active = _validated_event_gate(
+        {
+            "event_risk": True,
+            "event_kind": "scheduled",
+            "event_name": "US CPI",
+            "event_time_utc": "2026-09-21T15:45:00Z",
+            "event_confidence": 0.9,
+        },
+        now=now,
+    )
+    assert scheduled_active["event_risk"] is True
+    assert scheduled_active["event_validation"] == "scheduled_event_window"
+
+    scheduled_too_far = _validated_event_gate(
+        {
+            "event_risk": True,
+            "event_kind": "scheduled",
+            "event_name": "FOMC",
+            "event_time_utc": "2026-09-21T18:00:00Z",
+            "event_confidence": 0.95,
+        },
+        now=now,
+    )
+    assert scheduled_too_far["event_risk"] is False
+    assert scheduled_too_far["event_validation"] == "scheduled_event_outside_window"
+
+    scheduled_old = _validated_event_gate(
+        {
+            "event_risk": True,
+            "event_kind": "scheduled",
+            "event_name": "US payrolls",
+            "event_time_utc": "2026-09-21T14:00:00Z",
+            "event_confidence": 0.95,
+        },
+        now=now,
+    )
+    assert scheduled_old["event_risk"] is False
+
+    breaking_active = _validated_event_gate(
+        {
+            "event_risk": True,
+            "event_kind": "breaking",
+            "event_name": "Unexpected central-bank announcement",
+            "event_age_minutes": 12,
+            "event_confidence": 0.9,
+        },
+        now=now,
+    )
+    assert breaking_active["event_risk"] is True
+    assert breaking_active["event_validation"] == "breaking_event_window"
+
+    breaking_old = _validated_event_gate(
+        {
+            "event_risk": True,
+            "event_kind": "breaking",
+            "event_name": "Older shock",
+            "event_age_minutes": 75,
+            "event_confidence": 0.9,
+        },
+        now=now,
+    )
+    assert breaking_old["event_risk"] is False
+    assert breaking_old["event_validation"] == "breaking_event_too_old"
+
+    low_confidence = _validated_event_gate(
+        {
+            "event_risk": True,
+            "event_kind": "breaking",
+            "event_name": "Unverified headline",
+            "event_age_minutes": 5,
+            "event_confidence": 0.4,
+        },
+        now=now,
+    )
+    assert low_confidence["event_risk"] is False
+    assert low_confidence["event_validation"] == "event_confidence_too_low"
+
+
+def test_event_gate_rejects_vague_or_untimed_claims():
+    now = datetime(2026, 9, 21, 15, 0, tzinfo=timezone.utc)
+
+    vague = _validated_event_gate(
+        {
+            "event_risk": True,
+            "event_kind": "none",
+            "event_name": "Ongoing geopolitical tensions",
+            "event_confidence": 0.9,
+        },
+        now=now,
+    )
+    assert vague["event_risk"] is False
+    assert vague["event_validation"] == "unsupported_event_kind"
+
+    untimed = _validated_event_gate(
+        {
+            "event_risk": True,
+            "event_kind": "scheduled",
+            "event_name": "Fed remarks",
+            "event_time_utc": None,
+            "event_confidence": 0.9,
+        },
+        now=now,
+    )
+    assert untimed["event_risk"] is False
+    assert untimed["event_validation"] == "missing_or_invalid_event_time"
