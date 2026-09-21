@@ -10,7 +10,7 @@ from src.platform.marketdata.xau_biquote import (
     BiquoteXAUOHLCProvider,
 )
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
-from src.platform.marketdata import xau_spot_reference
+from src.platform.marketdata import xau_biquote, xau_spot_reference
 from src.platform.marketdata.xau_spot_reference import (
     BiquoteXAUIndicativeSpotReference,
     CompositeXAUIndicativeSpotProvider,
@@ -981,3 +981,62 @@ def test_spot_fill_state_prefers_fresh_bid_ask_when_available():
     ])
     assert state["state"] == "ready"
     assert state["source"] == "biquote.io:MT5"
+
+
+
+def test_biquote_range_history_chunks_and_deduplicates_boundaries(monkeypatch):
+    start = datetime(2026, 9, 21, 0, 0, tzinfo=timezone.utc)
+    end = start + timedelta(minutes=250)
+    calls = []
+
+    class Response:
+        def __init__(self, params):
+            self.params = params
+            self.status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            left = datetime.fromisoformat(
+                self.params["from"].replace("Z", "+00:00")
+            )
+            right = datetime.fromisoformat(
+                self.params["to"].replace("Z", "+00:00")
+            )
+
+            def bar(ts):
+                return {
+                    "openTime": ts.isoformat().replace("+00:00", "Z"),
+                    "open": 4340.0,
+                    "high": 4341.0,
+                    "low": 4339.0,
+                    "close": 4340.5,
+                    "tickVolume": 10,
+                    "isOpen": False,
+                }
+
+            # Right boundary intentionally repeats as the next chunk's left
+            # boundary. The adapter must deduplicate it by timestamp.
+            return {"bars": [bar(left), bar(right)]}
+
+    def fake_get(url, *, params, timeout, headers):
+        calls.append(dict(params))
+        return Response(params)
+
+    monkeypatch.setattr(xau_biquote.httpx, "get", fake_get)
+
+    rows = BiquoteXAUOHLCProvider().bars_range(
+        XAUTimeframe.M1,
+        start=start,
+        end=end,
+        max_bars_per_request=100,
+    )
+
+    assert len(calls) == 3
+    assert all(call["limit"] == 100 for call in calls)
+    assert all("from" in call and "to" in call for call in calls)
+    assert [row.timestamp for row in rows] == sorted({row.timestamp for row in rows})
+    assert len(rows) == 3
+    assert rows[0].timestamp == start
+    assert rows[-1].timestamp == start + timedelta(minutes=200)
