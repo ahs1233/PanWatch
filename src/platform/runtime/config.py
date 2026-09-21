@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     xau_paper_timezone: str = "Asia/Baghdad"
     xau_paper_database_url: str = ""
 
+    # Research-only historical replay. Runs off the hot path and never creates
+    # paper/live fills; it only refreshes bounded episodic research memory.
+    xau_replay_enabled: bool = True
+    xau_replay_interval_minutes: int = Field(default=360, ge=60, le=1440)
+    xau_replay_horizon_minutes: int = Field(default=60, ge=15, le=240)
+    xau_replay_step_minutes: int = Field(default=5, ge=1, le=60)
+    xau_replay_bar_limit: int = Field(default=1000, ge=60, le=1000)
+
     # Telegram
     notify_telegram_bot_token: str = ""
     notify_telegram_chat_id: str = ""
