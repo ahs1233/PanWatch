@@ -727,6 +727,15 @@ class XAUPaperTradingEngine:
                 key = f"{horizon}m"
                 if key in shadow or elapsed < horizon:
                     continue
+
+                # Counterfactuals are only valid near their target horizon.
+                # Never backfill a 15m outcome with the price observed hours
+                # later after a restart/outage; missing evidence is preferable
+                # to hindsight-contaminated learning data.
+                grace_minutes = max(2.0, min(15.0, horizon * 0.10))
+                if elapsed > horizon + grace_minutes:
+                    continue
+
                 directional_return_bps = (
                     ((price - float(signal.price)) / float(signal.price))
                     * 10_000.0
@@ -737,7 +746,10 @@ class XAUPaperTradingEngine:
                     "positive": directional_return_bps > 0,
                     "reference_price": round(price, 6),
                     "reference_source": reference_source,
+                    "target_horizon_minutes": horizon,
                     "observed_after_minutes": round(elapsed, 2),
+                    "timing_error_minutes": round(elapsed - horizon, 2),
+                    "grace_minutes": round(grace_minutes, 2),
                     "measured_at": now_utc.isoformat(),
                 }
                 touched = True
