@@ -13,6 +13,7 @@ from src.modules.xau.paper import (
     _calibration_metrics,
     _trade_autopsy,
     _paper_mark_price,
+    _paper_context_mark_price,
     _paper_exit_quote,
     _paper_exit_fill_price,
     _performance_metrics,
@@ -412,3 +413,70 @@ def test_trade_autopsy_identifies_entry_timing_when_trade_had_mfe():
     )
     assert autopsy["primary_attribution"] == "entry_timing_or_stop_too_tight"
     assert autopsy["mfe_r"] == 0.7
+
+
+
+def test_context_mark_uses_fresh_analysis_reference_when_fill_quote_is_stale():
+    price, kind = _paper_context_mark_price(
+        "short",
+        {
+            "price": 4342.8,
+            "bid": None,
+            "ask": None,
+            "is_stale": True,
+        },
+        {
+            "price": 4345.0,
+            "is_stale": False,
+            "kind": "micro_fallback",
+        },
+    )
+    assert price == 4345.0
+    assert kind == "analysis_reference"
+
+
+def test_context_mark_never_turns_analysis_reference_into_exit_quote():
+    spot = {
+        "price": 4342.8,
+        "bid": None,
+        "ask": None,
+        "is_stale": True,
+    }
+    analysis = {"price": 4345.0, "is_stale": False}
+    mark, kind = _paper_context_mark_price("long", spot, analysis)
+
+    assert mark == 4345.0
+    assert kind == "analysis_reference"
+    assert _paper_exit_quote("long", spot) is None
+    assert _paper_exit_quote("short", spot) is None
+
+
+def test_mark_position_updates_equity_from_analysis_reference_without_fill():
+    engine = XAUPaperTradingEngine(Settings())
+    account = SimpleNamespace(
+        initial_capital=10_000.0,
+        realized_pnl=0.0,
+        current_equity=10_000.0,
+        peak_equity=10_000.0,
+        max_drawdown_pct=0.0,
+    )
+    position = SimpleNamespace(
+        side="short",
+        entry_price=4350.0,
+        quantity_oz=2.0,
+        current_price=4350.0,
+        unrealized_pnl=0.0,
+        mfe_usd=0.0,
+        mae_usd=0.0,
+    )
+
+    mark = engine._mark_position(
+        account,
+        position,
+        {"price": 4350.0, "bid": None, "ask": None, "is_stale": True},
+        {"price": 4340.0, "is_stale": False},
+    )
+
+    assert mark == 4340.0
+    assert position.unrealized_pnl == 20.0
+    assert account.current_equity == 10020.0
