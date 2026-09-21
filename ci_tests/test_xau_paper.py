@@ -100,3 +100,13 @@ def test_short_falls_back_to_atr_when_swing_is_invalid():
 def test_paper_postgres_url_uses_psycopg_driver():
     value = _sqlalchemy_url("postgresql://user:pass@example.test/panwatch")
     assert value == "postgresql+psycopg://user:pass@example.test/panwatch"
+
+
+
+def test_mid_only_reference_is_not_accepted_as_entry_fill():
+    spot = {"price": 4350.0, "bid": None, "ask": None}
+
+    assert _paper_entry_price("long", spot) is None
+    assert _paper_entry_price("short", spot) is None
+    assert _paper_mark_price("long", spot) == 4350.0
+    assert _paper_mark_price("short", spot) == 4350.0
