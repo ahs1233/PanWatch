@@ -17,6 +17,7 @@ from src.modules.xau.paper import (
     _paper_exit_quote,
     _paper_exit_fill_price,
     _performance_metrics,
+    _shadow_metrics,
     _calibration_metrics,
     _trade_autopsy,
     _position_age_minutes,
@@ -480,3 +481,43 @@ def test_mark_position_updates_equity_from_analysis_reference_without_fill():
     assert mark == 4340.0
     assert position.unrealized_pnl == 20.0
     assert account.current_equity == 10020.0
+
+
+
+def test_shadow_metrics_measure_false_negative_opportunity_cost():
+    signals = [
+        SimpleNamespace(
+            candidate="long_setup",
+            accepted=False,
+            meta={"shadow": {"15m": {"directional_return_bps": 12.0}}},
+        ),
+        SimpleNamespace(
+            candidate="long_setup",
+            accepted=False,
+            meta={"shadow": {"15m": {"directional_return_bps": -4.0}}},
+        ),
+        SimpleNamespace(
+            candidate="short_setup",
+            accepted=True,
+            meta={"shadow": {"15m": {"directional_return_bps": 8.0}}},
+        ),
+    ]
+
+    metrics = _shadow_metrics(signals)
+
+    assert metrics["15m"]["rejected"]["count"] == 2
+    assert metrics["15m"]["rejected"]["positive_rate"] == 0.5
+    assert metrics["15m"]["rejected"]["average_directional_return_bps"] == 4.0
+    assert metrics["15m"]["accepted"]["count"] == 1
+    assert metrics["15m"]["accepted"]["positive_rate"] == 1.0
+
+
+def test_shadow_metrics_ignore_non_directional_observations():
+    signals = [
+        SimpleNamespace(
+            candidate="none",
+            accepted=False,
+            meta={"shadow": {"15m": {"directional_return_bps": 100.0}}},
+        ),
+    ]
+    assert _shadow_metrics(signals) == {}
