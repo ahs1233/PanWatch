@@ -87,6 +87,13 @@ def _paper_mark_price(side: str, spot: dict) -> float | None:
     return _number(spot.get("ask")) or _number(spot.get("price"))
 
 
+def _paper_exit_quote(side: str, spot: dict) -> float | None:
+    """Executable-side indicative quote used for simulated exits."""
+    if side == "long":
+        return _number(spot.get("bid"))
+    return _number(spot.get("ask"))
+
+
 def _position_age_minutes(opened_at: datetime, now_utc: datetime) -> float:
     opened = opened_at
     if opened.tzinfo is not None:
@@ -701,18 +708,19 @@ class XAUPaperTradingEngine:
             closed_trade = None
 
             if position and spot and not bool(spot.get("is_stale")):
-                mark = self._mark_position(account, position, spot)
-                if mark is not None:
+                self._mark_position(account, position, spot)
+                exit_quote = _paper_exit_quote(position.side, spot)
+                if exit_quote is not None:
                     exit_reason = None
                     if position.side == "long":
-                        if mark <= position.stop_loss:
+                        if exit_quote <= position.stop_loss:
                             exit_reason = "stop_loss"
-                        elif mark >= position.target_price:
+                        elif exit_quote >= position.target_price:
                             exit_reason = "target_price"
                     else:
-                        if mark >= position.stop_loss:
+                        if exit_quote >= position.stop_loss:
                             exit_reason = "stop_loss"
-                        elif mark <= position.target_price:
+                        elif exit_quote <= position.target_price:
                             exit_reason = "target_price"
 
                     if exit_reason is None and position.opened_at:
@@ -723,7 +731,7 @@ class XAUPaperTradingEngine:
                     if exit_reason:
                         exit_fill = _paper_exit_fill_price(
                             position.side,
-                            mark,
+                            exit_quote,
                             position.stop_loss,
                             position.target_price,
                             exit_reason,
