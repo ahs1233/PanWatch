@@ -76,6 +76,64 @@ def _market_session(observed_at: Any) -> str:
     return "late_us"
 
 
+def _fill_market_state(spot: dict[str, Any]) -> dict[str, Any]:
+    """Classify paper-fill availability from all provider diagnostics."""
+    health = spot.get("provider_health") or []
+    bid_ask_rows = [
+        row for row in health
+        if isinstance(row, dict) and bool(row.get("has_bid_ask"))
+    ]
+    fresh_bid_ask = next(
+        (
+            row for row in bid_ask_rows
+            if row.get("status") == "ok" and not bool(row.get("is_stale"))
+        ),
+        None,
+    )
+    if fresh_bid_ask is not None:
+        return {
+            "state": "open",
+            "reason": "fresh_bid_ask_available",
+            "provider": fresh_bid_ask.get("provider"),
+            "market_state": fresh_bid_ask.get("market_state"),
+        }
+
+    closed_rows = [
+        row for row in bid_ask_rows
+        if str(row.get("market_state") or "").lower()
+        in {"closed", "market_closed", "maintenance", "rollover"}
+    ]
+    if closed_rows:
+        row = closed_rows[0]
+        return {
+            "state": "closed",
+            "reason": "provider_market_closed",
+            "provider": row.get("provider"),
+            "market_state": row.get("market_state"),
+        }
+
+    error_rows = [
+        row for row in health
+        if isinstance(row, dict) and row.get("status") == "error"
+    ]
+    if error_rows and not bid_ask_rows:
+        return {
+            "state": "feed_unavailable",
+            "reason": "bid_ask_provider_error",
+            "provider": error_rows[0].get("provider"),
+            "market_state": None,
+        }
+
+    return {
+        "state": "unavailable",
+        "reason": "no_fresh_bid_ask",
+        "provider": bid_ask_rows[0].get("provider") if bid_ask_rows else None,
+        "market_state": (
+            bid_ask_rows[0].get("market_state") if bid_ask_rows else None
+        ),
+    }
+
+
 def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str, Any]]:
     """Score analytical sensing independently from paper/live fill readiness."""
     score = 1.0
@@ -178,8 +236,15 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         score -= 0.10
         issues.append("cross_source_spot_basis_elevated")
 
+    fill_market = _fill_market_state(spot)
     fill_issues: list[str] = []
     fill_score = 1.0
+    if fill_market["state"] == "closed":
+        fill_score = 0.0
+        fill_issues.append("fill_market_closed")
+    elif fill_market["state"] == "feed_unavailable":
+        fill_score = 0.0
+        fill_issues.append("fill_feed_unavailable")
     if not spot:
         fill_score = 0.0
         fill_issues.append("fill_quote_missing")
@@ -211,8 +276,9 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         "technical_mode": technical.get("technical_mode"),
         "fill_readiness": {
             "score": round(_clip(fill_score), 4),
-            "issues": fill_issues,
+            "issues": list(dict.fromkeys(fill_issues)),
             "ready_for_paper_fill": _clip(fill_score) >= 0.99,
+            "market": fill_market,
         },
     }
     return round(_clip(score), 4), list(dict.fromkeys(issues)), sensors
