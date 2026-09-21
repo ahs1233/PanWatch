@@ -102,6 +102,28 @@ interface RuntimeReadiness {
   }
 }
 
+interface DecisionFusion {
+  state: string
+  technical_candidate: string
+  technical_status: string
+  technical_mode: string
+  macro_bias: number
+  macro_bias_label: string
+  macro_confidence: number
+  macro_relation: string
+  event_risk: boolean
+  research_ready: boolean
+  execution_allowed: boolean
+  execution_status: string
+  reasons: string[]
+}
+
+interface TerminalResponse {
+  technical: XAUSnapshot
+  macro: MacroContext
+  fusion: DecisionFusion
+}
+
 interface MacroContext {
   observed_at: string
   bias: number
@@ -142,6 +164,7 @@ export default function DashboardPage() {
   const navigate = useNavigate()
   const [snapshot, setSnapshot] = useState<XAUSnapshot | null>(null)
   const [macro, setMacro] = useState<MacroContext | null>(null)
+  const [fusion, setFusion] = useState<DecisionFusion | null>(null)
   const [loading, setLoading] = useState(true)
   const [macroLoading, setMacroLoading] = useState(true)
   const [error, setError] = useState('')
@@ -167,10 +190,12 @@ export default function DashboardPage() {
     setMacroLoading(true)
     setMacroError('')
     try {
-      const data = await fetchAPI<MacroContext>(`/xau/macro${force ? '?force=true' : ''}`, {
+      const data = await fetchAPI<TerminalResponse>(`/xau/terminal${force ? '?force=true' : ''}`, {
         timeoutMs: 95000,
       })
-      setMacro(data)
+      setMacro(data.macro)
+      setFusion(data.fusion)
+      setSnapshot(data.technical)
     } catch (err) {
       setMacroError(err instanceof Error ? err.message : 'Macro research unavailable')
     } finally {
@@ -216,8 +241,8 @@ export default function DashboardPage() {
             Gold / U.S. Dollar
           </h1>
           <p className="mt-1 max-w-3xl text-[13px] leading-6 text-muted-foreground">
-            Live indicative XAU/USD spot reference, 1m / 5m / 15m technical structure, macro context and external
-            research. GC=F remains the technical research proxy and is never treated as an execution quote.
+            Live indicative XAU/USD spot, roughly-two-minute micro momentum, sampled spot 5m / 15m structure,
+            macro context and external research. GC=F is retained only as fallback context.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -243,6 +268,47 @@ export default function DashboardPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="card mb-4 p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Decision fusion</div>
+            <div className={`mt-1 text-[18px] font-bold ${fusion?.state === 'setup_macro_support' ? 'text-emerald-500' : fusion?.state === 'setup_macro_conflict' || fusion?.state === 'event_gate' || fusion?.state === 'data_gate' ? 'text-amber-500' : 'text-foreground'}`}>
+              {fusion ? friendlyReason(fusion.state) : macroLoading ? 'Loading fusion…' : '--'}
+            </div>
+            <div className="mt-1 text-[11px] text-muted-foreground">
+              Technical {candidateLabel(fusion?.technical_candidate)} · Macro {fusion?.macro_relation || '--'} · Execution locked
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-[11px]">
+            <div className="rounded-xl bg-accent/30 px-3 py-2">
+              <div className="text-muted-foreground">Research</div>
+              <div className={fusion?.research_ready ? 'mt-1 font-semibold text-emerald-500' : 'mt-1 font-semibold text-muted-foreground'}>
+                {fusion?.research_ready ? 'READY' : 'WAIT'}
+              </div>
+            </div>
+            <div className="rounded-xl bg-accent/30 px-3 py-2">
+              <div className="text-muted-foreground">Event gate</div>
+              <div className={fusion?.event_risk ? 'mt-1 font-semibold text-rose-500' : 'mt-1 font-semibold text-emerald-500'}>
+                {fusion?.event_risk ? 'ACTIVE' : 'CLEAR'}
+              </div>
+            </div>
+            <div className="rounded-xl bg-accent/30 px-3 py-2">
+              <div className="text-muted-foreground">Macro</div>
+              <div className="mt-1 font-semibold uppercase">{fusion?.macro_relation || '--'}</div>
+            </div>
+          </div>
+        </div>
+        {fusion?.reasons?.length ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {fusion.reasons.map((reason) => (
+              <span key={reason} className="rounded-full bg-accent/40 px-2.5 py-1 text-[10px] text-muted-foreground">
+                {friendlyReason(reason)}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {error && (
