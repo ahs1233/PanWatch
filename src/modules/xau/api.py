@@ -75,3 +75,10 @@ async def paper_weeks(
         "weeks": XAUPaperTradingEngine().history(limit=limit),
         "execution_allowed": False,
     }
+
+
+
+@router.get("/paper/eligibility")
+async def paper_eligibility():
+    """Explain the current paper entry state using the exact engine gates."""
+    return await XAUPaperTradingEngine().eligibility()
