@@ -27,7 +27,11 @@ from src.platform.marketdata.xau_micro_reference import (
     sampled_spot_bars,
 )
 from src.platform.marketdata.xau_research_provider import YahooGoldResearchProvider
-from src.platform.marketdata.xau_spot_reference import CompositeXAUIndicativeSpotProvider
+from src.platform.marketdata.xau_spot_reference import (
+    CompositeXAUIndicativeSpotProvider,
+    GoldPriceDevSpotReference,
+    XAUSSpotReference,
+)
 from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -39,13 +43,16 @@ _SPOT_TTL = 8.0
 _MICRO_TTL = 15.0
 _SERIES_TTL = 15.0
 _MACRO_TTL = 180.0
+_CONSENSUS_TTL = 60.0
 _bars_cache = None
 _spot_cache = None
+_consensus_cache = None
 _micro_cache = None
 _series_cache = None
 _macro_cache = None
 _bars_lock = asyncio.Lock()
 _spot_lock = asyncio.Lock()
+_consensus_lock = asyncio.Lock()
 _micro_lock = asyncio.Lock()
 _series_lock = asyncio.Lock()
 _macro_lock = asyncio.Lock()
@@ -167,6 +174,73 @@ async def get_indicative_spot(force: bool = False) -> dict[str, Any]:
         return data
 
 
+async def get_spot_consensus(force: bool = False) -> dict[str, Any]:
+    """Low-frequency cross-source validation for the primary indicative spot.
+
+    This is a sensor-consistency layer only. It never upgrades any quote to
+    execution-eligible and is deliberately cached longer than the fast loop.
+    """
+    global _consensus_cache
+    now = time.monotonic()
+    if not force and _consensus_cache and now - _consensus_cache[0] < _CONSENSUS_TTL:
+        return _consensus_cache[1]
+
+    async with _consensus_lock:
+        now = time.monotonic()
+        if not force and _consensus_cache and now - _consensus_cache[0] < _CONSENSUS_TTL:
+            return _consensus_cache[1]
+
+        providers = (
+            GoldPriceDevSpotReference(),
+            XAUSSpotReference(),
+        )
+
+        async def fetch_one(provider):
+            try:
+                quote = await asyncio.to_thread(provider.fetch)
+                age_seconds = max(
+                    0.0,
+                    (datetime.now(timezone.utc) - quote.observed_at).total_seconds(),
+                )
+                return {
+                    "source": quote.source,
+                    "price": quote.price,
+                    "observed_at": quote.observed_at.isoformat(),
+                    "age_seconds": round(age_seconds, 3),
+                    "is_stale": quote.is_stale,
+                }
+            except Exception as exc:
+                return {
+                    "source": type(provider).__name__,
+                    "error": type(exc).__name__,
+                }
+
+        rows = await asyncio.gather(*(fetch_one(provider) for provider in providers))
+        usable = [
+            row for row in rows
+            if row.get("price") and not row.get("is_stale") and not row.get("error")
+        ]
+        prices = sorted(float(row["price"]) for row in usable)
+        median = None
+        if prices:
+            middle = len(prices) // 2
+            median = (
+                prices[middle]
+                if len(prices) % 2
+                else (prices[middle - 1] + prices[middle]) / 2.0
+            )
+
+        data = {
+            "source_count": len(rows),
+            "usable_count": len(usable),
+            "reference_median": median,
+            "references": rows,
+            "execution_eligible": False,
+        }
+        _consensus_cache = (time.monotonic(), data)
+        return data
+
+
 def _ema_values(values: list[float], period: int) -> float:
     if not values:
         return 0.0
@@ -252,6 +326,7 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     bars_task = asyncio.create_task(get_research_bars(force=force))
     spot_task = asyncio.create_task(get_indicative_spot(force=force))
     micro_task = asyncio.create_task(get_micro_context(force=force))
+    consensus_task = asyncio.create_task(get_spot_consensus(force=force))
 
     bars = await bars_task
     spot = None
@@ -267,6 +342,13 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         micro = await micro_task
     except Exception as exc:
         micro_error = type(exc).__name__
+
+    consensus = None
+    consensus_error = None
+    try:
+        consensus = await consensus_task
+    except Exception as exc:
+        consensus_error = type(exc).__name__
 
     assessment = XAUIntradayEngine(require_execution_data=False).analyze(
         bars,
@@ -380,6 +462,15 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         else None
     )
 
+    consensus_delta_bps = None
+    if spot and consensus and consensus.get("reference_median"):
+        reference_median = float(consensus["reference_median"])
+        if reference_median > 0:
+            consensus_delta_bps = (
+                (float(spot["price"]) - reference_median) / reference_median
+            ) * 10_000.0
+        consensus["primary_delta_bps"] = consensus_delta_bps
+
     warnings = list(assessment.warnings)
     if not all_biquote:
         warnings.append("biquote_ohlc_fallback_active")
@@ -393,6 +484,12 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         warnings.append("indicative_spot_unavailable")
     elif spot and spot.get("is_stale"):
         warnings.append("indicative_spot_stale")
+    if consensus_error:
+        warnings.append("spot_consensus_unavailable")
+    elif consensus and int(consensus.get("usable_count") or 0) == 0:
+        warnings.append("spot_consensus_no_fresh_reference")
+    elif consensus_delta_bps is not None and abs(consensus_delta_bps) >= 8.0:
+        warnings.append("spot_consensus_disagreement")
 
     return {
         "instrument": "XAUUSD",
@@ -406,6 +503,8 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "price": proxy_price,
         "indicative_spot": spot,
         "indicative_spot_error": spot_error,
+        "spot_consensus": consensus,
+        "spot_consensus_error": consensus_error,
         "micro": micro,
         "micro_error": micro_error,
         "technical_mode": technical_mode,
