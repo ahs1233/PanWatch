@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from src.modules.xau import service
-from src.modules.xau.service import _resolve_event_gate, _validated_event_gate
+from src.modules.xau.service import _resolve_event_gate, _validated_event_gate, _spot_fill_state
 from src.platform.marketdata.xau_biquote import (
     BiquoteEconomicCalendarProvider,
     BiquoteXAUOHLCProvider,
@@ -930,3 +930,54 @@ def test_biquote_strict_404_retries_as_stale_context(monkeypatch):
     assert quote.is_stale is True
     assert quote.provider_quote_age_seconds == 301
     assert quote.execution_eligible is False
+
+
+
+def test_spot_fill_state_distinguishes_rollover_from_outage():
+    rollover = _spot_fill_state([
+        {
+            "provider": "Biquote",
+            "status": "ok",
+            "source": "biquote.io:MT5",
+            "has_bid_ask": True,
+            "is_stale": True,
+            "market_state": "closed",
+            "age_seconds": 1200.0,
+        },
+        {
+            "provider": "XAUS",
+            "status": "ok",
+            "source": "xaus.com",
+            "has_bid_ask": False,
+            "is_stale": False,
+            "age_seconds": 10.0,
+        },
+    ])
+    outage = _spot_fill_state([
+        {
+            "provider": "Biquote",
+            "status": "error",
+            "has_bid_ask": False,
+            "error_type": "ConnectError",
+        }
+    ])
+
+    assert rollover["state"] == "market_closed_or_rollover"
+    assert rollover["source"] == "biquote.io:MT5"
+    assert outage["state"] == "unavailable"
+
+
+def test_spot_fill_state_prefers_fresh_bid_ask_when_available():
+    state = _spot_fill_state([
+        {
+            "provider": "Biquote",
+            "status": "ok",
+            "source": "biquote.io:MT5",
+            "has_bid_ask": True,
+            "is_stale": False,
+            "market_state": "open",
+            "age_seconds": 1.2,
+        }
+    ])
+    assert state["state"] == "ready"
+    assert state["source"] == "biquote.io:MT5"
