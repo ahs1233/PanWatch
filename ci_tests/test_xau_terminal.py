@@ -37,14 +37,32 @@ def test_snapshot_is_research_only(monkeypatch):
             XAUTimeframe.M15: _bars(XAUTimeframe.M15),
         }
 
+    async def fake_spot(force: bool = False):
+        return {
+            "price": 2620.0,
+            "bid": 2619.8,
+            "ask": 2620.2,
+            "spread": 0.4,
+            "spread_bps": 1.53,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "age_seconds": 1.0,
+            "source": "test-spot",
+            "is_stale": False,
+            "indicative": True,
+            "execution_eligible": False,
+        }
+
     monkeypatch.setattr(service, "get_research_bars", fake_bars)
+    monkeypatch.setattr(service, "get_indicative_spot", fake_spot)
     result = asyncio.run(service.get_xau_snapshot())
 
     assert result["instrument"] == "XAUUSD"
     assert result["research_proxy"] == "GC=F"
     assert result["research_only"] is True
     assert result["execution_feed_connected"] is False
-    assert result["execution_status"] == "LOCKED_NO_SPOT_FEED"
+    assert result["execution_status"] == "LOCKED_NO_TRADABLE_SPOT_FEED"
+    assert result["indicative_spot"]["source"] == "test-spot"
+    assert result["indicative_spot"]["execution_eligible"] is False
     assert set(result["frames"]) == {"1m", "5m", "15m"}
 
 
