@@ -8,6 +8,7 @@ import pytest
 from src.modules.xau.paper import (
     XAUPaperTradingEngine,
     _paper_entry_price,
+    _can_revalidate_signal,
     _paper_mark_price,
     _paper_exit_quote,
     _paper_exit_fill_price,
@@ -209,3 +210,18 @@ def test_mid_only_reference_cannot_trigger_paper_exit():
     assert _paper_mark_price("short", spot) == 4350.0
     assert _paper_exit_quote("long", spot) is None
     assert _paper_exit_quote("short", spot) is None
+
+
+
+def test_transient_quote_rejections_can_be_revalidated():
+    for reason in (
+        "bid_ask_unavailable",
+        "indicative_spot_stale",
+        "spread_too_wide",
+    ):
+        assert _can_revalidate_signal(False, reason, True) is True
+
+    assert _can_revalidate_signal(False, "setup_macro_conflict", True) is False
+    assert _can_revalidate_signal(False, "position_already_open", True) is False
+    assert _can_revalidate_signal(True, "bid_ask_unavailable", True) is False
+    assert _can_revalidate_signal(False, "bid_ask_unavailable", False) is False
