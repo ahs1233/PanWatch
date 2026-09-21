@@ -1682,7 +1682,7 @@ async def lifespan(app):
             interval_seconds=settings.xau_fast_scan_seconds,
         )
         xau_research_scheduler.start()
-        external_paper_store = init_xau_paper_store(settings)
+        external_paper_store = await asyncio.to_thread(init_xau_paper_store, settings)
         logger.info("XAU paper durable store external=%s", external_paper_store)
         xau_paper_scheduler = XAUPaperTradingScheduler(settings)
         xau_paper_scheduler.start()

@@ -626,6 +626,18 @@ async def refresh_replay_memory(
         limit=limit,
         lookback_days=lookback_days,
     )
+    return await asyncio.to_thread(
+        _replay_and_persist, bars, source,
+        horizon_minutes=horizon_minutes,
+        step_minutes=step_minutes,
+        lookback_days=lookback_days,
+    )
+
+
+def _replay_and_persist(
+    bars, source: str, *, horizon_minutes: int, step_minutes: int, lookback_days: int,
+) -> dict[str, Any]:
+    """Run replay and own its entire database session outside the event loop."""
     replay_source = f"{source}:walk-forward"
     episodes = walk_forward_replay(
         bars,

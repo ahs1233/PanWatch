@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
@@ -20,6 +21,34 @@ from src.platform.persistence.models import (
     XAUPaperSignal,
     XAUReplayEpisode,
 )
+
+
+def test_replay_processing_does_not_block_live_event_loop(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    event_loop_thread = threading.get_ident()
+
+    async def history(**kwargs):
+        return {}, "test"
+
+    def slow_replay(*args, **kwargs):
+        assert threading.get_ident() != event_loop_thread
+        entered.set()
+        assert release.wait(3), "replay blocked the live event loop"
+        return {"research_only": True, "execution_allowed": False}
+
+    monkeypatch.setattr(replay, "_fetch_default_replay_history", history)
+    monkeypatch.setattr(replay, "_replay_and_persist", slow_replay)
+
+    async def exercise():
+        task = asyncio.create_task(replay.refresh_replay_memory())
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            assert not task.done()
+        finally:
+            release.set()
+        assert await task == {"research_only": True, "execution_allowed": False}
+
+    asyncio.run(exercise())
 
 
 def _bars(timeframe: XAUTimeframe, count: int, *, start: datetime, slope: float = 0.2):

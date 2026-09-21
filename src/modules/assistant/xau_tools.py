@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from pan_agent import (
@@ -171,11 +172,12 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
     ) -> ToolResult:
         try:
             paper_engine = XAUPaperTradingEngine()
-            summary_data = paper_engine.summary(
+            summary_data = await asyncio.to_thread(
+                paper_engine.summary,
                 trade_limit=50,
                 signal_limit=50,
             )
-            summary_data["weekly_history"] = paper_engine.history(limit=12)
+            summary_data["weekly_history"] = await asyncio.to_thread(paper_engine.history, limit=12)
         except Exception as exc:  # noqa: BLE001
             return ToolResult.failure(
                 summary=f"XAU paper league unavailable: {type(exc).__name__}",
