@@ -22,6 +22,8 @@ class XAUIndicativeSpot:
     observed_at: datetime
     source: str
     is_stale: bool
+    market_state: str | None = None
+    provider_quote_age_seconds: float | None = None
     execution_eligible: bool = False
     indicative: bool = True
 
@@ -127,6 +129,8 @@ class BiquoteXAUIndicativeSpotReference:
             observed_at=observed_at,
             source=source,
             is_stale=is_stale,
+            market_state=market_state or None,
+            provider_quote_age_seconds=quote_age_seconds,
         )
 
 
@@ -198,6 +202,7 @@ class XAUSSpotReference:
             observed_at=_parse_timestamp(observed_at),
             source="xaus.com",
             is_stale=status not in {"", "fresh"},
+            market_state=status or None,
         )
 
 
@@ -263,6 +268,8 @@ class CompositeXAUIndicativeSpotProvider:
                     "freshness_policy_seconds": 180.0,
                     "has_bid_ask": has_bid_ask,
                     "spread_bps": quote.spread_bps,
+                    "market_state": quote.market_state,
+                    "provider_quote_age_seconds": quote.provider_quote_age_seconds,
                 }
             )
 
