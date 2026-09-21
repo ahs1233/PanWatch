@@ -456,7 +456,6 @@ def test_shadow_memory_needs_enough_samples_before_affecting_confidence():
                 "research_only": True,
                 "lookahead_protected": True,
                 "temporally_decorrelated": True,
-                "temporally_decorrelated": True,
             },
         },
     )
