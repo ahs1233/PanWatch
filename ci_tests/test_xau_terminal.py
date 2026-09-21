@@ -658,3 +658,62 @@ def test_stale_5m_biquote_is_replaced_by_fresh_sampled_spot(monkeypatch):
     assert result[XAUTimeframe.M5]
     assert result[XAUTimeframe.M5][-1].source == "xaus.com:intraday-sampled"
     assert datetime.now(timezone.utc) - result[XAUTimeframe.M5][-1].timestamp <= timedelta(minutes=12)
+
+
+
+def test_macro_cold_start_returns_immediately_and_refreshes_in_background(monkeypatch):
+    async def scenario():
+        gate = asyncio.Event()
+
+        async def slow_refresh(force: bool = False):
+            await gate.wait()
+            return {
+                "bias": -1,
+                "bias_label": "bearish",
+                "confidence": 0.8,
+                "event_risk": False,
+            }
+
+        service._macro_cache = None
+        service._macro_refresh_task = None
+        monkeypatch.setattr(service, "_refresh_macro_context", slow_refresh)
+
+        result = await service.get_macro_context(force=False)
+        assert result["bias"] == 0
+        assert result["cache_stale"] is True
+        assert result["refresh_pending"] is True
+        assert service._macro_refresh_task is not None
+        assert service._macro_refresh_task.done() is False
+
+        service._macro_refresh_task.cancel()
+        try:
+            await service._macro_refresh_task
+        except asyncio.CancelledError:
+            pass
+        service._macro_refresh_task = None
+
+    asyncio.run(scenario())
+
+
+def test_macro_force_waits_for_full_refresh(monkeypatch):
+    async def scenario():
+        async def refresh(force: bool = False):
+            assert force is True
+            return {
+                "bias": 1,
+                "bias_label": "bullish",
+                "confidence": 0.75,
+                "event_risk": False,
+                "cache_stale": False,
+                "refresh_pending": False,
+            }
+
+        service._macro_cache = None
+        service._macro_refresh_task = None
+        monkeypatch.setattr(service, "_refresh_macro_context", refresh)
+
+        result = await service.get_macro_context(force=True)
+        assert result["bias"] == 1
+        assert result["confidence"] == 0.75
+
+    asyncio.run(scenario())
