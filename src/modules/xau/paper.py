@@ -950,6 +950,17 @@ def _shadow_research_memory(
     }
 
 
+def _research_source_family(value: object) -> str:
+    text = str(value or "").lower()
+    if "biquote" in text or "mt5" in text or "xaus.com" in text:
+        return "xau_spot_structure"
+    if "gc=f" in text or "yfinance" in text:
+        return "gc_futures_proxy"
+    if "mixed" in text:
+        return "mixed_research"
+    return "unknown"
+
+
 def _replay_research_memory(
     episodes: list[object],
     current_vector: dict,
@@ -957,8 +968,15 @@ def _replay_research_memory(
     similarity_floor: float = 0.70,
     limit: int = 120,
 ) -> dict:
-    """Research-only memory retrieved from no-lookahead replay episodes."""
+    """Research-only memory retrieved from no-lookahead replay episodes.
+
+    Replay episodes are source-family isolated.  A live XAU spot/MT5 state must
+    not inherit a prior from GC=F futures fallback history simply because the
+    technical vector looks similar.
+    """
+    current_family = str(current_vector.get("source_family") or "unknown")
     scored: list[tuple[float, float, str, datetime | None, datetime | None]] = []
+    source_mismatch_discarded = 0
     for episode in episodes:
         meta = getattr(episode, "meta", {}) or {}
         replay_payload = meta.get("replay_episode") or {}
@@ -968,6 +986,20 @@ def _replay_research_memory(
             or replay_payload.get("state_vector")
             or {}
         )
+        historical_family = str(saved_vector.get("source_family") or "unknown")
+        if historical_family == "unknown":
+            historical_family = _research_source_family(
+                getattr(episode, "source", None)
+                or meta.get("source")
+                or replay_payload.get("source")
+            )
+        if (
+            current_family not in {"unknown", "mixed_research"}
+            and historical_family not in {"unknown", current_family}
+        ):
+            source_mismatch_discarded += 1
+            continue
+
         directional_return = getattr(episode, "directional_return_bps", None)
         if directional_return is None:
             directional_return = (
@@ -1029,6 +1061,9 @@ def _replay_research_memory(
             "similarity_weighted_return_bps": None,
             "average_similarity": None,
             "nearest_similarity": None,
+            "source_family": current_family,
+            "source_filtered": True,
+            "source_mismatch_discarded": source_mismatch_discarded,
             "research_only": True,
             "lookahead_protected": True,
         }
@@ -1058,6 +1093,9 @@ def _replay_research_memory(
             4,
         ),
         "nearest_similarity": round(scored[0][0], 4),
+        "source_family": current_family,
+        "source_filtered": True,
+        "source_mismatch_discarded": source_mismatch_discarded,
         "research_only": True,
         "lookahead_protected": True,
     }
