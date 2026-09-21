@@ -87,6 +87,9 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
     micro_age = _number(micro.get("age_seconds"), 999.0)
     spread_bps = _number(spot.get("spread_bps"), 0.0)
     basis_bps = abs(_number(technical.get("spot_minus_proxy_bps"), 0.0))
+    consensus = technical.get("spot_consensus") or {}
+    consensus_delta_bps = abs(_number(consensus.get("primary_delta_bps"), 0.0))
+    consensus_usable = int(_number(consensus.get("usable_count"), 0.0))
 
     if technical.get("blocked"):
         score -= 0.35
@@ -133,11 +136,23 @@ def _data_quality(technical: dict[str, Any]) -> tuple[float, list[str], dict[str
         score -= 0.08
         issues.append("spot_structure_basis_elevated")
 
+    if consensus_usable == 0:
+        score -= 0.05
+        issues.append("spot_consensus_unavailable")
+    elif consensus_delta_bps >= 8.0:
+        score -= 0.24
+        issues.append("cross_source_spot_disagreement")
+    elif consensus_delta_bps >= 4.0:
+        score -= 0.10
+        issues.append("cross_source_spot_basis_elevated")
+
     sensors = {
         "spot_age_seconds": None if spot_age >= 999 else round(spot_age, 2),
         "micro_age_seconds": None if micro_age >= 999 else round(micro_age, 2),
         "spread_bps": round(spread_bps, 4),
         "spot_proxy_basis_bps": round(basis_bps, 4),
+        "spot_consensus_delta_bps": round(consensus_delta_bps, 4),
+        "spot_consensus_usable": consensus_usable,
         "frame_count": len(frames),
         "technical_mode": technical.get("technical_mode"),
     }
@@ -298,6 +313,7 @@ def build_market_state_vector(
         "spot_age_seconds": _number(sensors.get("spot_age_seconds"), 60.0),
         "micro_age_seconds": _number(sensors.get("micro_age_seconds"), 120.0),
         "spot_proxy_basis_bps": _number(sensors.get("spot_proxy_basis_bps"), 0.0),
+        "spot_consensus_delta_bps": _number(sensors.get("spot_consensus_delta_bps"), 0.0),
         "data_quality": quality,
         "quality_issues": quality_issues,
     }
@@ -325,6 +341,7 @@ def state_vector_similarity(current: dict[str, Any], historical: dict[str, Any])
         ("macro_confidence", 1.0, 0.4),
         ("spread_bps", 5.0, 0.5),
         ("spot_proxy_basis_bps", 10.0, 0.5),
+        ("spot_consensus_delta_bps", 10.0, 0.6),
         ("data_quality", 1.0, 0.8),
     )
     categorical = (
