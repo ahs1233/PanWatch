@@ -1463,18 +1463,37 @@ class XAUPaperTradingScheduler:
             result = await self.engine.scan()
             account = result.get("account") or {}
             position = result.get("position") or {}
+            fusion = result.get("fusion") or {}
+            memory = result.get("memory") or {}
+            cognition = fusion.get("cognition") or {}
             logger.info(
-                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s event_risk=%s event_kind=%s event_validation=%s event_policy=%s",
+                "[XAU paper] week=%s equity=%s position=%s opened=%s closed=%s fusion=%s regime=%s confidence=%s meta=%s memory=%s similar=%s event_risk=%s event_kind=%s event_validation=%s event_policy=%s",
                 result.get("week_key"),
                 account.get("current_equity"),
                 position.get("side") if position else "flat",
                 result.get("opened"),
                 bool(result.get("closed_trade")),
-                (result.get("fusion") or {}).get("state"),
-                (result.get("fusion") or {}).get("event_risk"),
-                (result.get("fusion") or {}).get("event_kind"),
-                (result.get("fusion") or {}).get("event_validation"),
-                (result.get("fusion") or {}).get("event_policy_version"),
+                fusion.get("state"),
+                fusion.get("regime"),
+                fusion.get("cognitive_confidence"),
+                fusion.get("meta_decision"),
+                memory.get("source"),
+                memory.get("similar_samples"),
+                fusion.get("event_risk"),
+                fusion.get("event_kind"),
+                fusion.get("event_validation"),
+                fusion.get("event_policy_version"),
+            )
+            logger.debug(
+                "[XAU cognition] quality=%s hypotheses=%s autopsy_counts=%s calibration=%s",
+                (cognition.get("data_quality") or {}).get("score"),
+                cognition.get("hypotheses"),
+                memory.get("autopsy_counts"),
+                {
+                    "samples": memory.get("calibration_sample_count"),
+                    "brier": memory.get("brier_score"),
+                    "ece": memory.get("expected_calibration_error"),
+                },
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[XAU paper] scan failed: %s", type(exc).__name__)
