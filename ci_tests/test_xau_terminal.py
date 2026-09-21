@@ -603,3 +603,58 @@ def test_structured_calendar_overrides_ai_scheduled_claim_and_preserves_breaking
     assert resolved_calendar["event_risk"] is True
     assert resolved_calendar["event_name"] == "US CPI"
     assert resolved_calendar["event_validation"] == "calendar_high_impact_window"
+
+
+
+def test_stale_5m_biquote_is_replaced_by_fresh_sampled_spot(monkeypatch):
+    fresh_1m = _bars(XAUTimeframe.M1)
+    stale_5m = [
+        XAUBar(
+            timestamp=bar.timestamp - timedelta(minutes=40),
+            timeframe=bar.timeframe,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+            source="biquote.io:MT5-ohlc",
+            execution_eligible=False,
+        )
+        for bar in _bars(XAUTimeframe.M5)
+    ]
+    fresh_15m = _bars(XAUTimeframe.M15)
+
+    def fake_biquote(self, timeframe, *, limit=240, timeout_seconds=12.0):
+        if timeframe == XAUTimeframe.M1:
+            return fresh_1m
+        if timeframe == XAUTimeframe.M5:
+            return stale_5m
+        return fresh_15m
+
+    async def fake_series(force: bool = False):
+        now = datetime.now(timezone.utc)
+        points = [
+            XAUMicroPoint(
+                timestamp=now - timedelta(minutes=(119 - i)),
+                price=2600.0 + i * 0.1,
+            )
+            for i in range(120)
+        ]
+        return XAUMicroSeries(
+            points=points,
+            observed_at=now,
+            source="test-live-spot",
+            is_stale=False,
+            age_seconds=1.0,
+            coverage_seconds=7140.0,
+        )
+
+    monkeypatch.setattr(BiquoteXAUOHLCProvider, "bars", fake_biquote)
+    monkeypatch.setattr(service, "get_micro_series", fake_series)
+    service._bars_cache = None
+
+    result = asyncio.run(service.get_research_bars(force=True))
+
+    assert result[XAUTimeframe.M5]
+    assert result[XAUTimeframe.M5][-1].source == "xaus.com:sampled-spot"
+    assert datetime.now(timezone.utc) - result[XAUTimeframe.M5][-1].timestamp <= timedelta(minutes=12)
