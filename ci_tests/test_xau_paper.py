@@ -25,6 +25,7 @@ from src.modules.xau.paper import (
     _trade_autopsy,
     _position_age_minutes,
     _position_guardian,
+    _confirm_reversal_exit,
     _spot_spread_bps,
     _pnl,
     _week_key,
@@ -816,3 +817,96 @@ def test_position_management_requires_explicit_ready_fill_state():
     assert _paper_management_quote("short", ready) == 4340.1
     assert _weekly_reset_fill_price("long", closed) is None
     assert _weekly_reset_fill_price("long", ready) == 4339.9
+
+
+
+def _qualified_reversal_management():
+    return {
+        "action": "exit",
+        "reason": "qualified_opposite_thesis",
+        "exit_requested": True,
+        "exit_reason": "thesis_reversal",
+        "opposite_candidate": "short_setup",
+        "confidence": 0.75,
+        "reversal_threshold": 0.68,
+        "data_quality": 0.90,
+    }
+
+
+def test_reversal_exit_requires_two_consecutive_confirmations():
+    streaks = {}
+    first = _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        required=2,
+    )
+    second = _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        required=2,
+    )
+
+    assert first["exit_requested"] is False
+    assert first["reason"] == "opposite_thesis_confirmation_pending"
+    assert first["confirmation_streak"] == 1
+    assert first["confirmation_required"] == 2
+    assert first["proposed_exit_reason"] == "thesis_reversal"
+
+    assert second["exit_requested"] is True
+    assert second["exit_reason"] == "thesis_reversal"
+    assert second["reason"] == "confirmed_opposite_thesis"
+    assert second["confirmation_streak"] == 2
+    assert "setup-1" not in streaks
+
+
+def test_reversal_confirmation_resets_on_interruption():
+    streaks = {}
+    _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        required=2,
+    )
+
+    neutral = _confirm_reversal_exit(
+        "setup-1",
+        {
+            "action": "hold",
+            "reason": "no_management_trigger",
+            "exit_requested": False,
+            "exit_reason": None,
+        },
+        streaks,
+        required=2,
+    )
+    restarted = _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        required=2,
+    )
+
+    assert neutral["confirmation_streak"] == 0
+    assert restarted["exit_requested"] is False
+    assert restarted["confirmation_streak"] == 1
+
+
+def test_reversal_confirmation_resets_when_fill_quote_disappears():
+    streaks = {}
+    _confirm_reversal_exit(
+        "setup-1",
+        _qualified_reversal_management(),
+        streaks,
+        required=2,
+    )
+    missing = _confirm_reversal_exit(
+        "setup-1",
+        None,
+        streaks,
+        required=2,
+    )
+
+    assert missing is None
+    assert "setup-1" not in streaks
