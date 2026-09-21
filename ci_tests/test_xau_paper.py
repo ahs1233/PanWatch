@@ -7,6 +7,7 @@ from src.modules.xau.paper import (
     XAUPaperTradingEngine,
     _paper_entry_price,
     _paper_mark_price,
+    _paper_exit_quote,
     _paper_exit_fill_price,
     _performance_metrics,
     _position_age_minutes,
@@ -196,3 +197,13 @@ def test_position_age_minutes_handles_naive_and_aware_datetimes():
         opened.replace(tzinfo=None),
         now.replace(tzinfo=None),
     ) == 240.0
+
+
+
+def test_mid_only_reference_cannot_trigger_paper_exit():
+    spot = {"price": 4350.0, "bid": None, "ask": None}
+
+    assert _paper_mark_price("long", spot) == 4350.0
+    assert _paper_mark_price("short", spot) == 4350.0
+    assert _paper_exit_quote("long", spot) is None
+    assert _paper_exit_quote("short", spot) is None
