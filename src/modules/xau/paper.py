@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy.exc import IntegrityError
 from src.modules.xau.service import (
     build_decision_fusion,
     get_macro_context,
@@ -468,9 +469,17 @@ class XAUPaperTradingEngine:
                 "execution_allowed": False,
             },
         )
-        db.add(signal)
-        db.flush()
-        return signal
+        try:
+            with db.begin_nested():
+                db.add(signal)
+                db.flush()
+            return signal
+        except IntegrityError:
+            return (
+                db.query(XAUPaperSignal)
+                .filter(XAUPaperSignal.setup_key == setup_key)
+                .first()
+            )
 
     def _try_open(
         self,
@@ -489,9 +498,17 @@ class XAUPaperTradingEngine:
         state = str(fusion.get("state") or "")
         accepted_state = state in {"setup_macro_support", "setup_macro_neutral"}
         rejection_reason = ""
-        if bool(spot.get("is_stale")):
+
+        existing_position = self._open_position(db, account.id)
+        if existing_position:
+            accepted_state = False
+            rejection_reason = "position_already_open"
+        elif bool(spot.get("is_stale")):
             accepted_state = False
             rejection_reason = "indicative_spot_stale"
+        elif _number(spot.get("bid")) is None or _number(spot.get("ask")) is None:
+            accepted_state = False
+            rejection_reason = "bid_ask_unavailable"
         elif not accepted_state:
             rejection_reason = state or "fusion_not_eligible"
 
@@ -506,10 +523,7 @@ class XAUPaperTradingEngine:
             rejection_reason,
             now_utc,
         )
-        if not signal or not accepted_state:
-            return None
-
-        if self._open_position(db, account.id):
+        if not signal or not signal.accepted:
             return None
 
         setup_key = signal.setup_key
@@ -522,10 +536,10 @@ class XAUPaperTradingEngine:
             return None
 
         side = "long" if candidate == "long_setup" else "short"
-        entry = _paper_entry_price(side, spot)
+        entry = _number(spot.get("ask")) if side == "long" else _number(spot.get("bid"))
         if entry is None:
             signal.accepted = False
-            signal.rejection_reason = "paper_entry_price_unavailable"
+            signal.rejection_reason = "bid_ask_unavailable"
             return None
 
         levels = self._levels_and_size(account, side, entry, technical)
