@@ -7,6 +7,7 @@ import pytest
 
 from src.modules.xau.paper import (
     XAUPaperTradingEngine,
+    _entry_gate_reason,
     _paper_entry_price,
     _can_revalidate_signal,
     _paper_mark_price,
@@ -225,3 +226,77 @@ def test_transient_quote_rejections_can_be_revalidated():
     assert _can_revalidate_signal(False, "position_already_open", True) is False
     assert _can_revalidate_signal(True, "bid_ask_unavailable", True) is False
     assert _can_revalidate_signal(False, "bid_ask_unavailable", False) is False
+
+
+
+def test_entry_gate_reason_matches_engine_policy():
+    good_spot = {
+        "price": 4350.0,
+        "bid": 4349.8,
+        "ask": 4350.2,
+        "is_stale": False,
+    }
+
+    assert _entry_gate_reason(
+        candidate="none",
+        fusion_state="no_setup",
+        spot=good_spot,
+        has_open_position=False,
+        max_spread_bps=3.0,
+    ) == (False, "no_setup")
+
+    assert _entry_gate_reason(
+        candidate="long_setup",
+        fusion_state="setup_macro_support",
+        spot=good_spot,
+        has_open_position=True,
+        max_spread_bps=3.0,
+    ) == (False, "position_already_open")
+
+    assert _entry_gate_reason(
+        candidate="long_setup",
+        fusion_state="setup_macro_support",
+        spot={**good_spot, "is_stale": True},
+        has_open_position=False,
+        max_spread_bps=3.0,
+    ) == (False, "indicative_spot_stale")
+
+    assert _entry_gate_reason(
+        candidate="long_setup",
+        fusion_state="setup_macro_support",
+        spot={**good_spot, "bid": None},
+        has_open_position=False,
+        max_spread_bps=3.0,
+    ) == (False, "bid_ask_unavailable")
+
+    assert _entry_gate_reason(
+        candidate="long_setup",
+        fusion_state="setup_macro_support",
+        spot={"price": 4350.0, "bid": 4349.0, "ask": 4351.0, "is_stale": False},
+        has_open_position=False,
+        max_spread_bps=3.0,
+    ) == (False, "spread_too_wide")
+
+    assert _entry_gate_reason(
+        candidate="short_setup",
+        fusion_state="setup_macro_conflict",
+        spot=good_spot,
+        has_open_position=False,
+        max_spread_bps=3.0,
+    ) == (False, "setup_macro_conflict")
+
+    assert _entry_gate_reason(
+        candidate="short_setup",
+        fusion_state="setup_macro_neutral",
+        spot=good_spot,
+        has_open_position=False,
+        max_spread_bps=3.0,
+    ) == (True, "")
+
+    assert _entry_gate_reason(
+        candidate="long_setup",
+        fusion_state="setup_macro_support",
+        spot=good_spot,
+        has_open_position=False,
+        max_spread_bps=3.0,
+    ) == (True, "")
