@@ -18,6 +18,7 @@ from src.platform.persistence.models import (
     XAUPaperPosition,
     XAUPaperSignal,
     XAUPaperTrade,
+    XAUReplayEpisode,
 )
 from src.platform.runtime.config import Settings
 
@@ -62,6 +63,7 @@ def init_xau_paper_store(settings: Settings | None = None) -> bool:
             XAUPaperSignal.__table__,
             XAUPaperPosition.__table__,
             XAUPaperTrade.__table__,
+            XAUReplayEpisode.__table__,
         ]
         Base.metadata.create_all(bind=_external_engine, tables=tables)
         XAUPaperSessionLocal = sessionmaker(bind=_external_engine, expire_on_commit=False)
