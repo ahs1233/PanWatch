@@ -86,6 +86,8 @@ interface PaperSettings {
   timezone: string
   entry_states: string[]
   execution_allowed: boolean
+  storage: string
+  storage_persistent: boolean
 }
 
 interface PaperSummary {
@@ -219,6 +221,16 @@ export default function PaperTradingPage() {
         </div>
       </div>
 
+      {data && !data.settings.storage_persistent && (
+        <div className="mb-4 rounded-2xl border border-amber-500/25 bg-amber-500/8 p-4">
+          <div className="text-[13px] font-semibold text-amber-500">Storage is temporary</div>
+          <div className="mt-1 text-[12px] leading-5 text-muted-foreground">
+            The engine is running, but weekly history is currently on local SQLite and may reset after a deployment.
+            Durable Neon storage becomes active automatically when XAU_PAPER_DATABASE_URL is configured.
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/8 p-4 text-[13px] text-rose-500">
           {error}
@@ -229,7 +241,9 @@ export default function PaperTradingPage() {
         <div className="card p-4">
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Week</div>
           <div className="mt-2 text-[18px] font-bold">{account?.week_key || '--'}</div>
-          <div className="mt-1 text-[10px] text-muted-foreground">{data?.settings?.timezone || 'Asia/Baghdad'}</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            {data?.settings?.timezone || 'Asia/Baghdad'} · {data?.settings?.storage_persistent ? 'NEON PERSISTENT' : 'LOCAL FALLBACK'}
+          </div>
         </div>
         <div className="card p-4">
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Equity</div>
