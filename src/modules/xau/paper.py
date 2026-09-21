@@ -29,7 +29,7 @@ from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
 
-PAPER_ENGINE_VERSION = "0.5.0"
+PAPER_ENGINE_VERSION = "0.6.0"
 
 
 def _utc_naive(now: datetime | None = None) -> datetime:
@@ -337,6 +337,19 @@ class XAUPaperTradingEngine:
         if account_id is not None:
             query = query.filter(XAUPaperPosition.account_id == account_id)
         return query.order_by(XAUPaperPosition.id.desc()).first()
+
+    def _memory_snapshot(self, db, account_id: int) -> dict:
+        """Closed-trade memory used to calibrate the cognitive layer online."""
+        trades = (
+            db.query(XAUPaperTrade)
+            .filter(XAUPaperTrade.account_id == account_id)
+            .order_by(XAUPaperTrade.closed_at.desc(), XAUPaperTrade.id.desc())
+            .limit(100)
+            .all()
+        )
+        metrics = _performance_metrics(trades)
+        metrics["source"] = "closed_paper_trades"
+        return metrics
 
     def _update_account_equity(
         self,
@@ -693,6 +706,10 @@ class XAUPaperTradingEngine:
                 "event_policy_version": fusion.get("event_policy_version"),
                 "event_source_url": fusion.get("event_source_url"),
                 "fusion_reasons": fusion.get("reasons") or [],
+                "cognition": fusion.get("cognition") or {},
+                "regime": fusion.get("regime"),
+                "cognitive_confidence": fusion.get("cognitive_confidence"),
+                "meta_decision": fusion.get("meta_decision"),
                 "spot": {
                     "price": spot.get("price"),
                     "bid": spot.get("bid"),
@@ -831,14 +848,20 @@ class XAUPaperTradingEngine:
     async def eligibility(self) -> dict:
         technical = await get_xau_snapshot(force=False)
         macro = await get_macro_context(force=False)
-        fusion = build_decision_fusion(technical, macro)
         spot = technical.get("indicative_spot") or {}
-        candidate = str(fusion.get("technical_candidate") or "none")
-        state = str(fusion.get("state") or "")
 
         db = open_xau_paper_session()
         try:
             account = self._active_account(db)
+            memory = self._memory_snapshot(db, account.id) if account else {}
+            fusion = build_decision_fusion(
+                technical,
+                macro,
+                memory=memory,
+                min_confidence=float(self.settings.xau_cognition_min_confidence),
+            )
+            candidate = str(fusion.get("technical_candidate") or "none")
+            state = str(fusion.get("state") or "")
             position = self._open_position(db, account.id) if account else None
             eligible, gate_reason = _entry_gate_reason(
                 candidate=candidate,
@@ -847,6 +870,13 @@ class XAUPaperTradingEngine:
                 has_open_position=position is not None,
                 max_spread_bps=float(self.settings.xau_paper_max_spread_bps),
             )
+
+            if not bool(fusion.get("paper_entry_allowed")) and candidate in {
+                "long_setup",
+                "short_setup",
+            }:
+                eligible = False
+                gate_reason = state or "cognition_not_eligible"
 
             side = (
                 "long"
@@ -883,9 +913,15 @@ class XAUPaperTradingEngine:
                 "gate_reason": gate_reason or "eligible",
                 "candidate": candidate,
                 "fusion_state": state,
+                "base_state": fusion.get("base_state"),
                 "macro_relation": fusion.get("macro_relation"),
                 "macro_bias": fusion.get("macro_bias"),
                 "macro_confidence": fusion.get("macro_confidence"),
+                "regime": fusion.get("regime"),
+                "cognitive_confidence": fusion.get("cognitive_confidence"),
+                "meta_decision": fusion.get("meta_decision"),
+                "cognition": fusion.get("cognition"),
+                "memory": memory,
                 "event_risk": fusion.get("event_risk"),
                 "event_kind": fusion.get("event_kind"),
                 "event_name": fusion.get("event_name"),
@@ -919,13 +955,19 @@ class XAUPaperTradingEngine:
 
         technical = await get_xau_snapshot(force=False)
         macro = await get_macro_context(force=False)
-        fusion = build_decision_fusion(technical, macro)
         spot = technical.get("indicative_spot") or {}
         now_utc = _utc_naive(now)
 
         db = open_xau_paper_session()
         try:
             account = self._ensure_week(db, spot, now=now)
+            memory = self._memory_snapshot(db, account.id)
+            fusion = build_decision_fusion(
+                technical,
+                macro,
+                memory=memory,
+                min_confidence=float(self.settings.xau_cognition_min_confidence),
+            )
             position = self._open_position(db, account.id)
             closed_trade = None
 
@@ -1003,6 +1045,7 @@ class XAUPaperTradingEngine:
                 "opened": bool(opened_position),
                 "closed_trade": _serialize_trade(closed_trade) if closed_trade else None,
                 "fusion": fusion,
+                "memory": memory,
                 "execution_allowed": False,
             }
         except Exception:
@@ -1102,6 +1145,9 @@ class XAUPaperTradingEngine:
             "scan_seconds": self.settings.xau_paper_scan_seconds,
             "timezone": self.settings.xau_paper_timezone,
             "entry_states": ["setup_macro_support", "setup_macro_neutral"],
+            "cognition_enabled": self.settings.xau_cognition_enabled,
+            "cognition_min_confidence": self.settings.xau_cognition_min_confidence,
+            "fast_scan_seconds": self.settings.xau_fast_scan_seconds,
             "execution_allowed": False,
             "storage": "neon_postgres" if paper_store_is_external() else "local_sqlite_fallback",
             "storage_persistent": paper_store_is_external(),
@@ -1155,7 +1201,7 @@ class XAUPaperTradingScheduler:
         self.scheduler.add_job(
             self._scan,
             "interval",
-            seconds=max(30, int(self.settings.xau_paper_scan_seconds)),
+            seconds=max(5, int(self.settings.xau_paper_scan_seconds)),
             id="xau_paper_scan",
             replace_existing=True,
             coalesce=True,
