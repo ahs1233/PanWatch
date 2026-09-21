@@ -216,11 +216,13 @@ class CompositeXAUIndicativeSpotProvider:
             try:
                 raw_quote = provider.fetch(timeout_seconds=timeout_seconds)
             except Exception as exc:  # noqa: BLE001 - fail over to next reference
+                response = getattr(exc, "response", None)
                 diagnostics.append(
                     {
                         "provider": provider_name,
                         "status": "error",
                         "error_type": type(exc).__name__,
+                        "http_status": getattr(response, "status_code", None),
                     }
                 )
                 continue
