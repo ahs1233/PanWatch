@@ -32,6 +32,7 @@ from src.modules.paper_trading.paper_trading_scheduler import PaperTradingSchedu
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
 from src.modules.xau.scheduler import XAUResearchScheduler
 from src.modules.xau.paper import XAUPaperTradingScheduler
+from src.modules.xau.paper_store import init_xau_paper_store
 from src.modules.automation.agent_runs import record_agent_run
 from src.platform.observability.log_context import install_log_record_factory, log_context
 from src.modules.automation.agent_catalog import (
@@ -1655,6 +1656,8 @@ async def lifespan(app):
             interval_seconds=60,
         )
         xau_research_scheduler.start()
+        external_paper_store = init_xau_paper_store(settings)
+        logger.info("XAU paper durable store external=%s", external_paper_store)
         xau_paper_scheduler = XAUPaperTradingScheduler(settings)
         xau_paper_scheduler.start()
         logger.info("XAU profile active: legacy stock background jobs are disabled")
