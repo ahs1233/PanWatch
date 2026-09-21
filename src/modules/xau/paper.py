@@ -773,6 +773,93 @@ def _shadow_metrics(signals: list[XAUPaperSignal]) -> dict:
     return out
 
 
+def _shadow_research_memory(
+    signals: list[XAUPaperSignal],
+    current_vector: dict,
+    *,
+    similarity_floor: float = 0.68,
+    limit: int = 80,
+) -> dict:
+    """Research-only episodic memory from forward shadow outcomes.
+
+    Shadow outcomes are never treated as executed trades, never feed Brier/PnL
+    calibration, and only provide a small contextual prior in cognition.
+    """
+    episodes: list[tuple[float, float, str]] = []
+    for signal in signals:
+        meta = signal.meta or {}
+        shadow = meta.get("shadow") or {}
+        if not shadow:
+            continue
+        saved_vector = (
+            meta.get("state_vector")
+            or ((meta.get("cognition") or {}).get("market_state"))
+            or {}
+        )
+        similarity = state_vector_similarity(current_vector, saved_vector)
+        if similarity < similarity_floor:
+            continue
+
+        payload = None
+        horizon = None
+        for key in ("60m", "30m", "15m"):
+            candidate_payload = shadow.get(key)
+            if isinstance(candidate_payload, dict) and _number(
+                candidate_payload.get("directional_return_bps")
+            ) is not None:
+                payload = candidate_payload
+                horizon = key
+                break
+        if payload is None or horizon is None:
+            continue
+
+        episodes.append(
+            (
+                similarity,
+                float(payload.get("directional_return_bps")),
+                horizon,
+            )
+        )
+
+    episodes.sort(key=lambda item: item[0], reverse=True)
+    episodes = episodes[: max(1, int(limit))]
+    if not episodes:
+        return {
+            "source": "shadow_research_only",
+            "sample_count": 0,
+            "positive_rate": None,
+            "average_directional_return_bps": None,
+            "similarity_weighted_return_bps": None,
+            "average_similarity": None,
+            "nearest_similarity": None,
+            "horizon_mix": {},
+            "research_only": True,
+        }
+
+    total_weight = sum(item[0] for item in episodes) or 1.0
+    positive_rate = sum(1 for _, value, _ in episodes if value > 0) / len(episodes)
+    average_return = sum(value for _, value, _ in episodes) / len(episodes)
+    weighted_return = sum(sim * value for sim, value, _ in episodes) / total_weight
+    horizon_mix: dict[str, int] = {}
+    for _, _, horizon in episodes:
+        horizon_mix[horizon] = horizon_mix.get(horizon, 0) + 1
+
+    return {
+        "source": "shadow_research_only",
+        "sample_count": len(episodes),
+        "positive_rate": round(positive_rate, 4),
+        "average_directional_return_bps": round(average_return, 4),
+        "similarity_weighted_return_bps": round(weighted_return, 4),
+        "average_similarity": round(
+            sum(item[0] for item in episodes) / len(episodes),
+            4,
+        ),
+        "nearest_similarity": round(episodes[0][0], 4),
+        "horizon_mix": horizon_mix,
+        "research_only": True,
+    }
+
+
 def _serialize_signal(signal: XAUPaperSignal) -> dict:
     return {
         "id": signal.id,
@@ -901,6 +988,18 @@ class XAUPaperTradingEngine:
             similarities = []
             similar_samples = 0
 
+        shadow_signals = (
+            db.query(XAUPaperSignal)
+            .filter(XAUPaperSignal.candidate == candidate)
+            .order_by(XAUPaperSignal.observed_at.desc(), XAUPaperSignal.id.desc())
+            .limit(500)
+            .all()
+        )
+        shadow_memory = _shadow_research_memory(
+            shadow_signals,
+            current_vector,
+        )
+
         metrics = _performance_metrics(memory_trades)
         wins = sum(1 for trade in memory_trades if float(trade.r_multiple or 0.0) > 0.05)
         sample_count = len(memory_trades)
@@ -928,6 +1027,7 @@ class XAUPaperTradingEngine:
                 "nearest_similarity": round(similarities[0], 4) if similarities else None,
                 "current_state_vector": current_vector,
                 "autopsy_counts": _autopsy_counts(memory_trades),
+                "shadow_memory": shadow_memory,
             }
         )
 
