@@ -30,6 +30,7 @@ from src.modules.automation.agent_scheduler import AgentScheduler
 from src.modules.market.price_alert_scheduler import PriceAlertScheduler
 from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
+from src.modules.xau.scheduler import XAUResearchScheduler
 from src.modules.automation.agent_runs import record_agent_run
 from src.platform.observability.log_context import install_log_record_factory, log_context
 from src.modules.automation.agent_catalog import (
@@ -53,6 +54,7 @@ scheduler: AgentScheduler | None = None
 price_alert_scheduler: PriceAlertScheduler | None = None
 paper_trading_scheduler: PaperTradingScheduler | None = None
 context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
+xau_research_scheduler: XAUResearchScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -210,11 +212,15 @@ class _ConsoleNoiseFilter(logging.Filter):
 
 
 def setup_playwright():
-    """检查并安装 Playwright 浏览器
+    """检查并安装 Playwright 浏览器。
 
-    本地开发时使用系统安装的 Playwright，Docker 环境下安装到 data 目录。
-    通过 DOCKER 环境变量或显式设置的 PLAYWRIGHT_BROWSERS_PATH 来判断。
+    XAU profile uses Scrapling/Agent-Reach for web research and does not need
+    the legacy stock chart screenshot browser in the hot path.
     """
+    if Settings().panwatch_profile.strip().lower() == "xau":
+        logger.info("XAU profile: skipping legacy Playwright chart browser")
+        return
+
     import subprocess
 
     # 允许通过环境变量跳过首次安装（例如不需要截图功能时）
@@ -278,7 +284,10 @@ def setup_playwright():
 
 
 def seed_sample_stocks():
-    """首次启动时添加示例股票"""
+    """首次启动时添加示例股票。XAU profile intentionally seeds none."""
+    if Settings().panwatch_profile.strip().lower() == "xau":
+        logger.info("XAU profile: legacy sample stocks disabled")
+        return
     db = SessionLocal()
     try:
         # 只在没有任何股票时才添加示例
@@ -301,8 +310,13 @@ def seed_sample_stocks():
 
 
 def seed_agents():
-    """初始化内置 Agent 配置"""
+    """初始化内置 Agent 配置.
+
+    In XAU profile the legacy stock workflows remain in the schema for
+    compatibility but are forcibly disabled and hidden.
+    """
     db = SessionLocal()
+    xau_mode = Settings().panwatch_profile.strip().lower() == "xau"
     for spec in AGENT_SEED_SPECS:
         existing = db.query(AgentConfig).filter(AgentConfig.name == spec.name).first()
         if not existing:
@@ -348,6 +362,13 @@ def seed_agents():
                 if isinstance(cfg, dict) and "event_only" not in cfg:
                     cfg["event_only"] = True
                     existing.config = cfg
+
+    if xau_mode:
+        for row in db.query(AgentConfig).all():
+            row.enabled = False
+            row.schedule = ""
+            row.visible = False
+        logger.info("XAU profile: legacy stock agents disabled")
 
     db.commit()
     db.close()
@@ -1614,89 +1635,97 @@ async def lifespan(app):
     finally:
         db.close()
 
+    settings = Settings()
+    xau_mode = settings.panwatch_profile.strip().lower() == "xau"
+    logger.info("PanWatch runtime profile: %s", "xau" if xau_mode else "legacy")
+
     seed_agents()
-    try:
-        db = SessionLocal()
+
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler
+
+    if xau_mode:
+        # Keep the process focused on XAU/USD. The original stock catalogue,
+        # CN/HK/US market scanners, stock strategy rebalancing and stock paper
+        # trading are intentionally not started.
+        seed_sample_stocks()
+        xau_research_scheduler = XAUResearchScheduler(
+            timezone=settings.app_timezone,
+            interval_seconds=60,
+        )
+        xau_research_scheduler.start()
+        logger.info("XAU profile active: legacy stock background jobs are disabled")
+    else:
         try:
-            reconcile_data_sources(db)
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning(f"数据源对账失败,跳过(不阻断启动): {e}")
-    seed_strategies()
-    seed_sample_stocks()
+            db = SessionLocal()
+            try:
+                reconcile_data_sources(db)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"数据源对账失败,跳过(不阻断启动): {e}")
+        seed_strategies()
+        seed_sample_stocks()
 
-    # 启动时回填历史 TradingAgents 决策到建议池(stock_suggestions)
-    # 早期 TA 运行没写建议池,这次启动一次性补齐,让「AI 建议」面板能看到。
-    # 幂等:已存在不重复写;每次启动重跑代价极低(只查最近 7 天 + dedupe)。
-    try:
-        from src.modules.automation.tradingagents.operations import backfill_tradingagents_suggestions
-        backfill_tradingagents_suggestions(days=7)
-    except Exception as e:
-        logger.warning(f"TradingAgents 建议回填失败,跳过: {e}")
+        try:
+            from src.modules.automation.tradingagents.operations import backfill_tradingagents_suggestions
+            backfill_tradingagents_suggestions(days=7)
+        except Exception as e:
+            logger.warning(f"TradingAgents 建议回填失败,跳过: {e}")
 
-    # 后台刷新股票列表缓存
-    import threading
-    from src.platform.marketdata.stock_list import get_stock_list, refresh_stock_list
+        import threading
+        from src.platform.marketdata.stock_list import get_stock_list, refresh_stock_list
 
-    def refresh_stock_cache():
-        stocks = get_stock_list()
-        if not stocks or len([s for s in stocks if s["market"] == "CN"]) == 0:
-            logger.info("股票列表缓存为空或缺少 A 股，后台刷新中...")
-            refresh_stock_list()
+        def refresh_stock_cache():
+            stocks = get_stock_list()
+            if not stocks or len([s for s in stocks if s["market"] == "CN"]) == 0:
+                logger.info("股票列表缓存为空或缺少 A 股，后台刷新中...")
+                refresh_stock_list()
 
-    threading.Thread(target=refresh_stock_cache, daemon=True).start()
+        threading.Thread(target=refresh_stock_cache, daemon=True).start()
 
-    # 交易日历预热(判断周末/法定节假日是否开市)。拉取失败会自动降级为只判周末,
-    # 因此这里不阻塞启动,交给后台任务;之后每日 03:00 由上下文维护调度器刷新。
-    try:
-        from src.platform.scheduling.trading_calendar import refresh as refresh_trading_calendar
+        try:
+            from src.platform.scheduling.trading_calendar import refresh as refresh_trading_calendar
+            asyncio.create_task(refresh_trading_calendar())
+        except Exception as e:
+            logger.warning(f"交易日历预热调度失败(降级为只判周末): {e}")
 
-        asyncio.create_task(refresh_trading_calendar())
-    except Exception as e:
-        logger.warning(f"交易日历预热调度失败(降级为只判周末): {e}")
+        scheduler = build_scheduler()
+        scheduler.start()
+        logger.info("Agent 调度器已启动")
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler
-    scheduler = build_scheduler()
-    scheduler.start()
-    logger.info("Agent 调度器已启动")
-    try:
-        settings = Settings()
-        price_alert_scheduler = PriceAlertScheduler(
-            timezone=settings.app_timezone,
-            interval_seconds=60,
-        )
-        price_alert_scheduler.start()
-        logger.info("价格提醒调度器已启动")
-    except Exception as e:
-        logger.error(f"价格提醒调度器启动失败: {e}")
-    try:
-        settings = Settings()
-        paper_trading_scheduler = PaperTradingScheduler(
-            timezone=settings.app_timezone,
-            interval_seconds=60,
-        )
-        paper_trading_scheduler.start()
-        logger.info("模拟盘调度器已启动")
-    except Exception as e:
-        logger.error(f"模拟盘调度器启动失败: {e}")
-    try:
-        settings = Settings()
-        context_maintenance_scheduler = ContextMaintenanceScheduler(
-            timezone=settings.app_timezone,
-            eval_interval_hours=6,
-            snapshot_retention_days=180,
-            outcome_retention_days=365,
-        )
-        context_maintenance_scheduler.start()
-        logger.info("上下文维护调度器已启动")
-    except Exception as e:
-        logger.error(f"上下文维护调度器启动失败: {e}")
-    # MCP 调用日志保留期清理:每日 04:00 清理超期审计记录
-    try:
-        register_mcp_log_cleanup(scheduler)
-    except Exception as e:
-        logger.error(f"MCP 日志清理任务注册失败: {e}")
+        try:
+            price_alert_scheduler = PriceAlertScheduler(
+                timezone=settings.app_timezone,
+                interval_seconds=60,
+            )
+            price_alert_scheduler.start()
+        except Exception as e:
+            logger.error(f"价格提醒调度器启动失败: {e}")
+
+        try:
+            paper_trading_scheduler = PaperTradingScheduler(
+                timezone=settings.app_timezone,
+                interval_seconds=60,
+            )
+            paper_trading_scheduler.start()
+        except Exception as e:
+            logger.error(f"模拟盘调度器启动失败: {e}")
+
+        try:
+            context_maintenance_scheduler = ContextMaintenanceScheduler(
+                timezone=settings.app_timezone,
+                eval_interval_hours=6,
+                snapshot_retention_days=180,
+                outcome_retention_days=365,
+            )
+            context_maintenance_scheduler.start()
+        except Exception as e:
+            logger.error(f"上下文维护调度器启动失败: {e}")
+
+        try:
+            register_mcp_log_cleanup(scheduler)
+        except Exception as e:
+            logger.error(f"MCP 日志清理任务注册失败: {e}")
     yield
     if scheduler:
         scheduler.shutdown()
@@ -1710,6 +1739,9 @@ async def lifespan(app):
     if context_maintenance_scheduler:
         context_maintenance_scheduler.shutdown()
         logger.info("上下文维护调度器已关闭")
+    if xau_research_scheduler:
+        xau_research_scheduler.shutdown()
+        logger.info("XAU research scheduler stopped")
 
 
 # 模块级 app 实例，供 uvicorn reload 使用
