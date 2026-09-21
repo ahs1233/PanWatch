@@ -117,7 +117,7 @@ def _entry_gate_reason(
             continue
         market_state = str(row.get("market_state") or "").lower()
         if market_state in {"closed", "market_closed", "maintenance", "rollover"}:
-            return False, "market_closed_rollover"
+            return False, "market_closed_or_rollover"
 
     fill_state = str(spot.get("fill_state") or "")
     if fill_state == "market_closed_or_rollover":
