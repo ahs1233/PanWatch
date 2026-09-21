@@ -883,3 +883,48 @@ def test_composite_spot_provider_marks_overage_quote_stale_before_selection():
     old = next(row for row in health if row.get("source") == "old-bidask")
     assert old["provider_stale"] is False
     assert old["is_stale"] is True
+
+
+
+def test_biquote_strict_404_retries_as_stale_context(monkeypatch):
+    calls = []
+
+    class Strict404:
+        status_code = 404
+        def raise_for_status(self):
+            raise AssertionError("strict 404 should be retried before raise_for_status")
+        def json(self):
+            return {}
+
+    class ContextResponse:
+        status_code = 200
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {
+                "symbol": "XAUUSD",
+                "bid": 4340.10,
+                "ask": 4340.40,
+                "mid": 4340.25,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "source": "MetaTrader 5 (Broker 1)",
+                "marketState": "open",
+                "stale": False,
+                "quoteAgeSeconds": 301,
+            }
+
+    def fake_get(*args, **kwargs):
+        calls.append(kwargs.get("params"))
+        return Strict404() if len(calls) == 1 else ContextResponse()
+
+    monkeypatch.setattr(xau_spot_reference.httpx, "get", fake_get)
+
+    quote = BiquoteXAUIndicativeSpotReference().fetch()
+
+    assert len(calls) == 2
+    assert calls[0] == {"allowStale": "false"}
+    assert calls[1] is None
+    assert quote.bid == 4340.10
+    assert quote.ask == 4340.40
+    assert quote.is_stale is True
+    assert quote.execution_eligible is False
