@@ -393,6 +393,19 @@ def _confirm_reversal_exit(
         return result
 
     observation = str(observation_id or "").strip()
+    if not observation:
+        if key:
+            streaks.pop(key, None)
+        result["confirmation_streak"] = 0
+        result["confirmation_required"] = required
+        result["confirmation_observation_missing"] = True
+        result["proposed_exit_reason"] = "thesis_reversal"
+        result["exit_requested"] = False
+        result["exit_reason"] = None
+        result["action"] = "hold"
+        result["reason"] = "opposite_thesis_missing_observation"
+        return result
+
     prior = streaks.get(key, {}) if key else {}
     prior_count = int(prior.get("count", 0) or 0) if isinstance(prior, dict) else 0
     prior_observation = (
