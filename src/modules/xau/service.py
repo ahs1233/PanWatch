@@ -164,6 +164,67 @@ async def get_research_bars(force: bool = False):
         return data
 
 
+def _spot_fill_state(provider_health: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify paper-fill availability independently from analysis context."""
+    healthy_bidask = [
+        row
+        for row in provider_health
+        if row.get("status") == "ok"
+        and row.get("has_bid_ask")
+        and not row.get("is_stale")
+    ]
+    if healthy_bidask:
+        best = min(
+            healthy_bidask,
+            key=lambda row: float(row.get("age_seconds") or 1e9),
+        )
+        return {
+            "state": "ready",
+            "source": best.get("source"),
+            "age_seconds": best.get("age_seconds"),
+        }
+
+    closed = [
+        row
+        for row in provider_health
+        if row.get("status") == "ok"
+        and row.get("has_bid_ask")
+        and str(row.get("market_state") or "").lower() == "closed"
+    ]
+    if closed:
+        best = min(
+            closed,
+            key=lambda row: float(row.get("age_seconds") or 1e9),
+        )
+        return {
+            "state": "market_closed_or_rollover",
+            "source": best.get("source"),
+            "age_seconds": best.get("age_seconds"),
+        }
+
+    stale_bidask = [
+        row
+        for row in provider_health
+        if row.get("status") == "ok" and row.get("has_bid_ask")
+    ]
+    if stale_bidask:
+        best = min(
+            stale_bidask,
+            key=lambda row: float(row.get("age_seconds") or 1e9),
+        )
+        return {
+            "state": "stale_bid_ask",
+            "source": best.get("source"),
+            "age_seconds": best.get("age_seconds"),
+        }
+
+    return {
+        "state": "unavailable",
+        "source": None,
+        "age_seconds": None,
+    }
+
+
 async def get_indicative_spot(force: bool = False) -> dict[str, Any]:
     global _spot_cache
     now = time.monotonic()
@@ -181,6 +242,7 @@ async def get_indicative_spot(force: bool = False) -> dict[str, Any]:
             0.0,
             (datetime.now(timezone.utc) - quote.observed_at).total_seconds(),
         )
+        fill = _spot_fill_state(provider_health)
         data = {
             "price": quote.price,
             "bid": quote.bid,
@@ -194,6 +256,9 @@ async def get_indicative_spot(force: bool = False) -> dict[str, Any]:
             "provider_quote_age_seconds": quote.provider_quote_age_seconds,
             "is_stale": bool(quote.is_stale or age_seconds > 180.0),
             "provider_health": provider_health,
+            "fill_state": fill.get("state"),
+            "fill_source": fill.get("source"),
+            "fill_age_seconds": fill.get("age_seconds"),
             "indicative": True,
             "execution_eligible": False,
         }
