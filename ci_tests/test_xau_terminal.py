@@ -656,5 +656,5 @@ def test_stale_5m_biquote_is_replaced_by_fresh_sampled_spot(monkeypatch):
     result = asyncio.run(service.get_research_bars(force=True))
 
     assert result[XAUTimeframe.M5]
-    assert result[XAUTimeframe.M5][-1].source == "xaus.com:sampled-spot"
+    assert result[XAUTimeframe.M5][-1].source == "xaus.com:intraday-sampled"
     assert datetime.now(timezone.utc) - result[XAUTimeframe.M5][-1].timestamp <= timedelta(minutes=12)
