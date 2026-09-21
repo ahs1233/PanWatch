@@ -7,7 +7,7 @@ venue is still required before live order routing can be enabled.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -209,12 +209,12 @@ class CompositeXAUIndicativeSpotProvider:
         timeout_seconds: float = 10.0,
     ) -> tuple[XAUIndicativeSpot, list[dict[str, Any]]]:
         diagnostics: list[dict[str, Any]] = []
-        fallback: XAUIndicativeSpot | None = None
+        fallbacks: list[tuple[tuple[int, int, float], XAUIndicativeSpot, int]] = []
 
         for provider in self.providers:
             provider_name = type(provider).__name__
             try:
-                quote = provider.fetch(timeout_seconds=timeout_seconds)
+                raw_quote = provider.fetch(timeout_seconds=timeout_seconds)
             except Exception as exc:  # noqa: BLE001 - fail over to next reference
                 diagnostics.append(
                     {
@@ -227,36 +227,56 @@ class CompositeXAUIndicativeSpotProvider:
 
             age_seconds = max(
                 0.0,
-                (datetime.now(timezone.utc) - quote.observed_at).total_seconds(),
+                (datetime.now(timezone.utc) - raw_quote.observed_at).total_seconds(),
             )
-            has_bid_ask = quote.bid is not None and quote.ask is not None
+            has_bid_ask = raw_quote.bid is not None and raw_quote.ask is not None
+            effective_stale = bool(raw_quote.is_stale) or age_seconds > 180.0
+            quote = (
+                raw_quote
+                if raw_quote.is_stale == effective_stale
+                else replace(raw_quote, is_stale=effective_stale)
+            )
+
+            row_index = len(diagnostics)
             diagnostics.append(
                 {
                     "provider": provider_name,
                     "status": "ok",
                     "source": quote.source,
-                    "is_stale": bool(quote.is_stale),
+                    "provider_stale": bool(raw_quote.is_stale),
+                    "is_stale": effective_stale,
                     "age_seconds": round(age_seconds, 3),
+                    "freshness_policy_seconds": 180.0,
                     "has_bid_ask": has_bid_ask,
                     "spread_bps": quote.spread_bps,
                 }
             )
 
-            if not quote.is_stale and has_bid_ask:
-                diagnostics[-1]["selected"] = True
+            # Highest quality: a fresh quote with executable-side bid/ask.
+            if not effective_stale and has_bid_ask:
+                diagnostics[row_index]["selected"] = True
+                diagnostics[row_index]["selection_reason"] = "fresh_bid_ask"
                 return quote, diagnostics
 
-            if fallback is None:
-                fallback = quote
-            elif fallback.is_stale and not quote.is_stale:
-                fallback = quote
+            # For context fallbacks prefer: fresh over stale, bid/ask over mid-only,
+            # then the youngest observation. This avoids silently sticking to an
+            # older provider merely because it appeared first.
+            rank = (
+                1 if not effective_stale else 0,
+                1 if has_bid_ask else 0,
+                -age_seconds,
+            )
+            fallbacks.append((rank, quote, row_index))
 
-        if fallback is not None:
-            for row in diagnostics:
-                if row.get("source") == fallback.source and row.get("status") == "ok":
-                    row["selected"] = True
-                    break
-            return fallback, diagnostics
+        if fallbacks:
+            _, selected, row_index = max(fallbacks, key=lambda item: item[0])
+            diagnostics[row_index]["selected"] = True
+            diagnostics[row_index]["selection_reason"] = (
+                "fresh_context_fallback"
+                if not selected.is_stale
+                else "least_bad_stale_fallback"
+            )
+            return selected, diagnostics
 
         errors = [
             f"{row.get('provider')}:{row.get('error_type')}"
