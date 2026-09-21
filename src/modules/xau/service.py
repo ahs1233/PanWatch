@@ -391,6 +391,76 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     }
 
 
+def build_decision_fusion(
+    technical: dict[str, Any],
+    macro: dict[str, Any],
+) -> dict[str, Any]:
+    """Combine technical and macro states using explicit gates, not weights."""
+
+    candidate = str(technical.get("candidate") or "none")
+    technical_blocked = bool(technical.get("blocked"))
+    event_risk = bool(macro.get("event_risk"))
+    try:
+        macro_bias = max(-1, min(1, int(macro.get("bias", 0))))
+    except (TypeError, ValueError):
+        macro_bias = 0
+
+    setup_direction = 1 if candidate == "long_setup" else -1 if candidate == "short_setup" else 0
+    if setup_direction == 0:
+        macro_relation = "not_applicable"
+    elif macro_bias == 0:
+        macro_relation = "neutral"
+    elif macro_bias == setup_direction:
+        macro_relation = "support"
+    else:
+        macro_relation = "conflict"
+
+    reasons: list[str] = []
+    if technical_blocked:
+        state = "data_gate"
+        reasons.extend(str(x) for x in technical.get("block_reasons") or [])
+    elif event_risk:
+        state = "event_gate"
+        reasons.append("high_impact_macro_event")
+    elif candidate == "none":
+        state = "no_setup"
+        reasons.append("no_aligned_technical_setup")
+    elif macro_relation == "conflict":
+        state = "setup_macro_conflict"
+        reasons.append("macro_bias_conflicts_with_technical_setup")
+    elif macro_relation == "support":
+        state = "setup_macro_support"
+        reasons.append("macro_bias_supports_technical_setup")
+    else:
+        state = "setup_macro_neutral"
+        reasons.append("macro_bias_is_neutral_or_mixed")
+
+    research_ready = state in {
+        "setup_macro_support",
+        "setup_macro_neutral",
+        "setup_macro_conflict",
+    }
+
+    return {
+        "state": state,
+        "technical_candidate": candidate,
+        "technical_status": technical.get("status"),
+        "technical_mode": technical.get("technical_mode"),
+        "macro_bias": macro_bias,
+        "macro_bias_label": macro.get("bias_label"),
+        "macro_confidence": macro.get("confidence"),
+        "macro_relation": macro_relation,
+        "event_risk": event_risk,
+        "research_ready": research_ready,
+        "execution_allowed": False,
+        "execution_status": technical.get(
+            "execution_status",
+            "LOCKED_NO_TRADABLE_SPOT_FEED",
+        ),
+        "reasons": list(dict.fromkeys(reasons)),
+    }
+
+
 def _tool_text(result: dict[str, Any]) -> str:
     parts = []
     for item in result.get("content") or []:
