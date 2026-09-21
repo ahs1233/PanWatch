@@ -45,6 +45,19 @@ interface XAUSnapshot {
   disclaimer: string
 }
 
+interface RuntimeReadiness {
+  status: string
+  profile: string
+  ai: { model: string; api_key_configured: boolean }
+  toolbox: {
+    configured: boolean
+    reachable: boolean
+    tool_count: number
+    scrapling_fetch_available: boolean
+    error?: string | null
+  }
+}
+
 interface MacroContext {
   observed_at: string
   bias: number
@@ -94,6 +107,7 @@ export default function DashboardPage() {
   const [macroLoading, setMacroLoading] = useState(true)
   const [error, setError] = useState('')
   const [macroError, setMacroError] = useState('')
+  const [readiness, setReadiness] = useState<RuntimeReadiness | null>(null)
 
   const loadTechnical = useCallback(async (force = false) => {
     setLoading(true)
@@ -128,6 +142,10 @@ export default function DashboardPage() {
   useEffect(() => {
     void loadTechnical()
     void loadMacro()
+    fetch('/api/runtime-readiness')
+      .then((response) => response.json())
+      .then((body) => setReadiness(body?.data || body))
+      .catch(() => setReadiness(null))
   }, [loadTechnical, loadMacro])
 
   const frames = useMemo(
@@ -389,6 +407,36 @@ export default function DashboardPage() {
             </div>
             <span className="text-primary">→</span>
           </button>
+        </div>
+      </div>
+
+      <div className="mt-4 card p-4">
+        <div className="mb-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Research stack
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-[12px] md:grid-cols-4">
+          <div>
+            <div className="text-muted-foreground">Profile</div>
+            <div className="mt-1 font-semibold uppercase">{readiness?.profile || 'xau'}</div>
+          </div>
+          <div>
+            <div className="text-muted-foreground">Atria</div>
+            <div className={`mt-1 font-semibold ${readiness?.ai.api_key_configured ? 'text-emerald-500' : 'text-rose-500'}`}>
+              {readiness?.ai.api_key_configured ? 'ONLINE' : 'OFFLINE'}
+            </div>
+          </div>
+          <div>
+            <div className="text-muted-foreground">Agent-Reach</div>
+            <div className={`mt-1 font-semibold ${readiness?.toolbox.reachable ? 'text-emerald-500' : 'text-rose-500'}`}>
+              {readiness?.toolbox.reachable ? `ONLINE · ${readiness.toolbox.tool_count} tools` : 'OFFLINE'}
+            </div>
+          </div>
+          <div>
+            <div className="text-muted-foreground">Scrapling</div>
+            <div className={`mt-1 font-semibold ${readiness?.toolbox.scrapling_fetch_available ? 'text-emerald-500' : 'text-rose-500'}`}>
+              {readiness?.toolbox.scrapling_fetch_available ? 'ONLINE' : 'OFFLINE'}
+            </div>
+          </div>
         </div>
       </div>
 
