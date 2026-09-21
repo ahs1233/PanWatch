@@ -16,6 +16,8 @@ from src.modules.xau.paper import (
     _paper_exit_quote,
     _paper_exit_fill_price,
     _performance_metrics,
+    _calibration_metrics,
+    _trade_autopsy,
     _position_age_minutes,
     _spot_spread_bps,
     _pnl,
@@ -343,3 +345,70 @@ def test_trade_autopsy_distinguishes_timing_failure_from_direction_failure():
     assert "high_confidence_error" in autopsy["attributions"]
     assert autopsy["mfe_r"] == 0.6
     assert autopsy["calibration_outcome"] == 0
+
+
+
+def test_calibration_metrics_compute_brier_and_ece():
+    metrics = _calibration_metrics([
+        (0.8, 1),
+        (0.7, 1),
+        (0.3, 0),
+        (0.2, 0),
+    ])
+    assert metrics["calibration_sample_count"] == 4
+    assert metrics["brier_score"] is not None
+    assert 0.0 <= metrics["brier_score"] <= 1.0
+    assert metrics["expected_calibration_error"] is not None
+    assert 0.0 <= metrics["expected_calibration_error"] <= 1.0
+
+
+def test_trade_autopsy_identifies_directional_failure():
+    position = SimpleNamespace(
+        risk_usd=100.0,
+        mfe_usd=10.0,
+        mae_usd=-100.0,
+    )
+    signal_meta = {
+        "cognitive_confidence": 0.78,
+        "cognition": {
+            "regime": {"label": "trend_bear"},
+            "hypotheses": [{"name": "trend_continuation", "weight": 0.55}],
+            "adversarial": {"counter_evidence": []},
+            "confidence": {"calibrated_confidence": 0.78},
+        },
+    }
+    autopsy = _trade_autopsy(
+        position,
+        signal_meta,
+        exit_reason="stop_loss",
+        pnl=-100.0,
+        r_multiple=-1.0,
+    )
+    assert autopsy["outcome"] == "loss"
+    assert autopsy["primary_attribution"] == "directional_thesis_failed"
+    assert "high_confidence_error" in autopsy["attributions"]
+    assert autopsy["calibration_outcome"] == 0
+
+
+def test_trade_autopsy_identifies_entry_timing_when_trade_had_mfe():
+    position = SimpleNamespace(
+        risk_usd=100.0,
+        mfe_usd=70.0,
+        mae_usd=-100.0,
+    )
+    autopsy = _trade_autopsy(
+        position,
+        {
+            "cognitive_confidence": 0.62,
+            "cognition": {
+                "regime": {"label": "trend_bull"},
+                "hypotheses": [{"name": "trend_continuation"}],
+                "adversarial": {"counter_evidence": []},
+            },
+        },
+        exit_reason="stop_loss",
+        pnl=-100.0,
+        r_multiple=-1.0,
+    )
+    assert autopsy["primary_attribution"] == "entry_timing_or_stop_too_tight"
+    assert autopsy["mfe_r"] == 0.7
