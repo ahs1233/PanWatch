@@ -116,9 +116,11 @@ def test_xau_research_tools_are_deferred_and_explicitly_non_execution():
     assert set(specs) == {
         "get_xau_intraday_research",
         "get_xau_decision_fusion",
+        "get_xau_paper_league",
     }
     assert specs["get_xau_intraday_research"].exposure is ToolExposure.DEFERRED
     assert specs["get_xau_decision_fusion"].exposure is ToolExposure.DEFERRED
+    assert specs["get_xau_paper_league"].exposure is ToolExposure.DEFERRED
     assert set(descriptor_map) == set(specs)
     assert "not valid for execution" in descriptor_map["get_xau_intraday_research"].summary
     assert "research-only" in descriptor_map["get_xau_decision_fusion"].summary.lower()
