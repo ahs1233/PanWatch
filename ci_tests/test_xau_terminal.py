@@ -138,7 +138,7 @@ def test_live_micro_replaces_only_stale_gc_1m_gate(monkeypatch):
 
     result = asyncio.run(service.get_xau_snapshot())
 
-    assert result["technical_mode"] == "spot_micro_plus_gc_5m_15m"
+    assert result["technical_mode"] == "spot_micro_plus_spot_5m_15m"
     assert result["status"] == "ready_with_spot_micro"
     assert result["blocked"] is False
     assert "stale_1m_bars" in result["raw_proxy_block_reasons"]
