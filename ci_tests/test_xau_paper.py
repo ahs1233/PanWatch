@@ -9,6 +9,8 @@ from src.modules.xau.paper import (
     _paper_mark_price,
     _paper_exit_fill_price,
     _performance_metrics,
+    _position_age_minutes,
+    _spot_spread_bps,
     _pnl,
     _week_key,
 )
@@ -174,3 +176,23 @@ def test_performance_metrics_use_r_and_realized_pnl():
     assert metrics["average_loss_r"] == -1.0
     assert metrics["average_mfe_usd"] == round(235.0 / 3.0, 4)
     assert metrics["average_mae_usd"] == -30.0
+
+
+
+def test_spread_bps_is_derived_from_bid_ask_when_missing():
+    spot = {"price": 4350.0, "bid": 4349.8, "ask": 4350.2}
+    spread = _spot_spread_bps(spot)
+
+    assert spread is not None
+    assert spread == round((0.4 / 4350.0) * 10_000.0, 10)
+
+
+def test_position_age_minutes_handles_naive_and_aware_datetimes():
+    opened = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 21, 16, 0, tzinfo=timezone.utc)
+    assert _position_age_minutes(opened, now) == 240.0
+
+    assert _position_age_minutes(
+        opened.replace(tzinfo=None),
+        now.replace(tzinfo=None),
+    ) == 240.0
