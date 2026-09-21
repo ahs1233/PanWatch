@@ -5,6 +5,12 @@ from datetime import datetime, timedelta, timezone
 
 from src.modules.xau import service
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
+from src.platform.marketdata import xau_spot_reference
+from src.platform.marketdata.xau_spot_reference import (
+    BiquoteXAUIndicativeSpotReference,
+    CompositeXAUIndicativeSpotProvider,
+    XAUIndicativeSpot,
+)
 from src.platform.marketdata.xau_micro_reference import XAUMicroPoint, XAUMicroSeries, sampled_spot_bars
 
 
@@ -229,3 +235,99 @@ def test_sampled_spot_bars_use_stable_bucket_timestamp():
     assert bars[1].timestamp == base + timedelta(minutes=5)
     assert bars[0].close == 4302.0
     assert bars[1].close == 4303.0
+
+
+
+def test_biquote_parses_fresh_bid_ask_quote(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "symbol": "XAUUSD",
+                "bid": 4350.10,
+                "ask": 4350.40,
+                "mid": 4350.25,
+                "timestamp": "2026-09-21T14:20:00Z",
+                "source": "MetaTrader 5 (Broker 1)",
+                "marketState": "open",
+                "stale": False,
+                "quoteAgeSeconds": 2,
+            }
+
+    monkeypatch.setattr(
+        xau_spot_reference.httpx,
+        "get",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    quote = BiquoteXAUIndicativeSpotReference().fetch()
+
+    assert quote.bid == 4350.10
+    assert quote.ask == 4350.40
+    assert quote.price == 4350.25
+    assert quote.is_stale is False
+    assert quote.execution_eligible is False
+    assert quote.source.startswith("biquote.io:")
+
+
+def test_biquote_marks_closed_market_as_stale(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "bid": 4350.10,
+                "ask": 4350.40,
+                "mid": 4350.25,
+                "timestamp": "2026-09-21T14:20:00Z",
+                "source": "MetaTrader 5 (Broker 1)",
+                "marketState": "closed",
+                "stale": False,
+                "quoteAgeSeconds": 2,
+            }
+
+    monkeypatch.setattr(
+        xau_spot_reference.httpx,
+        "get",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    quote = BiquoteXAUIndicativeSpotReference().fetch()
+    assert quote.is_stale is True
+
+
+def test_composite_prefers_fresh_bid_ask_over_mid_only():
+    fresh_mid = XAUIndicativeSpot(
+        price=4350.0,
+        bid=None,
+        ask=None,
+        observed_at=datetime.now(timezone.utc),
+        source="mid-only",
+        is_stale=False,
+    )
+    fresh_quote = XAUIndicativeSpot(
+        price=4350.25,
+        bid=4350.10,
+        ask=4350.40,
+        observed_at=datetime.now(timezone.utc),
+        source="bid-ask",
+        is_stale=False,
+    )
+
+    class Provider:
+        def __init__(self, quote):
+            self.quote = quote
+
+        def fetch(self, timeout_seconds=10.0):
+            return self.quote
+
+    composite = CompositeXAUIndicativeSpotProvider()
+    composite.providers = (Provider(fresh_mid), Provider(fresh_quote))
+
+    result = composite.fetch()
+    assert result.source == "bid-ask"
+    assert result.bid == 4350.10
+    assert result.ask == 4350.40
