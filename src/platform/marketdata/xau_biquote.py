@@ -42,6 +42,61 @@ def _utc_param(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _parse_ohlc_bars(payload: Any, timeframe: XAUTimeframe) -> list[XAUBar]:
+    if not isinstance(payload, dict):
+        raise RuntimeError("biquote.io OHLC returned malformed response")
+    raw_bars = payload.get("bars")
+    if not isinstance(raw_bars, list):
+        raise RuntimeError("biquote.io OHLC returned no bars")
+
+    out: list[XAUBar] = []
+    for item in raw_bars:
+        if not isinstance(item, dict):
+            continue
+        # Historical/replay consumers only want complete candles.  The live
+        # adapter may receive an open candle, but it must not become a closed
+        # historical observation.
+        if bool(item.get("isOpen", False)):
+            continue
+        timestamp = _timestamp(item.get("openTime"))
+        open_price = _number(item.get("open"))
+        high = _number(item.get("high"))
+        low = _number(item.get("low"))
+        close = _number(item.get("close"))
+        if None in {timestamp, open_price, high, low, close}:
+            continue
+        try:
+            volume_raw = item.get("tickVolume")
+            if volume_raw is None:
+                volume_raw = item.get("volume")
+            volume = float(volume_raw) if volume_raw is not None else None
+        except (TypeError, ValueError):
+            volume = None
+
+        try:
+            out.append(
+                XAUBar(
+                    timestamp=timestamp,
+                    timeframe=timeframe,
+                    open=float(open_price),
+                    high=float(high),
+                    low=float(low),
+                    close=float(close),
+                    volume=volume,
+                    source="biquote.io:MT5-ohlc",
+                    symbol="XAUUSD",
+                    execution_eligible=False,
+                )
+            )
+        except ValueError:
+            continue
+
+    out.sort(key=lambda bar: bar.timestamp)
+    if not out:
+        raise RuntimeError("biquote.io OHLC returned no usable XAU bars")
+    return out
+
+
 class BiquoteXAUOHLCProvider:
     """MT5-backed OHLC provider for XAUUSD research bars."""
 
@@ -72,53 +127,80 @@ class BiquoteXAUOHLCProvider:
             headers={"User-Agent": "PanWatch-XAU/0.5"},
         )
         response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise RuntimeError("biquote.io OHLC returned malformed response")
-        raw_bars = payload.get("bars")
-        if not isinstance(raw_bars, list):
-            raise RuntimeError("biquote.io OHLC returned no bars")
+        return _parse_ohlc_bars(response.json(), timeframe)
 
-        out: list[XAUBar] = []
-        for item in raw_bars:
-            if not isinstance(item, dict):
-                continue
-            timestamp = _timestamp(item.get("openTime"))
-            open_price = _number(item.get("open"))
-            high = _number(item.get("high"))
-            low = _number(item.get("low"))
-            close = _number(item.get("close"))
-            if None in {timestamp, open_price, high, low, close}:
-                continue
+    def bars_range(
+        self,
+        timeframe: XAUTimeframe,
+        *,
+        start: datetime,
+        end: datetime,
+        timeout_seconds: float = 12.0,
+        max_bars_per_request: int = 900,
+        max_chunks: int = 64,
+    ) -> list[XAUBar]:
+        """Fetch deeper MT5 history using bounded, deduplicated date chunks."""
+        interval = {
+            XAUTimeframe.M1: "1m",
+            XAUTimeframe.M5: "5m",
+            XAUTimeframe.M15: "15m",
+        }.get(timeframe)
+        if interval is None:
+            raise ValueError(f"unsupported Biquote XAU timeframe: {timeframe}")
+
+        start_utc = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
+        end_utc = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
+        start_utc = start_utc.astimezone(timezone.utc)
+        end_utc = end_utc.astimezone(timezone.utc)
+        if end_utc <= start_utc:
+            raise ValueError("Biquote OHLC range end must be after start")
+
+        minutes_per_bar = {
+            XAUTimeframe.M1: 1,
+            XAUTimeframe.M5: 5,
+            XAUTimeframe.M15: 15,
+        }[timeframe]
+        request_cap = max(100, min(int(max_bars_per_request), 900))
+        chunk_span = timedelta(minutes=minutes_per_bar * request_cap)
+        headers = {"User-Agent": "PanWatch-XAU/0.6"}
+
+        by_timestamp: dict[datetime, XAUBar] = {}
+        cursor = start_utc
+        chunks = 0
+        while cursor < end_utc:
+            if chunks >= max(1, int(max_chunks)):
+                raise RuntimeError("biquote.io OHLC range exceeded chunk safety cap")
+            chunk_end = min(end_utc, cursor + chunk_span)
+            response = httpx.get(
+                self.url,
+                params={
+                    "interval": interval,
+                    "limit": request_cap,
+                    "from": _utc_param(cursor),
+                    "to": _utc_param(chunk_end),
+                },
+                timeout=timeout_seconds,
+                headers=headers,
+            )
+            response.raise_for_status()
             try:
-                volume_raw = item.get("tickVolume")
-                if volume_raw is None:
-                    volume_raw = item.get("volume")
-                volume = float(volume_raw) if volume_raw is not None else None
-            except (TypeError, ValueError):
-                volume = None
+                rows = _parse_ohlc_bars(response.json(), timeframe)
+            except RuntimeError as exc:
+                # Empty market-closed chunks are valid inside a larger range.
+                if "no usable XAU bars" not in str(exc):
+                    raise
+                rows = []
 
-            try:
-                out.append(
-                    XAUBar(
-                        timestamp=timestamp,
-                        timeframe=timeframe,
-                        open=float(open_price),
-                        high=float(high),
-                        low=float(low),
-                        close=float(close),
-                        volume=volume,
-                        source="biquote.io:MT5-ohlc",
-                        symbol="XAUUSD",
-                        execution_eligible=False,
-                    )
-                )
-            except ValueError:
-                continue
+            for bar in rows:
+                if start_utc <= bar.timestamp < end_utc:
+                    by_timestamp[bar.timestamp] = bar
 
-        out.sort(key=lambda bar: bar.timestamp)
+            cursor = chunk_end
+            chunks += 1
+
+        out = sorted(by_timestamp.values(), key=lambda bar: bar.timestamp)
         if not out:
-            raise RuntimeError("biquote.io OHLC returned no usable XAU bars")
+            raise RuntimeError("biquote.io OHLC range returned no usable XAU bars")
         return out
 
 
