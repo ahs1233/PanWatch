@@ -87,6 +87,16 @@ def _paper_mark_price(side: str, spot: dict) -> float | None:
     return _number(spot.get("ask")) or _number(spot.get("price"))
 
 
+def _position_age_minutes(opened_at: datetime, now_utc: datetime) -> float:
+    opened = opened_at
+    if opened.tzinfo is not None:
+        opened = opened.astimezone(timezone.utc).replace(tzinfo=None)
+    now_value = now_utc
+    if now_value.tzinfo is not None:
+        now_value = now_value.astimezone(timezone.utc).replace(tzinfo=None)
+    return max(0.0, (now_value - opened).total_seconds() / 60.0)
+
+
 def _spot_spread_bps(spot: dict) -> float | None:
     direct = _number(spot.get("spread_bps"))
     if direct is not None:
@@ -701,13 +711,7 @@ class XAUPaperTradingEngine:
                             exit_reason = "target_price"
 
                     if exit_reason is None and position.opened_at:
-                        opened_at = position.opened_at
-                        if opened_at.tzinfo is not None:
-                            opened_at = opened_at.astimezone(timezone.utc).replace(tzinfo=None)
-                        held_minutes = max(
-                            0.0,
-                            (now_utc - opened_at).total_seconds() / 60.0,
-                        )
+                        held_minutes = _position_age_minutes(position.opened_at, now_utc)
                         if held_minutes >= float(self.settings.xau_paper_max_hold_minutes):
                             exit_reason = "time_stop"
 
