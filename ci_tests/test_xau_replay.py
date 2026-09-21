@@ -1,9 +1,12 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.modules.xau import replay
 from src.modules.xau.replay import (
+    _fetch_default_replay_history,
     build_replay_technical_state,
     persist_replay_episodes,
     walk_forward_replay,
@@ -160,3 +163,49 @@ def test_persist_replay_episodes_is_idempotent():
         assert db.query(XAUReplayEpisode).count() == 5
     finally:
         db.close()
+
+
+
+def test_default_replay_history_does_not_mix_sources_on_partial_biquote_failure(monkeypatch):
+    start = datetime(2026, 1, 5, 0, 0, tzinfo=timezone.utc)
+
+    def fake_biquote(self, timeframe, *, limit=240, timeout_seconds=12.0):
+        if timeframe == XAUTimeframe.M5:
+            raise RuntimeError("partial provider failure")
+        count = 100 if timeframe != XAUTimeframe.M15 else 40
+        return _bars(timeframe, count, start=start, slope=0.1)
+
+    def fake_yahoo(self, timeframe):
+        count = {
+            XAUTimeframe.M1: 120,
+            XAUTimeframe.M5: 80,
+            XAUTimeframe.M15: 40,
+        }[timeframe]
+        rows = _bars(timeframe, count, start=start, slope=0.2)
+        return [
+            XAUBar(
+                timestamp=row.timestamp,
+                timeframe=row.timeframe,
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+                source="yfinance:GC=F",
+                execution_eligible=False,
+            )
+            for row in rows
+        ]
+
+    monkeypatch.setattr(replay.BiquoteXAUOHLCProvider, "bars", fake_biquote)
+    monkeypatch.setattr(replay.YahooGoldResearchProvider, "bars", fake_yahoo)
+
+    history, source = asyncio.run(_fetch_default_replay_history(limit=1000))
+
+    assert source == "yfinance:GC=F"
+    assert all(history[tf] for tf in XAUTimeframe)
+    assert all(
+        row.source == "yfinance:GC=F"
+        for tf in XAUTimeframe
+        for row in history[tf]
+    )
