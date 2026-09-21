@@ -911,6 +911,7 @@ def _shadow_research_memory(
             "nearest_similarity": None,
             "horizon_mix": {},
             "decision_filtered": True,
+            "lookahead_protected": True,
             "eligible_rejection_reasons": sorted(eligible_rejections),
             "research_only": True,
         }
@@ -943,6 +944,7 @@ def _shadow_research_memory(
         "nearest_similarity": round(episodes[0][0], 4),
         "horizon_mix": horizon_mix,
         "decision_filtered": True,
+        "lookahead_protected": True,
         "eligible_rejection_reasons": sorted(eligible_rejections),
         "research_only": True,
     }
