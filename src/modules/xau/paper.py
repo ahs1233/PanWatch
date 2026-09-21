@@ -26,6 +26,7 @@ from src.modules.xau.paper_store import (
     open_xau_paper_session,
     open_xau_replay_session,
     paper_store_is_external,
+    replay_store_is_external,
 )
 from src.platform.persistence.models import (
     XAUPaperAccount,
@@ -888,7 +889,7 @@ def _shadow_research_memory(
 
 
 def _replay_research_memory(
-    episodes: list[XAUReplayEpisode],
+    episodes: list[object],
     current_vector: dict,
     *,
     similarity_floor: float = 0.70,
@@ -897,11 +898,27 @@ def _replay_research_memory(
     """Research-only memory retrieved from no-lookahead replay episodes."""
     scored: list[tuple[float, float]] = []
     for episode in episodes:
-        saved_vector = episode.state_vector or {}
+        meta = getattr(episode, "meta", {}) or {}
+        replay_payload = meta.get("replay_episode") or {}
+        saved_vector = (
+            getattr(episode, "state_vector", None)
+            or meta.get("state_vector")
+            or replay_payload.get("state_vector")
+            or {}
+        )
+        directional_return = getattr(episode, "directional_return_bps", None)
+        if directional_return is None:
+            directional_return = (
+                meta.get("directional_return_bps")
+                if meta.get("directional_return_bps") is not None
+                else replay_payload.get("directional_return_bps")
+            )
+        if directional_return is None:
+            continue
         similarity = state_vector_similarity(current_vector, saved_vector)
         if similarity < similarity_floor:
             continue
-        scored.append((similarity, float(episode.directional_return_bps or 0.0)))
+        scored.append((similarity, float(directional_return)))
 
     scored.sort(key=lambda item: item[0], reverse=True)
     scored = scored[: max(1, int(limit))]
@@ -1084,22 +1101,37 @@ class XAUPaperTradingEngine:
             current_vector,
         )
 
-        replay_db = open_xau_replay_session()
-        try:
+        if replay_store_is_external():
+            replay_db = open_xau_replay_session()
+            try:
+                replay_episodes = (
+                    replay_db.query(XAUReplayEpisode)
+                    .filter(XAUReplayEpisode.candidate == candidate)
+                    .order_by(
+                        XAUReplayEpisode.observed_at.desc(),
+                        XAUReplayEpisode.id.desc(),
+                    )
+                    .limit(1000)
+                    .all()
+                )
+            except Exception:
+                replay_episodes = []
+            finally:
+                replay_db.close()
+        else:
             replay_episodes = (
-                replay_db.query(XAUReplayEpisode)
-                .filter(XAUReplayEpisode.candidate == candidate)
+                db.query(XAUPaperSignal)
+                .filter(
+                    XAUPaperSignal.candidate == f"replay_{candidate}",
+                    XAUPaperSignal.rejection_reason == "historical_replay",
+                )
                 .order_by(
-                    XAUReplayEpisode.observed_at.desc(),
-                    XAUReplayEpisode.id.desc(),
+                    XAUPaperSignal.observed_at.desc(),
+                    XAUPaperSignal.id.desc(),
                 )
                 .limit(1000)
                 .all()
             )
-        except Exception:
-            replay_episodes = []
-        finally:
-            replay_db.close()
 
         replay_memory = _replay_research_memory(
             replay_episodes,
@@ -2092,14 +2124,20 @@ class XAUPaperTradingEngine:
             )
             signals = (
                 db.query(XAUPaperSignal)
-                .filter(XAUPaperSignal.account_id == account.id)
+                .filter(
+                    XAUPaperSignal.account_id == account.id,
+                    XAUPaperSignal.rejection_reason != "historical_replay",
+                )
                 .order_by(XAUPaperSignal.observed_at.desc(), XAUPaperSignal.id.desc())
                 .limit(max(1, min(int(signal_limit), 200)))
                 .all()
             )
             shadow_signals = (
                 db.query(XAUPaperSignal)
-                .filter(XAUPaperSignal.account_id == account.id)
+                .filter(
+                    XAUPaperSignal.account_id == account.id,
+                    XAUPaperSignal.rejection_reason != "historical_replay",
+                )
                 .order_by(XAUPaperSignal.observed_at.desc(), XAUPaperSignal.id.desc())
                 .limit(500)
                 .all()
