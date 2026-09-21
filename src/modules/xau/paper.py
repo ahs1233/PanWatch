@@ -186,12 +186,20 @@ def _paper_exit_quote(side: str, spot: dict) -> float | None:
     return _number(spot.get("ask"))
 
 
-def _weekly_reset_fill_price(side: str, spot: dict | None) -> float | None:
-    """Weekly rollover requires a fresh executable-side paper quote."""
+def _paper_management_quote(side: str, spot: dict | None) -> float | None:
+    """Fresh paper quote allowed to drive stops, targets, guardian and time exits."""
     spot = spot or {}
     if not spot or bool(spot.get("is_stale")):
         return None
+    fill_state = str(spot.get("fill_state") or "")
+    if fill_state and fill_state != "ready":
+        return None
     return _paper_exit_quote(side, spot)
+
+
+def _weekly_reset_fill_price(side: str, spot: dict | None) -> float | None:
+    """Weekly rollover requires the same fresh paper-fill contract as management."""
+    return _paper_management_quote(side, spot)
 
 
 def _position_age_minutes(opened_at: datetime, now_utc: datetime) -> float:
@@ -1613,8 +1621,8 @@ class XAUPaperTradingEngine:
                 )
 
             position_management = None
-            if position and spot and not bool(spot.get("is_stale")):
-                exit_quote = _paper_exit_quote(position.side, spot)
+            if position:
+                exit_quote = _paper_management_quote(position.side, spot)
                 if exit_quote is not None:
                     exit_reason = None
                     if position.side == "long":
