@@ -15,6 +15,7 @@ from src.modules.xau.paper import (
     _paper_mark_price,
     _paper_context_mark_price,
     _paper_exit_quote,
+    _weekly_reset_fill_price,
     _paper_exit_fill_price,
     _performance_metrics,
     _shadow_metrics,
@@ -655,3 +656,58 @@ def test_position_guardian_short_side_tightens_symmetrically():
 
     assert result["current_r"] == 1.6
     assert result["new_stop_loss"] == 95.0
+
+
+
+def test_contextual_mark_does_not_contaminate_execution_extremes():
+    engine = XAUPaperTradingEngine(Settings())
+    account = SimpleNamespace(
+        initial_capital=10_000.0,
+        realized_pnl=0.0,
+        current_equity=10_000.0,
+        peak_equity=10_000.0,
+        max_drawdown_pct=1.25,
+    )
+    position = SimpleNamespace(
+        side="long",
+        entry_price=4350.0,
+        quantity_oz=2.0,
+        current_price=4350.0,
+        unrealized_pnl=0.0,
+        mfe_usd=25.0,
+        mae_usd=-15.0,
+    )
+
+    mark = engine._mark_position(
+        account,
+        position,
+        {"price": 4350.0, "bid": None, "ask": None, "is_stale": True},
+        {"price": 4325.0, "is_stale": False},
+    )
+
+    assert mark == 4325.0
+    assert position.unrealized_pnl == -50.0
+    assert account.current_equity == 9950.0
+    assert position.mfe_usd == 25.0
+    assert position.mae_usd == -15.0
+    assert account.peak_equity == 10_000.0
+    assert account.max_drawdown_pct == 1.25
+
+
+def test_weekly_reset_never_manufactures_mid_only_or_stale_fill():
+    assert _weekly_reset_fill_price(
+        "long",
+        {"price": 4340.0, "bid": None, "ask": None, "is_stale": False},
+    ) is None
+    assert _weekly_reset_fill_price(
+        "short",
+        {"price": 4340.0, "bid": 4339.9, "ask": 4340.1, "is_stale": True},
+    ) is None
+    assert _weekly_reset_fill_price(
+        "long",
+        {"price": 4340.0, "bid": 4339.9, "ask": 4340.1, "is_stale": False},
+    ) == 4339.9
+    assert _weekly_reset_fill_price(
+        "short",
+        {"price": 4340.0, "bid": 4339.9, "ask": 4340.1, "is_stale": False},
+    ) == 4340.1
