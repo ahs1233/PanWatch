@@ -102,8 +102,60 @@ interface RuntimeReadiness {
   }
 }
 
+interface CognitiveHypothesis {
+  name: string
+  weight: number
+  direction: string
+}
+
+interface CognitionState {
+  version: string
+  data_quality: { score: number; issues: string[] }
+  perception: {
+    directional_pressure: number
+    momentum: string
+    return_10m_pct: number
+    return_30m_pct: number
+    acceleration: number
+    volatility_pct: number
+    breakout: string
+    rsi_5m: number
+    rsi_15m: number
+  }
+  regime: { label: string; confidence: number }
+  hypotheses: CognitiveHypothesis[]
+  memory: {
+    trade_count: number
+    expectancy_r: number
+    profit_factor: number | null
+    learning_strength: number
+    confidence_adjustment: number
+  }
+  adversarial: { veto: boolean; veto_score: number; counter_evidence: string[] }
+  confidence: {
+    raw_confidence: number
+    calibrated_confidence: number
+    band: string
+  }
+  execution_plan: {
+    action: string
+    side: string | null
+    entry_zone: number[] | null
+    invalidation_reference: number | null
+    extension_atr: number
+    reasons: string[]
+  }
+  meta_controller: {
+    decision: string
+    paper_entry_allowed: boolean
+    min_confidence: number
+    live_execution_allowed: boolean
+  }
+}
+
 interface DecisionFusion {
   state: string
+  base_state?: string
   technical_candidate: string
   technical_status: string
   technical_mode: string
@@ -113,6 +165,11 @@ interface DecisionFusion {
   macro_relation: string
   event_risk: boolean
   research_ready: boolean
+  regime?: string
+  cognitive_confidence?: number
+  meta_decision?: string
+  paper_entry_allowed?: boolean
+  cognition?: CognitionState
   execution_allowed: boolean
   execution_status: string
   reasons: string[]
@@ -310,6 +367,74 @@ export default function DashboardPage() {
           </div>
         ) : null}
       </div>
+
+      {fusion?.cognition ? (
+        <div className="card mb-4 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Cognitive engine</div>
+              <div className="mt-1 text-[16px] font-bold text-foreground">Multi-layer market reasoning</div>
+            </div>
+            <div className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
+              fusion.cognition.meta_controller.decision === 'eligible'
+                ? 'bg-emerald-500/10 text-emerald-500'
+                : fusion.cognition.meta_controller.decision === 'veto'
+                  ? 'bg-rose-500/10 text-rose-500'
+                  : 'bg-amber-500/10 text-amber-500'
+            }`}>
+              {fusion.cognition.meta_controller.decision.toUpperCase()}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div className="rounded-xl bg-accent/30 p-3">
+              <div className="text-[10px] text-muted-foreground">Regime</div>
+              <div className="mt-1 text-[13px] font-semibold uppercase">{friendlyReason(fusion.cognition.regime.label)}</div>
+            </div>
+            <div className="rounded-xl bg-accent/30 p-3">
+              <div className="text-[10px] text-muted-foreground">Calibrated confidence</div>
+              <div className="mt-1 text-[13px] font-semibold">{Math.round(fusion.cognition.confidence.calibrated_confidence * 100)}%</div>
+            </div>
+            <div className="rounded-xl bg-accent/30 p-3">
+              <div className="text-[10px] text-muted-foreground">Data quality</div>
+              <div className="mt-1 text-[13px] font-semibold">{Math.round(fusion.cognition.data_quality.score * 100)}%</div>
+            </div>
+            <div className="rounded-xl bg-accent/30 p-3">
+              <div className="text-[10px] text-muted-foreground">Execution timing</div>
+              <div className="mt-1 text-[13px] font-semibold">{friendlyReason(fusion.cognition.execution_plan.action)}</div>
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <div className="mb-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Competing hypotheses</div>
+            <div className="grid gap-2 md:grid-cols-3">
+              {fusion.cognition.hypotheses.map((hypothesis) => (
+                <div key={hypothesis.name} className="rounded-xl border border-border/60 px-3 py-2">
+                  <div className="text-[11px] font-semibold">{friendlyReason(hypothesis.name)}</div>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    Weight {Math.round(hypothesis.weight * 100)}% · {hypothesis.direction.toUpperCase()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {fusion.cognition.adversarial.counter_evidence.length ? (
+            <div className="mt-3">
+              <div className="mb-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Adversarial review</div>
+              <div className="flex flex-wrap gap-2">
+                {fusion.cognition.adversarial.counter_evidence.map((item) => (
+                  <span key={item} className="rounded-full bg-amber-500/10 px-2.5 py-1 text-[10px] text-amber-600">
+                    {friendlyReason(item)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 text-[11px] text-muted-foreground">Adversarial layer found no material counter-evidence.</div>
+          )}
+        </div>
+      ) : null}
 
       {error && (
         <div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/8 p-4 text-[13px] text-rose-500">
