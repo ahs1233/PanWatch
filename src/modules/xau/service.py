@@ -10,7 +10,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
@@ -111,11 +111,26 @@ async def get_research_bars(force: bool = False):
             biquote_bars(XAUTimeframe.M15),
         )
 
-        # Fail soft per timeframe. XAUS sampled spot is preferred over GC=F for
-        # 5m/15m; Yahoo GC=F remains the last-resort research proxy.
+        # Fail soft per timeframe. A stale primary 5m/15m series is treated
+        # exactly like an unavailable one: prefer a fresher sampled XAU spot
+        # structure before falling back to GC=F research.
+        now_utc = datetime.now(timezone.utc)
+
+        def fresh_enough(rows, max_age: timedelta) -> bool:
+            if not rows:
+                return False
+            try:
+                latest = max(rows, key=lambda item: item.timestamp)
+                return now_utc - latest.timestamp <= max_age
+            except Exception:
+                return False
+
+        m5_fresh = fresh_enough(m5, timedelta(minutes=12))
+        m15_fresh = fresh_enough(m15, timedelta(minutes=35))
+
         sampled_5 = []
         sampled_15 = []
-        if not m5 or not m15:
+        if not m5_fresh or not m15_fresh:
             try:
                 series = await get_micro_series(force=force)
                 sampled_5 = sampled_spot_bars(series, XAUTimeframe.M5)
@@ -126,10 +141,18 @@ async def get_research_bars(force: bool = False):
 
         if not m1:
             m1 = await yahoo_bars(XAUTimeframe.M1)
-        if not m5:
-            m5 = sampled_5 or await yahoo_bars(XAUTimeframe.M5)
-        if not m15:
-            m15 = sampled_15 or await yahoo_bars(XAUTimeframe.M15)
+
+        if not m5_fresh:
+            if fresh_enough(sampled_5, timedelta(minutes=12)):
+                m5 = sampled_5
+            else:
+                m5 = await yahoo_bars(XAUTimeframe.M5)
+
+        if not m15_fresh:
+            if fresh_enough(sampled_15, timedelta(minutes=35)):
+                m15 = sampled_15
+            else:
+                m15 = await yahoo_bars(XAUTimeframe.M15)
 
         data = {
             XAUTimeframe.M1: m1,
