@@ -17,7 +17,7 @@ from src.modules.xau.service import (
     get_macro_context,
     get_xau_snapshot,
 )
-from src.platform.persistence.database import SessionLocal
+from src.modules.xau.paper_store import open_xau_paper_session
 from src.platform.persistence.models import (
     XAUPaperAccount,
     XAUPaperPosition,
@@ -583,7 +583,7 @@ class XAUPaperTradingEngine:
         spot = technical.get("indicative_spot") or {}
         now_utc = _utc_naive(now)
 
-        db = SessionLocal()
+        db = open_xau_paper_session()
         try:
             account = self._ensure_week(db, spot, now=now)
             position = self._open_position(db, account.id)
@@ -659,7 +659,7 @@ class XAUPaperTradingEngine:
             db.close()
 
     def summary(self, trade_limit: int = 20, signal_limit: int = 20) -> dict:
-        db = SessionLocal()
+        db = open_xau_paper_session()
         try:
             account = self._active_account(db)
             if not account:
