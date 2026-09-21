@@ -65,6 +65,19 @@ async def _fake_micro(force: bool = False):
     }
 
 
+async def _fake_consensus(force: bool = False):
+    return {
+        "source_count": 2,
+        "usable_count": 2,
+        "reference_median": 2620.0,
+        "references": [
+            {"source": "alt-a", "price": 2620.1, "is_stale": False},
+            {"source": "alt-b", "price": 2619.9, "is_stale": False},
+        ],
+        "execution_eligible": False,
+    }
+
+
 def test_snapshot_is_research_only(monkeypatch):
     async def fake_bars(force: bool = False):
         return {
@@ -91,6 +104,7 @@ def test_snapshot_is_research_only(monkeypatch):
     monkeypatch.setattr(service, "get_research_bars", fake_bars)
     monkeypatch.setattr(service, "get_indicative_spot", fake_spot)
     monkeypatch.setattr(service, "get_micro_context", _fake_micro)
+    monkeypatch.setattr(service, "get_spot_consensus", _fake_consensus)
     result = asyncio.run(service.get_xau_snapshot())
 
     assert result["instrument"] == "XAUUSD"
@@ -147,6 +161,7 @@ def test_live_micro_replaces_only_stale_gc_1m_gate(monkeypatch):
     monkeypatch.setattr(service, "get_research_bars", stale_1m_bars)
     monkeypatch.setattr(service, "get_indicative_spot", fake_spot)
     monkeypatch.setattr(service, "get_micro_context", _fake_micro)
+    monkeypatch.setattr(service, "get_spot_consensus", _fake_consensus)
 
     result = asyncio.run(service.get_xau_snapshot())
 
