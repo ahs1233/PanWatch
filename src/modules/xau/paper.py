@@ -360,8 +360,9 @@ def _position_guardian(
 def _confirm_reversal_exit(
     position_key: str,
     management: dict | None,
-    streaks: dict[str, int],
+    streaks: dict[str, dict[str, object]],
     *,
+    observation_id: str | None = None,
     required: int = 2,
 ) -> dict | None:
     """Require consecutive qualified opposite-thesis observations before exit.
@@ -391,11 +392,36 @@ def _confirm_reversal_exit(
         result["confirmation_required"] = required
         return result
 
-    streak = (streaks.get(key, 0) if key else 0) + 1
+    observation = str(observation_id or "").strip()
+    prior = streaks.get(key, {}) if key else {}
+    prior_count = int(prior.get("count", 0) or 0) if isinstance(prior, dict) else 0
+    prior_observation = (
+        str(prior.get("observation_id") or "")
+        if isinstance(prior, dict)
+        else ""
+    )
+
+    if observation and observation == prior_observation:
+        streak = prior_count
+        result["confirmation_streak"] = streak
+        result["confirmation_required"] = required
+        result["confirmation_observation_reused"] = True
+        result["proposed_exit_reason"] = "thesis_reversal"
+        result["exit_requested"] = False
+        result["exit_reason"] = None
+        result["action"] = "hold"
+        result["reason"] = "opposite_thesis_waiting_new_observation"
+        return result
+
+    streak = prior_count + 1
     if key:
-        streaks[key] = streak
+        streaks[key] = {
+            "count": streak,
+            "observation_id": observation,
+        }
     result["confirmation_streak"] = streak
     result["confirmation_required"] = required
+    result["confirmation_observation_reused"] = False
 
     if streak < required:
         result["proposed_exit_reason"] = "thesis_reversal"
@@ -756,7 +782,7 @@ class XAUPaperTradingEngine:
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings()
-        self._reversal_streaks: dict[str, int] = {}
+        self._reversal_streaks: dict[str, dict[str, object]] = {}
 
     def _active_account(self, db) -> XAUPaperAccount | None:
         return (
@@ -1701,10 +1727,17 @@ class XAUPaperTradingEngine:
                             fusion,
                             exit_quote,
                         )
+                        observation_id = str(
+                            (technical.get("micro") or {}).get("last_point_at")
+                            or analysis_reference.get("observed_at")
+                            or technical.get("observed_at")
+                            or ""
+                        )
                         position_management = _confirm_reversal_exit(
                             reversal_key,
                             position_management,
                             self._reversal_streaks,
+                            observation_id=observation_id,
                             required=2,
                         )
                         new_stop = _number(
