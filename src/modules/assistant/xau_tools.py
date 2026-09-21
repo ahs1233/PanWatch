@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 
 from pan_agent import (
@@ -18,88 +17,56 @@ from pan_agent_tool_research import (
     ToolDescriptor,
 )
 
-from src.modules.strategy.xau_intraday import XAUIntradayEngine
-from src.platform.marketdata.xau_models import XAUTimeframe
-from src.platform.marketdata.xau_research_provider import YahooGoldResearchProvider
+from src.modules.xau.service import get_xau_snapshot
 
 
 def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
-    """Register research-only XAU tooling without implying spot execution data."""
+    """Register the same XAU research state used by the terminal UI."""
 
     async def get_xau_intraday_research(
         _request: RunRequest,
         _arguments: dict,
     ) -> ToolResult:
-        provider = YahooGoldResearchProvider()
-
-        async def _bars(timeframe: XAUTimeframe):
-            return await asyncio.to_thread(provider.bars, timeframe)
-
         try:
-            m1, m5, m15 = await asyncio.gather(
-                _bars(XAUTimeframe.M1),
-                _bars(XAUTimeframe.M5),
-                _bars(XAUTimeframe.M15),
-            )
-        except Exception as exc:  # noqa: BLE001 - provider failure is a tool result
+            snapshot = await get_xau_snapshot(force=False)
+        except Exception as exc:  # noqa: BLE001 - surface provider failure as a tool result
             return ToolResult.failure(
-                summary=f"XAU research proxy data unavailable: {exc}",
+                summary=f"XAU intraday research unavailable: {type(exc).__name__}",
                 error_code="xau_research_unavailable",
             )
 
-        assessment = XAUIntradayEngine(require_execution_data=False).analyze(
-            {
-                XAUTimeframe.M1: m1,
-                XAUTimeframe.M5: m5,
-                XAUTimeframe.M15: m15,
-            },
-            now=datetime.now(timezone.utc),
-        )
-
-        frames = {
-            name: {
-                "timeframe": state.timeframe.value,
-                "close": state.close,
-                "ema_fast": state.ema_fast,
-                "ema_slow": state.ema_slow,
-                "rsi14": state.rsi14,
-                "atr14": state.atr14,
-                "atr_pct": state.atr_pct,
-                "breakout": state.breakout,
-                "direction": state.direction,
-                "recent_swing_high": state.recent_swing_high,
-                "recent_swing_low": state.recent_swing_low,
-                "observed_at": state.observed_at.isoformat(),
-            }
-            for name, state in assessment.frame_states.items()
-        }
-
+        spot = snapshot.get("indicative_spot") or {}
+        micro = snapshot.get("micro") or {}
         summary = (
-            "XAUUSD research proxy (GC=F) intraday state: "
-            f"{assessment.status}; candidate={assessment.candidate}. "
-            "This is research context only, not a spot XAUUSD execution quote."
+            "XAUUSD intraday research: "
+            f"status={snapshot.get('status')}; "
+            f"candidate={snapshot.get('candidate')}; "
+            f"alignment={snapshot.get('alignment')}; "
+            f"mode={snapshot.get('technical_mode')}; "
+            f"indicative_spot={spot.get('price')}; "
+            f"micro={micro.get('direction')}. "
+            "All returned prices are research/indicative only; execution remains locked."
         )
+
+        data = dict(snapshot)
+        data["execution_eligible"] = False
+
         return ToolResult.success(
             summary=summary,
-            data={
-                "instrument": "XAUUSD",
-                "research_proxy": "GC=F",
-                "execution_eligible": False,
-                "status": assessment.status,
-                "candidate": assessment.candidate,
-                "blocked": assessment.blocked,
-                "block_reasons": list(assessment.block_reasons),
-                "warnings": list(assessment.warnings),
-                "atr_reference": assessment.atr_reference,
-                "swing_high_reference": assessment.swing_high_reference,
-                "swing_low_reference": assessment.swing_low_reference,
-                "frames": frames,
-            },
+            data=data,
             sources=[
                 {
-                    "name": "Yahoo Finance GC=F research proxy",
+                    "name": "XAUS live spot and intraday sampled series",
+                    "url": "https://xaus.com/api/",
+                },
+                {
+                    "name": "goldprice.dev indicative XAU/USD spot reference",
+                    "url": "https://goldprice.dev/docs",
+                },
+                {
+                    "name": "Yahoo Finance GC=F fallback reference",
                     "url": "https://finance.yahoo.com/quote/GC=F/",
-                }
+                },
             ],
             observed_at=datetime.now(timezone.utc),
         )
@@ -108,10 +75,12 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
         name="get_xau_intraday_research",
         title="XAU intraday research",
         description=(
-            "Get a deterministic 1m/5m/15m gold research snapshot using Yahoo "
-            "GC=F as a non-execution proxy. Returns EMA, RSI, ATR, breakout, "
-            "swing levels, freshness gates and a candidate directional setup. "
-            "Never treat the returned proxy price as a spot XAUUSD execution price."
+            "Get the live PanWatch XAU/USD research snapshot. The primary intraday "
+            "path uses an indicative live spot reference, a roughly two-minute spot "
+            "micro-series, and sampled 5m/15m spot structure; Yahoo GC=F is fallback "
+            "context only. Returns freshness gates, EMA/RSI/ATR structure, swings, "
+            "alignment and a research candidate. Never use returned prices as broker "
+            "execution quotes."
         ),
         risk=ToolRisk.READ,
         confirmation_required=False,
@@ -129,37 +98,41 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
             tool_name=spec.name,
             title=spec.title,
             summary=(
-                "Research-only XAUUSD 1m/5m/15m technical state from the GC=F "
-                "Yahoo proxy; not valid for execution pricing."
+                "Near-real-time XAU/USD research state from indicative spot micro "
+                "data plus sampled 5m/15m structure; not valid for execution pricing."
             ),
             use_cases=[
                 "gold intraday analysis",
                 "XAUUSD technical context",
                 "gold scalping research",
+                "spot micro momentum",
             ],
             keywords=[
                 "XAUUSD",
                 "gold",
-                "GC=F",
-                "1m",
+                "spot",
+                "micro",
                 "5m",
                 "15m",
                 "ATR",
                 "RSI",
                 "EMA",
+                "GC=F",
             ],
             aliases=["gold research", "xau research", "xauusd intraday"],
             domain="market_research",
             capabilities=[
                 "xau_intraday",
                 "technical_analysis",
-                "research_proxy",
+                "spot_micro",
+                "sampled_spot_bars",
+                "research_only",
             ],
             data_freshness=ToolDataFreshness.NEAR_REAL_TIME,
-            estimated_latency_ms=4_000,
+            estimated_latency_ms=3_500,
             output_summary="Research-only deterministic XAU intraday state.",
             risk=ToolRisk.READ,
             confirmation_required=False,
-            implementation_version="xau-research-0.1",
+            implementation_version="xau-research-0.2",
         )
     ]
