@@ -724,7 +724,7 @@ def test_indicative_spot_marks_quotes_older_than_three_minutes_stale(monkeypatch
     old = datetime.now(timezone.utc) - timedelta(seconds=181)
 
     def fake_fetch(self, timeout_seconds: float = 10.0):
-        return XAUIndicativeSpot(
+        quote = XAUIndicativeSpot(
             price=2620.0,
             bid=2619.8,
             ask=2620.2,
@@ -732,8 +732,15 @@ def test_indicative_spot_marks_quotes_older_than_three_minutes_stale(monkeypatch
             source="test-old-spot",
             is_stale=False,
         )
+        return quote, [{
+            "provider": "test",
+            "status": "ok",
+            "source": quote.source,
+            "is_stale": True,
+            "selected": True,
+        }]
 
-    monkeypatch.setattr(CompositeXAUIndicativeSpotProvider, "fetch", fake_fetch)
+    monkeypatch.setattr(CompositeXAUIndicativeSpotProvider, "fetch_with_diagnostics", fake_fetch)
     service._spot_cache = None
     result = asyncio.run(service.get_indicative_spot(force=True))
     assert result["age_seconds"] >= 180.0
@@ -804,3 +811,75 @@ def test_composite_spot_provider_prefers_fresh_bid_ask():
     assert quote.bid == 4340.0
     assert quote.ask == 4340.2
     assert health[-1]["selected"] is True
+
+
+
+def test_composite_spot_provider_prefers_newer_fresh_mid_fallback():
+    now = datetime.now(timezone.utc)
+
+    class OlderMid:
+        def fetch(self, timeout_seconds: float = 10.0):
+            return XAUIndicativeSpot(
+                price=4340.0,
+                bid=None,
+                ask=None,
+                observed_at=now - timedelta(seconds=120),
+                source="older-mid",
+                is_stale=False,
+            )
+
+    class NewerMid:
+        def fetch(self, timeout_seconds: float = 10.0):
+            return XAUIndicativeSpot(
+                price=4341.0,
+                bid=None,
+                ask=None,
+                observed_at=now - timedelta(seconds=10),
+                source="newer-mid",
+                is_stale=False,
+            )
+
+    provider = CompositeXAUIndicativeSpotProvider()
+    provider.providers = (OlderMid(), NewerMid())
+    quote, health = provider.fetch_with_diagnostics()
+
+    assert quote.source == "newer-mid"
+    selected = [row for row in health if row.get("selected")]
+    assert len(selected) == 1
+    assert selected[0]["source"] == "newer-mid"
+    assert selected[0]["selection_reason"] == "fresh_context_fallback"
+
+
+def test_composite_spot_provider_marks_overage_quote_stale_before_selection():
+    now = datetime.now(timezone.utc)
+
+    class OldBidAsk:
+        def fetch(self, timeout_seconds: float = 10.0):
+            return XAUIndicativeSpot(
+                price=4340.0,
+                bid=4339.9,
+                ask=4340.1,
+                observed_at=now - timedelta(seconds=240),
+                source="old-bidask",
+                is_stale=False,
+            )
+
+    class FreshMid:
+        def fetch(self, timeout_seconds: float = 10.0):
+            return XAUIndicativeSpot(
+                price=4341.0,
+                bid=None,
+                ask=None,
+                observed_at=now - timedelta(seconds=10),
+                source="fresh-mid",
+                is_stale=False,
+            )
+
+    provider = CompositeXAUIndicativeSpotProvider()
+    provider.providers = (OldBidAsk(), FreshMid())
+    quote, health = provider.fetch_with_diagnostics()
+
+    assert quote.source == "fresh-mid"
+    old = next(row for row in health if row.get("source") == "old-bidask")
+    assert old["provider_stale"] is False
+    assert old["is_stale"] is True
