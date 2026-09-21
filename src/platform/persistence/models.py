@@ -1207,6 +1207,35 @@ class XAUPaperTrade(Base):
     meta = Column(JSON, default={})
 
 
+class XAUReplayEpisode(Base):
+    """Research-only walk-forward episode; never an executed paper/live trade."""
+
+    __tablename__ = "xau_replay_episodes"
+    __table_args__ = (
+        UniqueConstraint("replay_key", name="uq_xau_replay_episode_key"),
+        Index("ix_xau_replay_candidate_observed", "candidate", "observed_at"),
+        Index("ix_xau_replay_regime_observed", "regime", "observed_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    replay_key = Column(String, nullable=False)
+    candidate = Column(String, nullable=False, default="none")
+    regime = Column(String, nullable=False, default="")
+    confidence = Column(Float, nullable=True)
+    horizon_minutes = Column(Integer, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    outcome_price = Column(Float, nullable=False)
+    directional_return_bps = Column(Float, nullable=False)
+    positive = Column(Boolean, nullable=False, default=False)
+    source = Column(String, nullable=False, default="")
+    observed_at = Column(DateTime, nullable=False)
+    outcome_at = Column(DateTime, nullable=False)
+    state_vector = Column(JSON, default={})
+    cognition = Column(JSON, default={})
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class ChatConversation(Base):
     """AI 对话会话"""
 
