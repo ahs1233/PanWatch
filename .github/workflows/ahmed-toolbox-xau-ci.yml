@@ -10,10 +10,12 @@ on:
       - "src/platform/marketdata/xau_*"
       - "src/modules/strategy/xau_intraday.py"
       - "src/modules/assistant/xau_tools.py"
+      - "src/modules/xau/**"
       - "src/modules/assistant/service.py"
       - "src/modules/automation/tradingagents/xau_support.py"
       - "src/platform/runtime/config.py"
       - "ci_tests/test_ahmed_toolbox_xau_integration.py"
+      - "ci_tests/test_xau_cognition.py"
       - ".github/workflows/ahmed-toolbox-xau-ci.yml"
 
 jobs:
@@ -58,7 +60,7 @@ jobs:
       - name: Run focused tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py
+        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py
 
   frontend:
     runs-on: ubuntu-latest
