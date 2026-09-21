@@ -18,15 +18,19 @@ from src.platform.ai.ai_client import AIClient
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.marketdata.xau_models import XAUTimeframe
 from src.platform.marketdata.xau_research_provider import YahooGoldResearchProvider
+from src.platform.marketdata.xau_spot_reference import CompositeXAUIndicativeSpotProvider
 from src.platform.runtime.config import Settings
 
 logger = logging.getLogger(__name__)
 
 _BARS_TTL = 45.0
+_SPOT_TTL = 55.0
 _MACRO_TTL = 300.0
 _bars_cache = None
+_spot_cache = None
 _macro_cache = None
 _bars_lock = asyncio.Lock()
+_spot_lock = asyncio.Lock()
 _macro_lock = asyncio.Lock()
 
 
@@ -60,8 +64,51 @@ async def get_research_bars(force: bool = False):
         return data
 
 
+async def get_indicative_spot(force: bool = False) -> dict[str, Any]:
+    global _spot_cache
+    now = time.monotonic()
+    if not force and _spot_cache and now - _spot_cache[0] < _SPOT_TTL:
+        return _spot_cache[1]
+
+    async with _spot_lock:
+        now = time.monotonic()
+        if not force and _spot_cache and now - _spot_cache[0] < _SPOT_TTL:
+            return _spot_cache[1]
+
+        provider = CompositeXAUIndicativeSpotProvider()
+        quote = await asyncio.to_thread(provider.fetch)
+        age_seconds = max(
+            0.0,
+            (datetime.now(timezone.utc) - quote.observed_at).total_seconds(),
+        )
+        data = {
+            "price": quote.price,
+            "bid": quote.bid,
+            "ask": quote.ask,
+            "spread": quote.spread,
+            "spread_bps": quote.spread_bps,
+            "observed_at": quote.observed_at.isoformat(),
+            "age_seconds": age_seconds,
+            "source": quote.source,
+            "is_stale": quote.is_stale,
+            "indicative": True,
+            "execution_eligible": False,
+        }
+        _spot_cache = (time.monotonic(), data)
+        return data
+
+
 async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
-    bars = await get_research_bars(force=force)
+    bars_task = asyncio.create_task(get_research_bars(force=force))
+    spot_task = asyncio.create_task(get_indicative_spot(force=force))
+
+    bars = await bars_task
+    spot = None
+    spot_error = None
+    try:
+        spot = await spot_task
+    except Exception as exc:
+        spot_error = type(exc).__name__
     assessment = XAUIntradayEngine(require_execution_data=False).analyze(
         bars,
         now=datetime.now(timezone.utc),
@@ -95,6 +142,24 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     bearish = sum(1 for item in directions if item == "bearish")
     alignment = "bullish" if bullish >= 2 else "bearish" if bearish >= 2 else "mixed"
 
+    proxy_price = latest.get("close")
+    basis = (
+        (spot["price"] - proxy_price)
+        if spot and proxy_price is not None
+        else None
+    )
+    basis_bps = (
+        (basis / spot["price"]) * 10_000.0
+        if basis is not None and spot and spot["price"]
+        else None
+    )
+
+    warnings = list(assessment.warnings)
+    if spot_error:
+        warnings.append("indicative_spot_unavailable")
+    elif spot and spot.get("is_stale"):
+        warnings.append("indicative_spot_stale")
+
     return {
         "instrument": "XAUUSD",
         "name": "Gold / U.S. Dollar",
@@ -102,23 +167,28 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "research_source": "Yahoo Finance via yfinance",
         "research_only": True,
         "execution_feed_connected": False,
-        "execution_status": "LOCKED_NO_SPOT_FEED",
-        "price": latest.get("close"),
+        "execution_status": "LOCKED_NO_TRADABLE_SPOT_FEED",
+        "price": proxy_price,
+        "indicative_spot": spot,
+        "indicative_spot_error": spot_error,
+        "spot_minus_proxy": basis,
+        "spot_minus_proxy_bps": basis_bps,
         "change_pct_1m": change_pct,
         "observed_at": latest.get("observed_at"),
         "status": assessment.status,
         "candidate": assessment.candidate,
         "blocked": assessment.blocked,
         "block_reasons": list(assessment.block_reasons),
-        "warnings": list(assessment.warnings),
+        "warnings": warnings,
         "alignment": alignment,
         "atr_reference": assessment.atr_reference,
         "swing_high_reference": assessment.swing_high_reference,
         "swing_low_reference": assessment.swing_low_reference,
         "frames": frames,
         "disclaimer": (
-            "GC=F is a research proxy, not a spot XAUUSD execution quote. "
-            "Do not use it for live entry, stop-loss or take-profit prices."
+            "The live spot reference is indicative and GC=F is a delayed research proxy. "
+            "Neither is a broker execution quote. Live entry, stop-loss and take-profit "
+            "automation remains locked until a tradable venue-specific bid/ask feed is connected."
         ),
     }
 
