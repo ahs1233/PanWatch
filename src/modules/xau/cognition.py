@@ -539,6 +539,42 @@ def _memory_adjustment(memory: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _adaptive_entry_threshold(
+    base_threshold: float,
+    memory_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Conservative online adaptation: adjust only the paper-entry threshold."""
+    base = _clip(float(base_threshold), 0.50, 0.90)
+    ece = memory_state.get("expected_calibration_error")
+    ece_value = _number(ece, 0.0) if ece is not None else 0.0
+    samples = int(_number(memory_state.get("calibration_sample_count"), 0.0))
+    expectancy = _number(memory_state.get("expectancy_r"), 0.0)
+    autopsy_counts = memory_state.get("autopsy_counts") or {}
+    high_conf_errors = int(_number(autopsy_counts.get("high_confidence_error"), 0.0))
+    # Autopsy primary counts may not include secondary high-confidence labels,
+    # so ECE remains the main calibration signal.
+    delta = 0.0
+    reasons: list[str] = []
+
+    if samples >= 8 and ece_value >= 0.20:
+        delta += min(0.06, 0.02 + (ece_value - 0.20) * 0.20)
+        reasons.append("calibration_error_raise_threshold")
+    if high_conf_errors >= 3:
+        delta += 0.02
+        reasons.append("repeated_high_confidence_errors")
+    if samples >= 25 and ece_value <= 0.08 and expectancy >= 0.25:
+        delta -= 0.015
+        reasons.append("well_calibrated_positive_history_small_relaxation")
+
+    effective = _clip(base + delta, 0.50, 0.90)
+    return {
+        "base": round(base, 4),
+        "effective": round(effective, 4),
+        "delta": round(effective - base, 4),
+        "reasons": reasons,
+    }
+
+
 def _adversarial_review(
     technical: dict[str, Any],
     macro: dict[str, Any],
@@ -753,6 +789,10 @@ def build_cognitive_state(
         adversarial,
         memory_state,
     )
+    adaptive_threshold = _adaptive_entry_threshold(
+        min_confidence,
+        memory_state,
+    )
     plan = _execution_plan(
         technical,
         perception,
@@ -760,7 +800,7 @@ def build_cognitive_state(
         hypotheses,
         confidence,
         adversarial,
-        min_confidence,
+        adaptive_threshold["effective"],
     )
 
     action = str(plan.get("action") or "STAND_DOWN")
@@ -791,7 +831,8 @@ def build_cognitive_state(
         "meta_controller": {
             "decision": decision,
             "paper_entry_allowed": decision == "eligible",
-            "min_confidence": round(min_confidence, 4),
+            "min_confidence": adaptive_threshold["effective"],
+            "threshold_adaptation": adaptive_threshold,
             "dominant_hypothesis": plan.get("primary_hypothesis"),
             "live_execution_allowed": False,
         },
