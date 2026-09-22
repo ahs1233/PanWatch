@@ -924,14 +924,6 @@ class GeneralClaimAcquisition:
                                     "resolution_reason": resolution.reason,
                                 }
                                 self.graph.connect(
-                                    claim.claim_id,
-                                    matched_claim.claim_id,
-                                    ClaimRelation.CONTRADICTS,
-                                    weight=min(0.9, max(0.55, resolution.score)),
-                                    created_at=started,
-                                    metadata=edge_meta,
-                                )
-                                self.graph.connect(
                                     matched_claim.claim_id,
                                     claim.claim_id,
                                     ClaimRelation.CONTRADICTS,
@@ -1001,6 +993,27 @@ class GeneralClaimAcquisition:
                                     "candidate_fingerprint": fingerprint,
                                 },
                             )
+                            if (
+                                resolution is not None
+                                and resolution.relation
+                                is SemanticClaimRelation.CONTRADICTION
+                                and resolution.matched_claim_id
+                            ):
+                                self.graph.link_evidence(
+                                    claim_id=resolution.matched_claim_id,
+                                    evidence_id=evidence.evidence_id,
+                                    ledger=self.ledger,
+                                    relation=EvidenceRelation.CONTRADICTS,
+                                    weight=max(
+                                        0.2,
+                                        min(0.85, candidate.confidence),
+                                    ),
+                                    metadata={
+                                        "claim_acquisition": True,
+                                        "semantic_contradiction": True,
+                                        "candidate_fingerprint": fingerprint,
+                                    },
+                                )
                             self._ensure_rules(
                                 claim,
                                 candidate,
