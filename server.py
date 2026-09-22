@@ -31,6 +31,7 @@ from src.modules.automation.agent_scheduler import AgentScheduler
 from src.modules.market.price_alert_scheduler import PriceAlertScheduler
 from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
+from src.modules.research.automatic_research_scheduler import AutomaticResearchScheduler
 from src.modules.research.research_store import init_research_store
 from src.modules.xau.scheduler import XAUResearchScheduler
 from src.modules.xau.paper import XAUPaperTradingScheduler
@@ -62,6 +63,7 @@ context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
 xau_research_scheduler: XAUResearchScheduler | None = None
 xau_paper_scheduler: XAUPaperTradingScheduler | None = None
 xau_replay_scheduler: XAUReplayScheduler | None = None
+automatic_research_scheduler: AutomaticResearchScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -1691,7 +1693,7 @@ async def lifespan(app):
 
     seed_agents()
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler, automatic_research_scheduler
 
     if xau_mode:
         # Keep the process focused on XAU/USD. The original stock catalogue,
@@ -1782,6 +1784,28 @@ async def lifespan(app):
             register_mcp_log_cleanup(scheduler)
         except Exception as e:
             logger.error(f"MCP 日志清理任务注册失败: {e}")
+
+    if settings.auto_research_enabled:
+        if not settings.ahmed_toolbox_url:
+            logger.warning(
+                "Automatic Research requested but Ahmed ToolBox URL is not configured"
+            )
+        elif not settings.ai_api_key:
+            logger.warning(
+                "Automatic Research requested but AI API key is not configured"
+            )
+        else:
+            try:
+                automatic_research_scheduler = AutomaticResearchScheduler(settings)
+                automatic_research_scheduler.start()
+            except Exception as exc:
+                logger.error(
+                    "Automatic Research scheduler failed to start: %s",
+                    type(exc).__name__,
+                )
+    else:
+        logger.info("Automatic Research scheduler disabled by configuration")
+
     yield
     if scheduler:
         scheduler.shutdown()
@@ -1803,6 +1827,8 @@ async def lifespan(app):
     if xau_replay_scheduler:
         xau_replay_scheduler.shutdown()
         logger.info("XAU paper scheduler stopped")
+    if automatic_research_scheduler:
+        automatic_research_scheduler.shutdown()
     if runtime_smoke_task and not runtime_smoke_task.done():
         runtime_smoke_task.cancel()
         await asyncio.gather(runtime_smoke_task, return_exceptions=True)
