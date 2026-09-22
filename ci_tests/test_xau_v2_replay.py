@@ -188,7 +188,7 @@ def test_future_mutation_cannot_change_past_strategy_decision():
 
 
 def test_dataset_fingerprint_changes_when_future_data_changes():
-    assert _dataset(False).fingerprint != _dataset(True).fingerprint
+    assert _dataset(future_drop=False).fingerprint != _dataset(future_drop=True).fingerprint
 
 
 def test_ablation_replay_produces_normalized_non_overlapping_trade_ledgers():
