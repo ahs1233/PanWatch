@@ -25,6 +25,8 @@ on:
       - "ci_tests/test_panwatch_benchmark_v1.py"
       - "ci_tests/test_panwatch_economic_benchmark_v1.py"
       - "ci_tests/test_research_evidence_foundation.py"
+      - "ci_tests/test_research_claim_graph_falsification.py"
+      - "ci_tests/test_panwatch_reasoning_benchmark_v1.py"
       - ".github/workflows/ahmed-toolbox-xau-ci.yml"
 
 jobs:
@@ -73,7 +75,7 @@ jobs:
       - name: Run focused tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py ci_tests/test_xau_replay.py ci_tests/test_xau_resilience.py ci_tests/test_panwatch_benchmark_v1.py ci_tests/test_research_evidence_foundation.py ci_tests/test_panwatch_economic_benchmark_v1.py
+        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py ci_tests/test_xau_replay.py ci_tests/test_xau_resilience.py ci_tests/test_panwatch_benchmark_v1.py ci_tests/test_research_evidence_foundation.py ci_tests/test_research_claim_graph_falsification.py ci_tests/test_panwatch_economic_benchmark_v1.py ci_tests/test_panwatch_reasoning_benchmark_v1.py
 
       - name: Run PanWatch Benchmark v1
         env:
@@ -96,6 +98,17 @@ jobs:
         with:
           name: panwatch-economic-evidence-v1-python-${{ matrix.python-version }}
           path: economic-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Claim Graph + Falsification Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.reasoning_runner --json reasoning-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload reasoning benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-claim-graph-v1-python-${{ matrix.python-version }}
+          path: reasoning-benchmark-result-${{ matrix.python-version }}.json
 
   frontend:
     runs-on: ubuntu-latest

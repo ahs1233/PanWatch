@@ -400,7 +400,7 @@ def run_benchmark() -> dict:
 
     return {
         "benchmark": "PanWatch Benchmark v1",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "track": "xau_decision_core",
         "score_percent": score,
         "passed_cases": passed_cases,
@@ -410,15 +410,15 @@ def run_benchmark() -> dict:
         "regression_gate_percent": 95.0,
         "regression_gate_passed": score >= 95.0,
         "track_coverage": {
-            "automated": 2,
+            "automated": 3,
             "specified_not_automated": 1,
-            "total": 3,
+            "total": 4,
         },
         "limitations": [
             "This is a deterministic core benchmark, not proof of superior research quality.",
-            "Economic evidence integrity is automated separately; company/sector research is still specified but not automated.",
+            "Economic evidence integrity and Claim Graph/Falsification are automated separately; company/sector research is still specified but not automated.",
             "No external LLM or human baseline is scored in v1.",
-            "Evidence Foundation is scored in the separate economic track; Claim Graph, generic falsification, and external comparative research quality remain outside this core score.",
+            "Evidence Foundation and Claim Graph/Falsification are scored in separate tracks; persistent belief state and external comparative research quality remain outside this core score.",
         ],
         "cases": [asdict(item) for item in results],
     }

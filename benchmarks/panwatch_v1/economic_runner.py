@@ -448,7 +448,7 @@ def run_economic_benchmark() -> dict:
     score = round((earned / total) * 100.0, 2) if total else 0.0
     return {
         "benchmark": "PanWatch Benchmark v1",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "track": "economic_evidence_integrity",
         "score_percent": score,
         "passed_cases": sum(1 for item in results if item.passed),
@@ -461,7 +461,7 @@ def run_economic_benchmark() -> dict:
             "This track measures evidence semantics, not economic forecasting skill.",
             "Cases use deterministic frozen fixtures; they do not prove live-source retrieval quality.",
             "No external LLM or human researcher baseline is scored yet.",
-            "Claim Graph and generic falsification remain outside this sprint.",
+            "Claim Graph and generic falsification are scored in a separate v1.2 track; live counter-research execution remains outside this track.",
         ],
         "cases": [asdict(item) for item in results],
     }
