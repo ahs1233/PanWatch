@@ -1164,7 +1164,16 @@ def _scenario_paths(
     total = continuation + reversal + sweep or 1.0
 
     edge_direction = str(edge.get("direction") or "neutral")
-    continuation_direction = edge_direction if edge_direction != "neutral" else "neutral"
+    context = technical.get("market_context") or {}
+    bias_context = context.get("bias") or {}
+    smart_money = context.get("smart_money") or {}
+    context_direction = str(
+        bias_context.get("today_direction")
+        or bias_context.get("composite_direction")
+        or smart_money.get("bias")
+        or "neutral"
+    )
+    continuation_direction = edge_direction if edge_direction != "neutral" else context_direction
     reversal_direction = (
         "bearish" if continuation_direction == "bullish"
         else "bullish" if continuation_direction == "bearish"
@@ -1408,10 +1417,20 @@ def _execution_plan(
 
     reasons: list[str] = []
     action = "STAND_DOWN"
+    htf_score = _number(edge.get("higher_timeframe_score"), 0.0)
+    htf_conflict = bool(
+        side == "long" and htf_score <= -0.25
+        or side == "short" and htf_score >= 0.25
+        or edge.get("higher_timeframe_conflict")
+    )
+
     if side is None:
         reasons.append("no_directional_edge")
     elif adversarial.get("veto"):
         reasons.append("adversarial_veto")
+    elif htf_conflict:
+        action = "WAIT_CONFIRMATION"
+        reasons.append("higher_timeframe_bias_conflicts_entry")
     elif scenario_conflict:
         action = "WAIT_CONFIRMATION"
         reasons.append("dominant_scenario_opposes_directional_edge")
