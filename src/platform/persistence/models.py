@@ -1839,3 +1839,73 @@ class ResearchProbeAttemptRecord(Base):
     error_code = Column(String, nullable=False, default="")
     meta = Column(JSON, default={})
     created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchAcquisitionRunRecord(Base):
+    """One bounded general claim-acquisition execution."""
+
+    __tablename__ = "research_acquisition_runs"
+    __table_args__ = (
+        Index("ix_research_acquisition_started", "started_at"),
+        Index("ix_research_acquisition_status", "status"),
+    )
+
+    run_id = Column(String, primary_key=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    status = Column(String, nullable=False, default="running")
+    seed_topic = Column(Text, nullable=False, default="")
+    documents_seen = Column(Integer, nullable=False, default=0)
+    candidates_extracted = Column(Integer, nullable=False, default=0)
+    claims_accepted = Column(Integer, nullable=False, default=0)
+    duplicates = Column(Integer, nullable=False, default=0)
+    rejected = Column(Integer, nullable=False, default=0)
+    superseded = Column(Integer, nullable=False, default=0)
+    tool_calls = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=False, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchClaimCandidateRecord(Base):
+    """Audit trail for every extracted claim candidate and its admission decision."""
+
+    __tablename__ = "research_claim_candidates"
+    __table_args__ = (
+        Index("ix_research_candidate_run", "run_id"),
+        Index("ix_research_candidate_source", "source_id"),
+        Index("ix_research_candidate_decision", "decision"),
+        Index("ix_research_candidate_key", "proposed_claim_key"),
+        Index("ix_research_candidate_fingerprint", "fingerprint"),
+    )
+
+    candidate_id = Column(String, primary_key=True)
+    run_id = Column(
+        String,
+        ForeignKey("research_acquisition_runs.run_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_id = Column(
+        String,
+        ForeignKey("research_sources.source_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    fingerprint = Column(String, nullable=False)
+    quote = Column(Text, nullable=False)
+    statement = Column(Text, nullable=False)
+    proposed_claim_key = Column(String, nullable=False)
+    kind = Column(String, nullable=False)
+    observation_kind = Column(String, nullable=False)
+    confidence = Column(Float, nullable=False, default=0.5)
+    valid_from = Column(DateTime, nullable=True)
+    valid_until = Column(DateTime, nullable=True)
+    supersedes_previous = Column(Boolean, nullable=False, default=False)
+    decision = Column(String, nullable=False)
+    reason = Column(Text, nullable=False, default="")
+    accepted_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
