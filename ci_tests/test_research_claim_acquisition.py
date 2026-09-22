@@ -512,3 +512,61 @@ async def test_empty_llm_output_uses_deterministic_grounded_fallback():
     assert rows[0].metadata["extractor"] == "deterministic_grounded_fallback_v1"
     assert rows[0].metadata["fallback_reason"] == "empty_or_unusable_llm_output"
     assert "2026" in rows[0].statement or "500" in rows[0].statement
+
+
+
+@pytest.mark.asyncio
+async def test_deterministic_fallback_rejects_page_metadata():
+    extractor = GroundedClaimExtractor(
+        _FakeAI('{"claims":[]}')
+    )
+    doc = _doc(
+        "https://energy.example/report",
+        (
+            "Published Time: Tue, 22 Sep 2026 14:08:16 GMT. "
+            "Data centres consumed around 415 TWh, or about 1.5 percent "
+            "of global electricity consumption in 2024."
+        ),
+    )
+    rows = await extractor.extract(
+        document=doc,
+        topic_hint="data centre electricity demand",
+        max_candidates=3,
+    )
+    assert rows
+    assert all(
+        not row.statement.lower().startswith("published time:")
+        for row in rows
+    )
+    assert any("415" in row.statement or "1.5" in row.statement for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_page_metadata_candidate_is_rejected_and_audited():
+    _engine, db = _db()
+    try:
+        doc = _doc(
+            "https://energy.example/report",
+            "Published Time: Tue, 22 Sep 2026 14:08:16 GMT.",
+        )
+        candidate = _candidate(
+            quote="Published Time: Tue, 22 Sep 2026 14:08:16 GMT",
+            statement="Published Time: Tue, 22 Sep 2026 14:08:16 GMT",
+            key="page.published_time",
+        )
+        graph = ClaimGraph()
+        result = await GeneralClaimAcquisition(
+            graph=graph,
+            ledger=EvidenceLedger(),
+            falsification=FalsificationEngine(),
+            extractor=_Extractor({doc.url: [candidate]}),
+        ).run(db=db, documents=[doc])
+
+        assert result.rejected == 1
+        assert result.claims_accepted == 0
+        assert len(graph.claims) == 0
+        row = db.query(ResearchClaimCandidateRecord).one()
+        assert row.decision == "rejected"
+        assert row.reason == "page_metadata"
+    finally:
+        db.close()
