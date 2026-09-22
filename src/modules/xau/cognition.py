@@ -442,7 +442,20 @@ def _directional_edge(
         1.0,
     )
     smart = context.get("smart_money") or {}
-    smart_score = _clip(_number(smart.get("score"), 0.0), -1.0, 1.0)
+    raw_smart_score = _clip(_number(smart.get("score"), 0.0), -1.0, 1.0)
+    validation = context.get("cross_validation") or {}
+    library_direction = str(validation.get("library_direction") or "neutral")
+    library_agreement = _clip(_number(validation.get("library_agreement"), 0.0))
+    smc_concordance = str(validation.get("smc_concordance") or "unresolved")
+    # Multiple SMC libraries read the same bars, so agreement is used as a
+    # reliability gate rather than counted as extra market evidence.
+    if smc_concordance == "conflict" and library_agreement >= 0.67:
+        smart_reliability = 0.45
+    elif smc_concordance == "aligned":
+        smart_reliability = 0.75 + 0.25 * library_agreement
+    else:
+        smart_reliability = 0.80
+    smart_score = _clip(raw_smart_score * smart_reliability, -1.0, 1.0)
     flow = context.get("cash_flow") or {}
     flow_score = _clip(_number(flow.get("score"), 0.0), -1.0, 1.0)
 
@@ -511,6 +524,11 @@ def _directional_edge(
         "higher_timeframe_direction": str(bias_context.get("today_direction") or bias_context.get("composite_direction") or "neutral"),
         "higher_timeframe_conflict": htf_conflict,
         "smart_money_score": round(smart_score, 4),
+        "smart_money_raw_score": round(raw_smart_score, 4),
+        "smart_money_reliability": round(smart_reliability, 4),
+        "library_direction": library_direction,
+        "library_agreement": round(library_agreement, 4),
+        "smc_concordance": smc_concordance,
         "cash_flow_score": round(flow_score, 4),
         "macro_age_seconds": round(macro_age, 1) if macro_age is not None else None,
         "macro_freshness": round(macro_freshness, 3),
@@ -518,6 +536,8 @@ def _directional_edge(
         "components": {
             "higher_timeframe": round(htf_score, 4),
             "smart_money": round(smart_score, 4),
+            "smart_money_raw": round(raw_smart_score, 4),
+            "smc_validation_reliability": round(smart_reliability, 4),
             "cash_flow": round(flow_score, 4),
             "intraday_trend": round(trend, 4),
             "intraday_ema_structure": round(ema_structure, 4),
