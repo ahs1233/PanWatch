@@ -545,8 +545,8 @@ def run_belief_benchmark() -> dict:
         "regression_gate_percent": 90.0,
         "regression_gate_passed": score >= 90.0,
         "limitations": [
-            "Belief cycles operate on registered claims; automatic claim extraction from arbitrary documents is outside this track.",
-            "Falsification probes are surfaced but live counter-research dispatch is not yet automated.",
+            "Belief cycles operate on registered claims; generalized automatic claim extraction from arbitrary documents remains outside this track.",
+            "Live counter-research dispatch is scored separately in the Automatic Research Loop track.",
             "The benchmark uses deterministic fixtures and does not prove external research superiority."
         ],
         "cases": [asdict(item) for item in results],
