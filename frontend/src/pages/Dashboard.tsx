@@ -46,7 +46,8 @@ export default function DashboardPage(){
  useEffect(()=>{void load();fetch('/api/runtime-readiness').then(r=>r.json()).then(b=>setReady(b?.data||b)).catch(()=>{});const id=window.setInterval(()=>void refreshQuiet(),20000);return()=>window.clearInterval(id)},[load,refreshQuiet])
  useEffect(()=>{void loadChart(timeframe);const id=window.setInterval(()=>void loadChart(timeframe,false,true),20000);return()=>window.clearInterval(id)},[timeframe,loadChart])
  const cog=fusion?.cognition; const edge=cog?.directional_edge; const plan=cog?.execution_plan; const scenarios=cog?.scenarios||[]; const score=Math.round((cog?.confidence.calibrated_confidence||0)*100); const quality=Math.round((cog?.data_quality.score||0)*100)
- const context=snapshot?.market_context; const price=snapshot?.indicative_spot?.price; const direction=edge?.direction||snapshot?.alignment||'mixed'
+ const context=snapshot?.market_context; const context=snapshot?.market_context; const bias=context?.bias; const profile=context?.volume_profile; const flow=context?.cash_flow; const smart=context?.smart_money; const liquidity=context?.liquidity
+ const price=snapshot?.indicative_spot?.price; const direction=edge?.direction||snapshot?.alignment||'mixed'
  const directionLabel=direction==='bullish'?'BULLISH LEAN':direction==='bearish'?'BEARISH LEAN':'NO CLEAR EDGE'
  const statusText=plan?.action?nice(plan.action):nice(fusion?.state)
  const gates=[...(snapshot?.block_reasons||[]),...(snapshot?.warnings||[]),...(cog?.adversarial.counter_evidence||[])]
@@ -141,6 +142,32 @@ export default function DashboardPage(){
     </div>
     <div className="mt-3 flex flex-wrap gap-2">{(context?.liquidity.levels||[]).slice(0,6).map(level=><span key={level.name} className="rounded-full bg-accent/35 px-2.5 py-1 text-[9px]"><b>{level.name}</b> <span className="font-mono">{fmt(level.price)}</span></span>)}</div>
     <div className="mt-3 text-[9px] leading-4 text-muted-foreground">{context?.volume_note||'Higher-timeframe context is loading.'}</div>
+   </div>
+  </section>
+
+  <section className="mb-4 grid gap-3 lg:grid-cols-12">
+   <div className="card p-4 lg:col-span-5">
+    <div className="flex items-center justify-between"><div><div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">Top-down bias</div><div className={'mt-1 text-lg font-bold '+tone(bias?.today_direction)}>{nice(bias?.today_direction)} TODAY</div></div><div className="text-right"><div className="text-[10px] text-muted-foreground">HTF score</div><div className="font-mono text-lg font-semibold">{bias?.today_score!=null?Math.round(bias.today_score*100):'--'}</div></div></div>
+    <div className="mt-3 grid grid-cols-5 gap-2">{[['M',bias?.monthly],['W',bias?.weekly],['D',bias?.daily],['4H',bias?.h4],['1H',bias?.h1]].map(([label,state])=><div key={String(label)} className="rounded-xl bg-accent/25 p-2.5 text-center"><div className="text-[9px] text-muted-foreground">{String(label)}</div><div className={'mt-1 text-[10px] font-semibold '+tone((state as HTFState|undefined)?.direction)}>{nice((state as HTFState|undefined)?.direction)}</div><div className="mt-1 font-mono text-[9px] text-muted-foreground">{(state as HTFState|undefined)?.score!=null?Math.round(((state as HTFState).score)*100):'--'}</div></div>)}</div>
+    <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]"><div className="rounded-xl bg-accent/20 p-2.5"><span className="text-muted-foreground">EMA 50</span><div className="mt-1 font-mono">{fmt(bias?.daily?.ema?.['50'])}</div></div><div className="rounded-xl bg-accent/20 p-2.5"><span className="text-muted-foreground">EMA 200</span><div className="mt-1 font-mono">{fmt(bias?.daily?.ema?.['200'])}</div></div><div className="rounded-xl bg-accent/20 p-2.5"><span className="text-muted-foreground">EMA 1000</span><div className="mt-1 font-mono">{fmt(bias?.daily?.ema?.['1000'])}</div></div></div>
+   </div>
+
+   <div className="card p-4 lg:col-span-4">
+    <div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">Volume profile & cash flow</div>
+    <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]"><div className="rounded-xl bg-accent/25 p-2.5"><span className="text-muted-foreground">POC</span><div className="mt-1 font-mono">{fmt(profile?.poc)}</div></div><div className="rounded-xl bg-accent/25 p-2.5"><span className="text-muted-foreground">VAH</span><div className="mt-1 font-mono">{fmt(profile?.vah)}</div></div><div className="rounded-xl bg-accent/25 p-2.5"><span className="text-muted-foreground">VAL</span><div className="mt-1 font-mono">{fmt(profile?.val)}</div></div></div>
+    <div className="mt-3 flex items-center justify-between text-[11px]"><span className="text-muted-foreground">Value location</span><b>{nice(profile?.location)}</b></div>
+    <div className="mt-2 flex items-center justify-between text-[11px]"><span className="text-muted-foreground">Cash flow</span><b className={tone(flow?.direction==='inflow'?'bullish':flow?.direction==='outflow'?'bearish':'neutral')}>{nice(flow?.direction)} {flow?.score!=null?Math.round(flow.score*100):'--'}</b></div>
+    <div className="mt-2 flex items-center justify-between text-[11px]"><span className="text-muted-foreground">Spot / futures flow</span><b>{nice(flow?.agreement)}</b></div>
+   </div>
+
+   <div className="card p-4 lg:col-span-3">
+    <div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">Smart money & liquidity</div>
+    <div className="mt-3 flex items-center justify-between text-[11px]"><span className="text-muted-foreground">Bias</span><b className={tone(smart?.bias)}>{nice(smart?.bias)} {smart?.score!=null?Math.round(smart.score*100):'--'}</b></div>
+    <div className="mt-2 flex items-center justify-between text-[11px]"><span className="text-muted-foreground">BOS</span><b>{nice(smart?.break_of_structure)}</b></div>
+    <div className="mt-2 flex items-center justify-between text-[11px]"><span className="text-muted-foreground">Sweep</span><b>{nice(smart?.liquidity_sweep)}</b></div>
+    <div className="mt-2 flex items-center justify-between text-[11px]"><span className="text-muted-foreground">Displacement</span><b>{nice(smart?.displacement)}</b></div>
+    <div className="mt-2 flex items-center justify-between text-[11px]"><span className="text-muted-foreground">Dealing range</span><b>{nice(smart?.dealing_range?.zone)}</b></div>
+    <div className="mt-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">{(liquidity?.levels||[]).slice(0,3).map(x=><div key={x.name} className="mb-1 flex justify-between"><span>{x.name}</span><span className="font-mono">{fmt(x.price)}</span></div>)}</div>
    </div>
   </section>
 
