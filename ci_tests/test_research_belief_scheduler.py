@@ -93,7 +93,11 @@ def test_scheduler_skips_when_research_inputs_are_unchanged(monkeypatch):
 
     import src.modules.research.belief_scheduler as scheduler_module
 
-    monkeypatch.setattr(scheduler_module, "SessionLocal", Session)
+    monkeypatch.setattr(
+        scheduler_module,
+        "open_research_session",
+        lambda: Session(),
+    )
     scheduler = PersistentBeliefScheduler(interval_seconds=60)
 
     asyncio.run(scheduler._scan())
