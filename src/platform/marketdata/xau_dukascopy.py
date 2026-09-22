@@ -234,7 +234,9 @@ class DukascopyXAUHistoryProvider:
         attempts = self.retries + 1
         last_error: Exception | None = None
 
+        last_status: int | None = None
         for attempt in range(1, attempts + 1):
+            retry_after_seconds: float | None = None
             try:
                 response = httpx.get(
                     url,
@@ -242,8 +244,25 @@ class DukascopyXAUHistoryProvider:
                     follow_redirects=True,
                     headers={"User-Agent": "PanWatch-XAU-Research/0.7"},
                 )
+                last_status = int(response.status_code)
                 if response.status_code == 404:
                     return DukascopyHourFetch(hour, "notfound", (), url, attempt)
+                if response.status_code in {429} or response.status_code >= 500:
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            retry_after_seconds = max(0.0, float(retry_after))
+                        except ValueError:
+                            retry_after_seconds = None
+                    response.raise_for_status()
+                if 400 <= response.status_code < 500:
+                    return DukascopyHourFetch(
+                        hour,
+                        f"failed:http_{response.status_code}",
+                        (),
+                        url,
+                        attempt,
+                    )
                 response.raise_for_status()
                 if not response.content:
                     return DukascopyHourFetch(hour, "empty", (), url, attempt)
@@ -258,9 +277,14 @@ class DukascopyXAUHistoryProvider:
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
                 if attempt < attempts:
-                    time.sleep(self.retry_backoff_seconds * attempt)
+                    exponential = self.retry_backoff_seconds * (2 ** (attempt - 1))
+                    delay = min(60.0, max(exponential, retry_after_seconds or 0.0))
+                    time.sleep(delay)
 
-        detail = type(last_error).__name__ if last_error is not None else "unknown"
+        if last_status is not None:
+            detail = f"http_{last_status}"
+        else:
+            detail = type(last_error).__name__ if last_error is not None else "unknown"
         return DukascopyHourFetch(hour, f"failed:{detail}", (), url, attempts)
 
     def ticks_range(
