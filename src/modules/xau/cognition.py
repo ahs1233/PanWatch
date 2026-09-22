@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-COGNITION_VERSION = "2.0.0"
+COGNITION_VERSION = "3.0.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -1098,6 +1098,73 @@ def _confidence(
     }
 
 
+def _scenario_paths(
+    technical: dict[str, Any],
+    hypotheses: list[dict[str, Any]],
+    edge: dict[str, Any],
+) -> list[dict[str, Any]]:
+    analysis_reference = technical.get("analysis_reference") or {}
+    spot = technical.get("indicative_spot") or {}
+    price = _number(analysis_reference.get("price"), _number(spot.get("price"), 0.0))
+    atr = max(0.0, _number(technical.get("atr_reference"), 0.0))
+    swing_high = technical.get("swing_high_reference")
+    swing_low = technical.get("swing_low_reference")
+    weights = {str(item.get("name")): _number(item.get("weight")) for item in hypotheses}
+    continuation = (
+        weights.get("trend_continuation", 0.0)
+        + 0.55 * weights.get("volatility_expansion", 0.0)
+        + 0.35 * weights.get("news_repricing", 0.0)
+    )
+    reversal = (
+        weights.get("mean_reversion", 0.0)
+        + weights.get("failed_breakout", 0.0)
+        + weights.get("exhaustion", 0.0)
+        + 0.60 * weights.get("session_reversal", 0.0)
+    )
+    sweep = weights.get("liquidity_sweep", 0.0)
+    total = continuation + reversal + sweep or 1.0
+    edge_direction = str(edge.get("direction") or "neutral")
+    continuation_direction = edge_direction if edge_direction != "neutral" else "neutral"
+    reversal_direction = (
+        "bearish" if continuation_direction == "bullish"
+        else "bullish" if continuation_direction == "bearish"
+        else "neutral"
+    )
+
+    def target(direction: str, mult: float) -> float | None:
+        if price <= 0 or atr <= 0 or direction == "neutral":
+            return None
+        sign = 1.0 if direction == "bullish" else -1.0
+        return round(price + sign * atr * mult, 4)
+
+    return [
+        {
+            "name": "continuation",
+            "direction": continuation_direction,
+            "weight": round(continuation / total, 4),
+            "target": target(continuation_direction, 1.0),
+            "trigger": swing_high if continuation_direction == "bullish" else swing_low if continuation_direction == "bearish" else None,
+            "invalidation": swing_low if continuation_direction == "bullish" else swing_high if continuation_direction == "bearish" else None,
+        },
+        {
+            "name": "reversal",
+            "direction": reversal_direction,
+            "weight": round(reversal / total, 4),
+            "target": target(reversal_direction, 0.75),
+            "trigger": swing_low if reversal_direction == "bearish" else swing_high if reversal_direction == "bullish" else None,
+            "invalidation": swing_high if reversal_direction == "bearish" else swing_low if reversal_direction == "bullish" else None,
+        },
+        {
+            "name": "liquidity_sweep",
+            "direction": reversal_direction,
+            "weight": round(sweep / total, 4),
+            "target": target(reversal_direction, 0.45),
+            "trigger": "sweep_then_reclaim",
+            "invalidation": None,
+        },
+    ]
+
+
 def _execution_plan(
     technical: dict[str, Any],
     perception: dict[str, Any],
@@ -1105,31 +1172,51 @@ def _execution_plan(
     hypotheses: list[dict[str, Any]],
     confidence: dict[str, Any],
     adversarial: dict[str, Any],
+    edge: dict[str, Any],
     min_confidence: float,
 ) -> dict[str, Any]:
     candidate = str(technical.get("candidate") or "none")
-    side = "long" if candidate == "long_setup" else "short" if candidate == "short_setup" else None
+    strict_side = "long" if candidate == "long_setup" else "short" if candidate == "short_setup" else None
+    edge_direction = str(edge.get("direction") or "neutral")
+    lean_side = "long" if edge_direction == "bullish" else "short" if edge_direction == "bearish" else None
+    side = strict_side or lean_side
+    setup_confirmed = strict_side is not None
+
     spot = technical.get("indicative_spot") or {}
     analysis_reference = technical.get("analysis_reference") or {}
-    price = _number(
-        analysis_reference.get("price"),
-        _number(spot.get("price"), 0.0),
-    )
+    price = _number(analysis_reference.get("price"), _number(spot.get("price"), 0.0))
     atr = max(0.0, _number(technical.get("atr_reference"), 0.0))
-    five = (technical.get("frames") or {}).get("5m") or {}
+    frames = technical.get("frames") or {}
+    five = frames.get("5m") or {}
+    fifteen = frames.get("15m") or {}
     ema_fast = _number(five.get("ema_fast"), price)
     extension_atr = abs(price - ema_fast) / atr if atr > 0 and price > 0 else 0.0
     calibrated = _number(confidence.get("calibrated_confidence"), 0.0)
     primary = hypotheses[0] if hypotheses else {}
     primary_direction = str(primary.get("direction") or "none")
     primary_name = str(primary.get("name") or "none")
+    edge_strength = _number(edge.get("strength"), 0.0)
 
     reasons: list[str] = []
     action = "STAND_DOWN"
+
     if side is None:
-        reasons.append("no_directional_setup")
+        reasons.append("no_directional_edge")
     elif adversarial.get("veto"):
         reasons.append("adversarial_veto")
+    elif not setup_confirmed:
+        if edge_strength < 0.24:
+            action = "BIAS_ONLY"
+            reasons.append("edge_too_weak_for_trigger")
+        elif regime.get("label") in {"transition", "range_rotation", "compression_range"}:
+            action = "WAIT_TRIGGER"
+            reasons.append("directional_lean_needs_regime_confirmation")
+        elif calibrated < min_confidence:
+            action = "WAIT_TRIGGER"
+            reasons.append("directional_lean_below_confidence_threshold")
+        else:
+            action = "WAIT_TRIGGER"
+            reasons.append("directional_edge_present_but_entry_trigger_missing")
     elif primary_direction not in {side, "none"}:
         reasons.append("dominant_hypothesis_opposes_entry")
     elif calibrated < min_confidence:
@@ -1145,24 +1232,47 @@ def _execution_plan(
         action = "ENTER_NOW"
         reasons.append("cognitive_gates_passed")
 
-    if side and price > 0 and atr > 0:
-        if side == "long":
-            entry_zone = [round(price - 0.22 * atr, 4), round(price + 0.05 * atr, 4)]
-            invalidation = technical.get("swing_low_reference")
-        else:
-            entry_zone = [round(price - 0.05 * atr, 4), round(price + 0.22 * atr, 4)]
-            invalidation = technical.get("swing_high_reference")
+    trigger_level = round(ema_fast, 4) if price > 0 and ema_fast > 0 else None
+    activation_conditions: list[str] = []
+    if side == "long":
+        activation_conditions = [
+            "5m_close_above_fast_ema",
+            "5m_momentum_positive",
+            "15m_not_bearish",
+        ]
+        invalidation = technical.get("swing_low_reference")
+        entry_zone = (
+            [round(price - 0.22 * atr, 4), round(price + 0.05 * atr, 4)]
+            if price > 0 and atr > 0 else None
+        )
+    elif side == "short":
+        activation_conditions = [
+            "5m_close_below_fast_ema",
+            "5m_momentum_negative",
+            "15m_not_bullish",
+        ]
+        invalidation = technical.get("swing_high_reference")
+        entry_zone = (
+            [round(price - 0.05 * atr, 4), round(price + 0.22 * atr, 4)]
+            if price > 0 and atr > 0 else None
+        )
     else:
-        entry_zone = None
         invalidation = None
+        entry_zone = None
 
     return {
         "action": action,
         "side": side,
+        "setup_confirmed": setup_confirmed,
+        "source": "strict_setup" if setup_confirmed else "directional_edge" if side else "none",
         "entry_zone": entry_zone,
+        "trigger_level": trigger_level,
+        "activation_conditions": activation_conditions,
         "invalidation_reference": invalidation,
         "extension_atr": round(extension_atr, 4),
         "primary_hypothesis": primary_name,
+        "edge_score": edge.get("score"),
+        "edge_strength": edge.get("strength"),
         "reasons": reasons,
         "execution_allowed": False,
     }
