@@ -37,6 +37,7 @@ _REQUIRED = (
 
 class XAUV2DatasetReadiness(str, Enum):
     INVALID = "invalid"
+    DATA_VALID_INSUFFICIENT = "data_valid_insufficient"
     WIRING_VALID = "wiring_valid"
     RESEARCH_CANDIDATE = "research_candidate"
 
@@ -267,7 +268,10 @@ def audit_xau_v2_dataset(
         if any(symbol != "XAUUSD" for symbol in audit.symbol_set):
             errors.append(f"instrument_identity_mismatch_{timeframe.value}")
         if not audit.minimum_met:
-            errors.append(f"minimum_{timeframe.value}_bars_not_met")
+            warnings.append(
+                f"minimum_{timeframe.value}_bars_not_met:"
+                f"{audit.bar_count}<{audit.minimum_bars}"
+            )
         if any(
             not source.lower().startswith("biquote.io:mt5-ohlc")
             for source in audit.source_set
@@ -311,6 +315,8 @@ def audit_xau_v2_dataset(
     readiness = (
         XAUV2DatasetReadiness.INVALID
         if not valid
+        else XAUV2DatasetReadiness.DATA_VALID_INSUFFICIENT
+        if not wiring_ready
         else XAUV2DatasetReadiness.RESEARCH_CANDIDATE
         if edge_claim_ready
         else XAUV2DatasetReadiness.WIRING_VALID
