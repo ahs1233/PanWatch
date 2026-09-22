@@ -1090,12 +1090,27 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     timeout=45,
                 )
                 parsed = _parse_json(answer)
-                if not parsed or parsed.get("bias") not in (-1, 0, 1) or not isinstance(parsed.get("summary"), str) or not parsed["summary"].strip():
+                if not parsed or not isinstance(parsed.get("summary"), str) or not parsed["summary"].strip():
                     raise ValueError("invalid_macro_synthesis")
-                try:
-                    bias = max(-1, min(1, int(parsed.get("bias", 0))))
-                except (TypeError, ValueError):
-                    bias = 0
+
+                raw_bias = parsed.get("bias", 0)
+                if isinstance(raw_bias, str):
+                    normalized = raw_bias.strip().lower()
+                    label_map = {"bullish": 1, "positive": 1, "bearish": -1, "negative": -1, "neutral": 0, "mixed": 0}
+                    if normalized in label_map:
+                        bias = label_map[normalized]
+                    else:
+                        try:
+                            bias = int(float(normalized))
+                        except ValueError as exc:
+                            raise ValueError("invalid_macro_bias") from exc
+                else:
+                    try:
+                        bias = int(raw_bias)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError("invalid_macro_bias") from exc
+                if bias not in (-1, 0, 1):
+                    raise ValueError("invalid_macro_bias")
                 try:
                     confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0))))
                 except (TypeError, ValueError):
