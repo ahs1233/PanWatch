@@ -31,9 +31,11 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
+          set -o pipefail
           python benchmarks/xau_v2_real_dataset_v1/run.py | tee xau-real-dataset-smoke.json
 
       - name: Upload real dataset audit
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: xau-real-dataset-smoke-v1
