@@ -74,6 +74,20 @@ class Settings(BaseSettings):
     auto_research_probe_cooldown_minutes: int = Field(default=180, ge=15, le=10080)
     auto_research_bootstrap_xau_claims: bool = True
 
+    # General, domain-neutral claim acquisition. A bounded scheduler may use
+    # configured topics or active claims as seeds; the core can also ingest
+    # arbitrary document/transcript text directly.
+    claim_acquisition_enabled: bool = False
+    claim_acquisition_interval_minutes: int = Field(default=120, ge=30, le=10080)
+    claim_acquisition_max_topics: int = Field(default=1, ge=1, le=5)
+    claim_acquisition_max_documents: int = Field(default=2, ge=1, le=8)
+    claim_acquisition_max_claims_per_document: int = Field(default=3, ge=1, le=10)
+    claim_acquisition_max_tool_calls: int = Field(default=6, ge=2, le=30)
+    claim_acquisition_extraction_timeout_seconds: int = Field(default=45, ge=15, le=120)
+    claim_acquisition_extraction_max_chars: int = Field(default=7000, ge=1500, le=16000)
+    claim_acquisition_topics: str = ""
+    claim_acquisition_bootstrap_from_active_claims: bool = True
+
     # XAU weekly paper league. These settings are explicit so paper-risk rules
     # are inspectable and never confused with the research decision fusion.
     xau_paper_enabled: bool = True
