@@ -1,6 +1,6 @@
 {
   "benchmark": "PanWatch Benchmark v1",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "purpose": "Measure current PanWatch decision integrity without confusing implemented core behavior with future research-engine capabilities.",
   "tracks": [
     {
@@ -59,6 +59,22 @@
       "scope_note": "Deterministic graph/falsification integrity; probes are generated but live counter-research execution is not automated yet."
     },
     {
+      "id": "persistent_belief_state",
+      "status": "automated",
+      "tasks": [
+        "restart_continuity",
+        "unchanged_cycle_no_noise",
+        "confidence_drop_explained",
+        "falsification_transition",
+        "revision_recovery",
+        "no_lookahead_rewrite",
+        "required_dependency_propagation",
+        "cycle_persistence_idempotency"
+      ],
+      "runner": "benchmarks.panwatch_v1.belief_runner",
+      "scope_note": "Persistent claim beliefs, append-only change events, temporal integrity and PanWatch dependency propagation."
+    },
+    {
       "id": "company_sector_research",
       "status": "specified_not_automated",
       "tasks": [
@@ -94,6 +110,7 @@
     "xau_decision_core is automated as a deterministic decision-core regression track.",
     "economic_research is automated for evidence-integrity semantics using frozen fixtures.",
     "claim_graph_falsification is automated for dependency propagation, falsifiability and adversarial failure conditions.",
+    "persistent_belief_state is automated for cross-run memory, change explanation, temporal integrity and PanWatch integration.",
     "company_sector_research remains specified but not automated.",
     "External baseline comparison is intentionally not faked without configured model access, frozen/live source packets and human labels."
   ]
