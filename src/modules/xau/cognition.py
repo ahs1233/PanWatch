@@ -356,14 +356,14 @@ def _directional_edge(
     perception: dict[str, Any],
     data_quality: float,
 ) -> dict[str, Any]:
-    """Continuous market lean independent from the stricter entry trigger.
+    """Continuous multi-horizon lean.
 
-    The previous engine collapsed weak-but-useful states into candidate=none.
-    This layer preserves a continuous directional edge while keeping execution
-    gated behind the stricter setup logic.
+    Higher-timeframe context is deliberately dominant: monthly/weekly/daily
+    structure defines the strategic bias; 4h/1h and intraday state determine
+    whether today's tape is aligned with it.
     """
     frames = technical.get("frames") or {}
-    weights = {"1m": 0.18, "5m": 0.34, "15m": 0.48}
+    weights = {"1m": 0.15, "5m": 0.35, "15m": 0.50}
     trend = 0.0
     ema_structure = 0.0
     active_weight = 0.0
@@ -395,9 +395,23 @@ def _directional_edge(
         0.60 * _clip((rsi5 - 50.0) / 28.0, -1.0, 1.0)
         + 0.40 * _clip((rsi15 - 50.0) / 28.0, -1.0, 1.0)
     )
-
     breakout = str(perception.get("breakout") or "none").lower()
     breakout_score = 1.0 if breakout == "up" else -1.0 if breakout == "down" else 0.0
+
+    context = technical.get("market_context") or {}
+    bias_context = context.get("bias") or {}
+    htf_score = _clip(
+        _number(
+            bias_context.get("today_score"),
+            _number(bias_context.get("composite_score"), 0.0),
+        ),
+        -1.0,
+        1.0,
+    )
+    smart = context.get("smart_money") or {}
+    smart_score = _clip(_number(smart.get("score"), 0.0), -1.0, 1.0)
+    flow = context.get("cash_flow") or {}
+    flow_score = _clip(_number(flow.get("score"), 0.0), -1.0, 1.0)
 
     macro_bias = max(-1.0, min(1.0, _number(macro.get("bias"), 0.0)))
     macro_conf = _clip(_number(macro.get("confidence"), 0.0))
@@ -419,21 +433,24 @@ def _directional_edge(
     candidate_component = 1.0 if candidate == "long_setup" else -1.0 if candidate == "short_setup" else 0.0
 
     score = (
-        0.29 * trend
-        + 0.20 * ema_structure
-        + 0.22 * momentum
-        + 0.10 * rsi_impulse
-        + 0.07 * breakout_score
-        + 0.07 * macro_component
-        + 0.05 * candidate_component
+        0.32 * htf_score
+        + 0.18 * smart_score
+        + 0.10 * flow_score
+        + 0.14 * trend
+        + 0.10 * ema_structure
+        + 0.08 * momentum
+        + 0.03 * rsi_impulse
+        + 0.02 * breakout_score
+        + 0.02 * macro_component
+        + 0.01 * candidate_component
     )
     score *= 0.55 + 0.45 * _clip(data_quality)
     score = _clip(score, -1.0, 1.0)
     strength = abs(score)
 
-    if score >= 0.18:
+    if score >= 0.14:
         direction = "bullish"
-    elif score <= -0.18:
+    elif score <= -0.14:
         direction = "bearish"
     else:
         direction = "neutral"
@@ -442,21 +459,34 @@ def _directional_edge(
         band = "strong"
     elif strength >= 0.36:
         band = "moderate"
-    elif strength >= 0.18:
+    elif strength >= 0.14:
         band = "weak"
     else:
         band = "none"
+
+    intraday_direction = 1 if trend >= 0.20 else -1 if trend <= -0.20 else 0
+    htf_direction = 1 if htf_score >= 0.15 else -1 if htf_score <= -0.15 else 0
+    htf_conflict = bool(intraday_direction and htf_direction and intraday_direction != htf_direction)
 
     return {
         "score": round(score, 4),
         "direction": direction,
         "strength": round(strength, 4),
         "band": band,
+        "higher_timeframe_score": round(htf_score, 4),
+        "higher_timeframe_direction": str(bias_context.get("today_direction") or bias_context.get("composite_direction") or "neutral"),
+        "higher_timeframe_conflict": htf_conflict,
+        "smart_money_score": round(smart_score, 4),
+        "cash_flow_score": round(flow_score, 4),
         "macro_age_seconds": round(macro_age, 1) if macro_age is not None else None,
         "macro_freshness": round(macro_freshness, 3),
+        "context_available": bool(context),
         "components": {
-            "trend": round(trend, 4),
-            "ema_structure": round(ema_structure, 4),
+            "higher_timeframe": round(htf_score, 4),
+            "smart_money": round(smart_score, 4),
+            "cash_flow": round(flow_score, 4),
+            "intraday_trend": round(trend, 4),
+            "intraday_ema_structure": round(ema_structure, 4),
             "momentum": round(momentum, 4),
             "rsi_impulse": round(rsi_impulse, 4),
             "breakout": round(breakout_score, 4),
