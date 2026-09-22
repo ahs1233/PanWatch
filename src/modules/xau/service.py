@@ -849,7 +849,20 @@ def build_decision_fusion(
         reasons.append("macro_bias_is_neutral_or_mixed")
 
     state = base_state
-    if cognition_active and base_state in {"setup_macro_support", "setup_macro_neutral"}:
+    edge = cognition.get("directional_edge") or {}
+    edge_direction = str(edge.get("direction") or "neutral")
+    edge_strength = float(edge.get("strength") or 0.0)
+    if (
+        cognition_active
+        and base_state == "no_setup"
+        and edge_direction in {"bullish", "bearish"}
+        and edge_strength >= 0.24
+        and not technical_blocked
+        and not event_risk
+    ):
+        state = "directional_bias_wait"
+        reasons.append("directional_edge_without_entry_trigger")
+    elif cognition_active and base_state in {"setup_macro_support", "setup_macro_neutral"}:
         if meta_decision == "veto":
             state = "cognitive_veto"
             reasons.append("adversarial_or_quality_veto")
@@ -864,7 +877,7 @@ def build_decision_fusion(
         "setup_macro_support",
         "setup_macro_neutral",
         "setup_macro_conflict",
-    }
+    } or state == "directional_bias_wait"
 
     return {
         "state": state,
