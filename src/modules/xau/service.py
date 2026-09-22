@@ -16,6 +16,7 @@ from typing import Any
 
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
+from src.modules.xau.market_context import build_market_context
 from src.platform.ai.ai_client import AIClient
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.marketdata.xau_biquote import (
@@ -45,6 +46,7 @@ _MICRO_TTL = 15.0
 _SERIES_TTL = 15.0
 _MACRO_TTL = 180.0
 _CONSENSUS_TTL = 60.0
+_MARKET_CONTEXT_TTL = 120.0
 _bars_cache = None
 _spot_cache = None
 _consensus_cache = None
@@ -53,12 +55,14 @@ _series_cache = None
 _macro_cache = None
 _macro_last_good = None
 _macro_refresh_task = None
+_market_context_cache = None
 _bars_lock = asyncio.Lock()
 _spot_lock = asyncio.Lock()
 _consensus_lock = asyncio.Lock()
 _micro_lock = asyncio.Lock()
 _series_lock = asyncio.Lock()
 _macro_lock = asyncio.Lock()
+_market_context_lock = asyncio.Lock()
 
 
 async def get_micro_series(force: bool = False):
@@ -166,6 +170,53 @@ async def get_research_bars(force: bool = False):
         return data
 
 
+
+
+
+async def get_market_context(force: bool = False) -> dict[str, Any]:
+    """Higher-timeframe XAU context: 1h/4h/daily → weekly/monthly bias.
+
+    The source is MT5-backed XAUUSD research data. Tick volume is deliberately
+    labelled as a participation proxy because spot gold has no centralized
+    global volume tape.
+    """
+    global _market_context_cache
+    now = time.monotonic()
+    if not force and _market_context_cache and now - _market_context_cache[0] < _MARKET_CONTEXT_TTL:
+        return _market_context_cache[1]
+
+    async with _market_context_lock:
+        now = time.monotonic()
+        if not force and _market_context_cache and now - _market_context_cache[0] < _MARKET_CONTEXT_TTL:
+            return _market_context_cache[1]
+
+        provider = BiquoteXAUOHLCProvider()
+
+        async def fetch(tf: XAUTimeframe):
+            return await asyncio.to_thread(
+                provider.bars,
+                tf,
+                limit=1000,
+                timeout_seconds=14.0,
+            )
+
+        h1, h4, daily = await asyncio.gather(
+            fetch(XAUTimeframe.H1),
+            fetch(XAUTimeframe.H4),
+            fetch(XAUTimeframe.D1),
+        )
+        data = build_market_context(h1, h4, daily)
+        data["sources"] = {
+            "1h": h1[-1].source if h1 else None,
+            "4h": h4[-1].source if h4 else None,
+            "1d": daily[-1].source if daily else None,
+        }
+        data["observed_at"] = max(
+            [row.timestamp for rows in (h1, h4, daily) for row in rows[-1:]],
+            default=datetime.now(timezone.utc),
+        ).isoformat()
+        _market_context_cache = (time.monotonic(), data)
+        return data
 
 async def get_chart_series(
     timeframe: str = "5m",
