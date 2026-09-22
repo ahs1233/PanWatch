@@ -49,11 +49,14 @@ def _atr(rows: list[XAUBar], period: int = 14) -> float:
 
 
 def aggregate_bars(rows: list[XAUBar], timeframe: XAUTimeframe) -> list[XAUBar]:
-    if timeframe not in {XAUTimeframe.W1, XAUTimeframe.MN1}:
-        raise ValueError("aggregate_bars supports weekly or monthly only")
+    if timeframe not in {XAUTimeframe.H4, XAUTimeframe.W1, XAUTimeframe.MN1}:
+        raise ValueError("aggregate_bars supports 4h, weekly or monthly only")
     groups: dict[tuple[int, int], list[XAUBar]] = defaultdict(list)
     for row in sorted(rows, key=lambda x: x.timestamp):
-        if timeframe == XAUTimeframe.W1:
+        if timeframe == XAUTimeframe.H4:
+            day_key = row.timestamp.toordinal()
+            key = (day_key, row.timestamp.hour // 4)
+        elif timeframe == XAUTimeframe.W1:
             iso = row.timestamp.isocalendar()
             key = (iso.year, iso.week)
         else:
@@ -390,14 +393,21 @@ def build_market_context(
     h4: list[XAUBar],
     daily: list[XAUBar],
     futures_hourly: list[XAUBar] | None = None,
+    deep_hourly: list[XAUBar] | None = None,
+    deep_daily: list[XAUBar] | None = None,
 ) -> dict[str, Any]:
-    weekly = aggregate_bars(daily, XAUTimeframe.W1)
-    monthly = aggregate_bars(daily, XAUTimeframe.MN1)
+    bias_hourly = deep_hourly if deep_hourly and len(deep_hourly) >= 50 else hourly
+    bias_h4 = aggregate_bars(bias_hourly, XAUTimeframe.H4) if bias_hourly else h4
+    if len(bias_h4) < 50 and h4:
+        bias_h4 = h4
+    bias_daily = deep_daily if deep_daily and len(deep_daily) >= 50 else daily
+    weekly = aggregate_bars(bias_daily, XAUTimeframe.W1) if bias_daily else []
+    monthly = aggregate_bars(bias_daily, XAUTimeframe.MN1) if bias_daily else []
 
     biases = {
-        "1h": timeframe_bias(hourly, "1h"),
-        "4h": timeframe_bias(h4, "4h"),
-        "1d": timeframe_bias(daily, "1d"),
+        "1h": timeframe_bias(bias_hourly, "1h"),
+        "4h": timeframe_bias(bias_h4, "4h"),
+        "1d": timeframe_bias(bias_daily, "1d"),
         "1w": timeframe_bias(weekly, "1w"),
         "1mo": timeframe_bias(monthly, "1mo"),
     }
@@ -461,7 +471,7 @@ def build_market_context(
     today_direction = "bullish" if today_score >= 0.15 else "bearish" if today_score <= -0.15 else "neutral"
 
     return {
-        "version": "htf-context-v3-validator-separation",
+        "version": "htf-context-v4-deep-history",
         "bias": {
             "monthly": biases["1mo"],
             "weekly": biases["1w"],
@@ -483,6 +493,15 @@ def build_market_context(
         "futures_flow": futures_flow,
         "liquidity": liquidity,
         "smart_money": smart_money,
+        "bias_history": {
+            "1h_bars": len(bias_hourly),
+            "4h_bars": len(bias_h4),
+            "1d_bars": len(bias_daily),
+            "1w_bars": len(weekly),
+            "1mo_bars": len(monthly),
+            "deep_hourly_source": bias_hourly[-1].source if bias_hourly else None,
+            "deep_daily_source": bias_daily[-1].source if bias_daily else None,
+        },
         "volume_note": (
             "XAUUSD is OTC; MT5 tick volume is an activity proxy, not centralized exchange volume. "
             "GC futures volume is used only as a cross-market participation proxy. Neither is treated "
