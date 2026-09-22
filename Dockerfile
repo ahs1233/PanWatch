@@ -85,7 +85,7 @@ COPY packages/ ./packages/
 # 安装 Python 依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-/* XAU intelligence dependency smoke */
+# XAU intelligence dependency smoke
 RUN python -c "import pyvsmc, smartmoneyconcepts, market_profile, pandas_ta_classic, vectorbt; import smc_mcp.smc; print('XAU_INTELLIGENCE_LIBS_OK')"
 
 # 注意: Playwright 浏览器将在首次启动时自动安装到 data 目录
