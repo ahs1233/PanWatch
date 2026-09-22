@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     context_keep_recent_messages: int = Field(default=8, ge=1, le=100)
     tool_research_enabled: bool = True
 
+    # Durable Ahmed Research Engine / PanWatch belief store.
+    # Production should point this at external PostgreSQL. Empty keeps the
+    # local SQLite compatibility fallback.
+    research_database_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "PANWATCH_RESEARCH_DATABASE_URL",
+            "RESEARCH_DATABASE_URL",
+        ),
+    )
+
     # Ahmed ToolBox MCP. Empty URL keeps the integration disabled and leaves
     # PanWatch's built-in tools unchanged.
     ahmed_toolbox_url: str = ""
