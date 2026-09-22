@@ -78,22 +78,38 @@ class YahooGoldResearchProvider:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
             else:
                 timestamp = timestamp.astimezone(timezone.utc)
-            out.append(
-                XAUBar(
-                    timestamp=timestamp,
-                    timeframe=timeframe,
-                    open=float(row["Open"]),
-                    high=float(row["High"]),
-                    low=float(row["Low"]),
-                    close=float(row["Close"]),
-                    volume=(
-                        float(row["Volume"])
-                        if row.get("Volume") is not None
-                        else None
-                    ),
-                    source=self.source,
-                    symbol="XAUUSD",
-                    execution_eligible=False,
+
+            try:
+                open_ = float(row["Open"])
+                high = float(row["High"])
+                low = float(row["Low"])
+                close = float(row["Close"])
+                volume_raw = row.get("Volume")
+                volume = float(volume_raw) if volume_raw is not None else None
+                values = (open_, high, low, close)
+                if any(value != value or value <= 0 for value in values):
+                    continue
+                if high < max(open_, close, low) or low > min(open_, close, high):
+                    continue
+                if volume is not None and volume != volume:
+                    volume = None
+                out.append(
+                    XAUBar(
+                        timestamp=timestamp,
+                        timeframe=timeframe,
+                        open=open_,
+                        high=high,
+                        low=low,
+                        close=close,
+                        volume=volume,
+                        source=self.source,
+                        symbol="XAUUSD",
+                        execution_eligible=False,
+                    )
                 )
-            )
+            except (TypeError, ValueError, OverflowError):
+                # Long-run futures history occasionally contains malformed or
+                # settlement-only rows. One bad Yahoo row must not discard the
+                # entire EMA history.
+                continue
         return out
