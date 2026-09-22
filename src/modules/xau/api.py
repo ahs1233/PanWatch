@@ -26,7 +26,7 @@ async def macro(force: bool = Query(default=False)):
 
 @router.get("/chart")
 async def chart(
-    timeframe: str = Query(default="5m", pattern="^(1m|5m|15m)$"),
+    timeframe: str = Query(default="5m", pattern="^(1m|5m|15m|30m|1h|4h|1d|1w|1mo)$"),
     limit: int = Query(default=160, ge=30, le=240),
     force: bool = Query(default=False),
 ):
