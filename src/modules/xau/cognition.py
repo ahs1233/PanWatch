@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-COGNITION_VERSION = "5.3.0"
+COGNITION_VERSION = "5.4.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -1093,6 +1093,18 @@ def _adversarial_review(
     setup_dir = 1 if candidate == "long_setup" else -1 if candidate == "short_setup" else 0
     macro_bias = int(max(-1, min(1, _number(macro.get("bias"), 0.0))))
     macro_conf = _clip(_number(macro.get("confidence"), 0.0))
+    context = technical.get("market_context") or {}
+    bias_context = context.get("bias") or {}
+    htf_score = _clip(
+        _number(
+            bias_context.get("today_score"),
+            _number(bias_context.get("composite_score"), 0.0),
+        ),
+        -1.0,
+        1.0,
+    )
+    flow_score = _clip(_number((context.get("cash_flow") or {}).get("score"), 0.0), -1.0, 1.0)
+    smart_score = _clip(_number((context.get("smart_money") or {}).get("score"), 0.0), -1.0, 1.0)
     primary = hypotheses[0] if hypotheses else {"name": "none", "weight": 0.0, "direction": "none"}
     rsi5 = _number(perception.get("rsi_5m"), 50.0)
 
@@ -1107,6 +1119,12 @@ def _adversarial_review(
         hard_veto = True
     if setup_dir and macro_bias == -setup_dir and macro_conf >= 0.65:
         counter_evidence.append("high_confidence_macro_conflict")
+    if setup_dir and htf_score * setup_dir <= -0.35:
+        counter_evidence.append("strong_higher_timeframe_conflict")
+    if setup_dir and flow_score * setup_dir <= -0.30:
+        counter_evidence.append("cash_flow_opposes_setup")
+    if setup_dir and smart_score * setup_dir <= -0.35:
+        counter_evidence.append("smart_money_structure_opposes_setup")
     if primary.get("direction") not in {
         "long" if setup_dir > 0 else "short" if setup_dir < 0 else "none",
         "none",
