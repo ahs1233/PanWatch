@@ -50,7 +50,7 @@ export default function DashboardPage(){
  const cog=fusion?.cognition; const edge=cog?.directional_edge; const plan=cog?.execution_plan; const scenarios=cog?.scenarios||[]; const score=Math.round((cog?.confidence.calibrated_confidence||0)*100); const quality=Math.round((cog?.data_quality.score||0)*100)
  const context=snapshot?.market_context
  const price=snapshot?.indicative_spot?.price; const direction=edge?.direction||snapshot?.alignment||'mixed'
- const directionLabel=direction==='bullish'?'BULLISH LEAN':direction==='bearish'?'BEARISH LEAN':'NO CLEAR EDGE'
+ const directionLabel=plan?.scenario_conflict?'CONFLICTED — WAIT':direction==='bullish'?(edge?.strength!=null&&edge.strength<0.24?'WEAK BULLISH BIAS':'BULLISH LEAN'):direction==='bearish'?(edge?.strength!=null&&edge.strength<0.24?'WEAK BEARISH BIAS':'BEARISH LEAN'):'NO CLEAR EDGE'
  const statusText=plan?.action?nice(plan.action):nice(fusion?.state)
  const gates=[...(snapshot?.block_reasons||[]),...(snapshot?.warnings||[]),...(cog?.adversarial.counter_evidence||[])]
 
@@ -66,8 +66,8 @@ export default function DashboardPage(){
 
   {error&&<div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-500">{error}</div>}
 
-  <section className="mb-4 grid gap-3 lg:grid-cols-12">
-   <div className="card overflow-hidden p-3 lg:col-span-8">
+  <section className="mb-4 grid items-start gap-3 lg:grid-cols-12">
+   <div className="card self-start overflow-hidden p-3 lg:col-span-8">
     <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
      <div>
       <div className="text-sm font-semibold">Market structure</div>
@@ -85,7 +85,7 @@ export default function DashboardPage(){
    <aside className="space-y-3 lg:col-span-4">
     <div className="card p-4">
      <div className="flex items-start justify-between gap-3">
-      <div><div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">PanWatch decision</div><div className={'mt-1 text-xl font-bold '+tone(direction)}>{directionLabel}</div><div className="mt-1 text-[11px] font-medium text-muted-foreground">{statusText}</div></div>
+      <div><div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">PanWatch decision</div><div className={'mt-1 text-xl font-bold '+(plan?.scenario_conflict?'text-amber-500':tone(direction))}>{directionLabel}</div><div className="mt-1 text-[11px] font-medium text-muted-foreground">{statusText}</div></div>
       <div className="text-right"><div className="font-mono text-2xl font-bold">{score}<span className="text-[11px] text-muted-foreground">/100</span></div><div className="text-[9px] text-muted-foreground">decision score</div></div>
      </div>
      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
@@ -140,13 +140,13 @@ export default function DashboardPage(){
     </div>
     <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
      <div className="rounded-xl border border-border/60 p-3"><span className="text-muted-foreground">Cash flow</span><div className={'mt-1 text-xs font-semibold '+tone(context?.cash_flow.direction==='inflow'?'bullish':context?.cash_flow.direction==='outflow'?'bearish':'neutral')}>{nice(context?.cash_flow.direction)} · {fmt(context?.cash_flow.score,2)}</div><div className="mt-1 font-mono text-[9px] text-muted-foreground">Spot CMF {fmt(context?.spot_tick_flow?.cmf20,3)} · GC CMF {fmt(context?.futures_flow?.cmf20,3)}</div><div className="mt-1 text-[9px] text-muted-foreground">{nice(context?.cash_flow.agreement)}</div></div>
-     <div className="rounded-xl border border-border/60 p-3"><span className="text-muted-foreground">Structure</span><div className="mt-1 text-xs font-semibold">{nice(context?.smart_money.break_of_structure)}</div><div className="mt-1 text-[9px] text-muted-foreground">Sweep {nice(context?.smart_money.validated_liquidity_sweep||context?.smart_money.liquidity_sweep)} · {nice(context?.smart_money.dealing_range?.zone)}</div></div>
+     <div className="rounded-xl border border-border/60 p-3"><span className="text-muted-foreground">Structure</span><div className="mt-1 text-xs font-semibold">{context?.smart_money.break_of_structure&&context.smart_money.break_of_structure!=='none'?nice(context.smart_money.break_of_structure):'Validated '+nice(context?.smart_money.validated_structure_direction)}</div><div className="mt-1 text-[9px] text-muted-foreground">Sweep {nice(context?.smart_money.validated_liquidity_sweep||context?.smart_money.liquidity_sweep)} · {nice(context?.smart_money.dealing_range?.zone)}</div></div>
     </div>
     <div className="mt-3 flex flex-wrap gap-2">{(context?.liquidity.levels||[]).slice(0,6).map(level=><span key={level.name} className="rounded-full bg-accent/35 px-2.5 py-1 text-[9px]"><b>{level.name}</b> <span className="font-mono">{fmt(level.price)}</span></span>)}</div>
     <div className="mt-3 rounded-xl border border-border/60 p-3">
-     <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-muted-foreground">SMC cross-validation</span><b className={'text-[10px] '+tone(context?.library_intelligence?.direction)}>{nice(context?.library_intelligence?.direction)} · {context?.library_intelligence?.agreement!=null?Math.round(context.library_intelligence.agreement*100)+'%':'--'}</b></div>
+     <div className="flex items-center justify-between gap-3"><span className="text-[10px] text-muted-foreground">SMC cross-validation</span><b className={'text-[10px] '+tone(context?.library_intelligence?.direction)}>{nice(context?.library_intelligence?.direction)} · {context?.library_intelligence?.independent_direction_votes!=null?context.library_intelligence.independent_direction_votes+'/3 validators':'--'}</b></div>
      <div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(context?.library_intelligence?.status||{}).map(([name,status])=><span key={name} className={'rounded-full px-2 py-1 text-[8px] '+(status==='ok'?'bg-emerald-500/10 text-emerald-500':'bg-amber-500/10 text-amber-500')}>{name} {String(status).toUpperCase()}</span>)}</div>
-     <div className="mt-2 grid grid-cols-2 gap-2 text-[9px] text-muted-foreground"><span>SMC: {nice(context?.cross_validation?.smc_concordance)}</span><span>Structure-scope: {nice(context?.library_intelligence?.structure_scope_reference?.setup)}</span><span>TA EMA50 Δ {fmt(context?.cross_validation?.technical_parity?.ema50_delta,4)}</span><span>VP POC Δ {fmt(context?.cross_validation?.profile_parity?.poc_delta,2)}</span></div>
+     <div className="mt-2 grid grid-cols-2 gap-2 text-[9px] text-muted-foreground"><span>SMC: {nice(context?.cross_validation?.smc_concordance)}</span><span>Structure-scope: {nice(context?.library_intelligence?.structure_scope_reference?.setup)}</span><span>TA EMA50 Δ {fmt(context?.cross_validation?.technical_parity?.ema50_delta,4)}</span><span>VP {nice((context?.cross_validation as any)?.profile_parity?.concordance)}</span></div>
     </div>
     <div className="mt-3 text-[9px] leading-4 text-muted-foreground">{context?.volume_note||'Higher-timeframe context is loading.'}</div>
    </div>
