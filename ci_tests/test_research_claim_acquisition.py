@@ -26,7 +26,10 @@ from src.platform.persistence.migrations import (
     _m130_automatic_research_loop,
     _m131_general_claim_acquisition,
 )
-from src.platform.persistence.models import ResearchClaimCandidateRecord
+from src.platform.persistence.models import (
+    ResearchAcquisitionRunRecord,
+    ResearchClaimCandidateRecord,
+)
 
 
 UTC = timezone.utc
@@ -568,5 +571,96 @@ async def test_page_metadata_candidate_is_rejected_and_audited():
         row = db.query(ResearchClaimCandidateRecord).one()
         assert row.decision == "rejected"
         assert row.reason == "page_metadata"
+    finally:
+        db.close()
+
+
+
+@pytest.mark.asyncio
+async def test_structural_heading_candidate_is_rejected():
+    _engine, db = _db()
+    try:
+        doc = _doc(
+            "https://energy.example/report",
+            "### Share of electricity consumption by data centre and equipment type, 2024",
+        )
+        candidate = _candidate(
+            quote="### Share of electricity consumption by data centre and equipment type, 2024",
+            statement="### Share of electricity consumption by data centre and equipment type, 2024",
+            key="energy.data_center.share.2024",
+        )
+        graph = ClaimGraph()
+        result = await GeneralClaimAcquisition(
+            graph=graph,
+            ledger=EvidenceLedger(),
+            falsification=FalsificationEngine(),
+            extractor=_Extractor({doc.url: [candidate]}),
+        ).run(db=db, documents=[doc], evaluated_at=T0)
+
+        assert result.rejected == 1
+        assert result.claims_accepted == 0
+        assert len(graph.claims) == 0
+        row = db.query(ResearchClaimCandidateRecord).one()
+        assert row.decision == "rejected"
+        assert row.reason == "structural_non_claim"
+    finally:
+        db.close()
+
+
+def test_timeout_fallback_rejects_markdown_heading_with_year():
+    from src.modules.research.claim_acquisition import (
+        _deterministic_grounded_candidates,
+    )
+
+    rows = _deterministic_grounded_candidates(
+        "### Share of electricity consumption by data centre and equipment type, 2024",
+        max_candidates=3,
+        fallback_reason="TimeoutError",
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_stale_acquisition_run_is_recovered_before_new_run():
+    _engine, db = _db()
+    try:
+        stale = ResearchAcquisitionRunRecord(
+            run_id="acq_stale_fixture",
+            started_at=(T0 - timedelta(minutes=30)).replace(tzinfo=None),
+            status="running",
+            seed_topic="old",
+            documents_seen=0,
+            candidates_extracted=0,
+            claims_accepted=0,
+            duplicates=0,
+            rejected=0,
+            superseded=0,
+            tool_calls=0,
+            error="",
+            meta={},
+        )
+        db.add(stale)
+        db.commit()
+
+        result = await GeneralClaimAcquisition(
+            graph=ClaimGraph(),
+            ledger=EvidenceLedger(),
+            falsification=FalsificationEngine(),
+            extractor=_Extractor({}),
+        ).run(
+            db=db,
+            documents=[],
+            seed_topic="new",
+            evaluated_at=T0,
+        )
+
+        recovered = db.get(
+            ResearchAcquisitionRunRecord,
+            "acq_stale_fixture",
+        )
+        assert result.status == "success"
+        assert recovered.status == "abandoned"
+        assert recovered.error == "stale_acquisition_recovered"
+        assert recovered.completed_at == T0.replace(tzinfo=None)
     finally:
         db.close()

@@ -783,6 +783,7 @@ def _active_claim_ids(graph: ClaimGraph) -> tuple[str, ...]:
             claim.claim_id
             for claim in graph.claims
             if claim.claim_id not in superseded
+            and not bool(claim.metadata.get("admission_invalidated"))
         )
     )
 
