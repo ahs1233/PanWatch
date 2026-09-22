@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-COGNITION_VERSION = "3.0.0"
+COGNITION_VERSION = "4.0.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -1103,12 +1103,21 @@ def _scenario_paths(
     hypotheses: list[dict[str, Any]],
     edge: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """Build scenario geometry from the activation level, never from spot alone.
+
+    Targets are always placed beyond their trigger in the scenario direction.
+    This prevents impossible states such as a bullish target below its breakout
+    trigger or a bearish target above its breakdown trigger.
+    """
     analysis_reference = technical.get("analysis_reference") or {}
     spot = technical.get("indicative_spot") or {}
     price = _number(analysis_reference.get("price"), _number(spot.get("price"), 0.0))
     atr = max(0.0, _number(technical.get("atr_reference"), 0.0))
     swing_high = technical.get("swing_high_reference")
     swing_low = technical.get("swing_low_reference")
+    swing_high_n = _number(swing_high, 0.0) if swing_high is not None else 0.0
+    swing_low_n = _number(swing_low, 0.0) if swing_low is not None else 0.0
+
     weights = {str(item.get("name")): _number(item.get("weight")) for item in hypotheses}
     continuation = (
         weights.get("trend_continuation", 0.0)
@@ -1123,6 +1132,7 @@ def _scenario_paths(
     )
     sweep = weights.get("liquidity_sweep", 0.0)
     total = continuation + reversal + sweep or 1.0
+
     edge_direction = str(edge.get("direction") or "neutral")
     continuation_direction = edge_direction if edge_direction != "neutral" else "neutral"
     reversal_direction = (
@@ -1131,38 +1141,180 @@ def _scenario_paths(
         else "neutral"
     )
 
-    def target(direction: str, mult: float) -> float | None:
-        if price <= 0 or atr <= 0 or direction == "neutral":
+    def directional_target(trigger: float | None, direction: str, atr_multiple: float) -> float | None:
+        if trigger is None or trigger <= 0 or atr <= 0 or direction == "neutral":
             return None
+        distance = max(0.35, atr * atr_multiple)
         sign = 1.0 if direction == "bullish" else -1.0
-        return round(price + sign * atr * mult, 4)
+        return round(trigger + sign * distance, 4)
 
-    return [
+    if continuation_direction == "bullish":
+        continuation_trigger = swing_high_n or (price if price > 0 else None)
+        continuation_invalidation = swing_low_n or None
+    elif continuation_direction == "bearish":
+        continuation_trigger = swing_low_n or (price if price > 0 else None)
+        continuation_invalidation = swing_high_n or None
+    else:
+        continuation_trigger = None
+        continuation_invalidation = None
+
+    if reversal_direction == "bearish":
+        reversal_trigger = swing_low_n or (price if price > 0 else None)
+        reversal_invalidation = swing_high_n or None
+        sweep_trigger = swing_high_n or (price if price > 0 else None)
+    elif reversal_direction == "bullish":
+        reversal_trigger = swing_high_n or (price if price > 0 else None)
+        reversal_invalidation = swing_low_n or None
+        sweep_trigger = swing_low_n or (price if price > 0 else None)
+    else:
+        reversal_trigger = None
+        reversal_invalidation = None
+        sweep_trigger = None
+
+    sweep_target = directional_target(sweep_trigger, reversal_direction, 0.80)
+    sweep_invalidation = None
+    if sweep_trigger and atr > 0 and reversal_direction != "neutral":
+        sign = 1.0 if reversal_direction == "bearish" else -1.0
+        sweep_invalidation = round(sweep_trigger + sign * atr * 0.30, 4)
+
+    scenarios = [
         {
             "name": "continuation",
             "direction": continuation_direction,
             "weight": round(continuation / total, 4),
-            "target": target(continuation_direction, 1.0),
-            "trigger": swing_high if continuation_direction == "bullish" else swing_low if continuation_direction == "bearish" else None,
-            "invalidation": swing_low if continuation_direction == "bullish" else swing_high if continuation_direction == "bearish" else None,
+            "target": directional_target(continuation_trigger, continuation_direction, 0.85),
+            "trigger": round(continuation_trigger, 4) if continuation_trigger else None,
+            "trigger_kind": "breakout",
+            "invalidation": round(continuation_invalidation, 4) if continuation_invalidation else None,
         },
         {
             "name": "reversal",
             "direction": reversal_direction,
             "weight": round(reversal / total, 4),
-            "target": target(reversal_direction, 0.75),
-            "trigger": swing_low if reversal_direction == "bearish" else swing_high if reversal_direction == "bullish" else None,
-            "invalidation": swing_high if reversal_direction == "bearish" else swing_low if reversal_direction == "bullish" else None,
+            "target": directional_target(reversal_trigger, reversal_direction, 0.75),
+            "trigger": round(reversal_trigger, 4) if reversal_trigger else None,
+            "trigger_kind": "structure_break",
+            "invalidation": round(reversal_invalidation, 4) if reversal_invalidation else None,
         },
         {
             "name": "liquidity_sweep",
             "direction": reversal_direction,
             "weight": round(sweep / total, 4),
-            "target": target(reversal_direction, 0.45),
-            "trigger": "sweep_then_reclaim",
-            "invalidation": None,
+            "target": sweep_target,
+            "trigger": round(sweep_trigger, 4) if sweep_trigger else None,
+            "trigger_kind": "sweep_then_reclaim",
+            "invalidation": sweep_invalidation,
         },
     ]
+
+    # Geometry invariant: directional targets must sit beyond their triggers.
+    for scenario in scenarios:
+        trigger = scenario.get("trigger")
+        target = scenario.get("target")
+        direction = scenario.get("direction")
+        if isinstance(trigger, (int, float)) and isinstance(target, (int, float)):
+            if direction == "bullish" and target <= trigger:
+                scenario["target"] = round(trigger + max(0.35, atr * 0.50), 4)
+            elif direction == "bearish" and target >= trigger:
+                scenario["target"] = round(trigger - max(0.35, atr * 0.50), 4)
+    return scenarios
+
+
+def _activation_state(
+    side: str | None,
+    technical: dict[str, Any],
+    perception: dict[str, Any],
+    *,
+    setup_confirmed: bool,
+) -> dict[str, Any]:
+    frames = technical.get("frames") or {}
+    five = frames.get("5m") or {}
+    fifteen = frames.get("15m") or {}
+    close5 = _number(five.get("close"), 0.0)
+    ema_fast = _number(five.get("ema_fast"), 0.0)
+    dir5 = str(five.get("direction") or "neutral")
+    dir15 = str(fifteen.get("direction") or "neutral")
+    ret10 = _number(perception.get("return_10m_pct"), 0.0)
+    momentum = str(perception.get("momentum") or "neutral")
+
+    conditions: list[dict[str, Any]] = []
+    if side == "long":
+        conditions = [
+            {
+                "key": "5m_close_above_fast_ema",
+                "label": "5m close above fast EMA",
+                "status": "satisfied" if close5 > ema_fast else "pending",
+                "current": round(close5, 4) if close5 else None,
+                "threshold": round(ema_fast, 4) if ema_fast else None,
+            },
+            {
+                "key": "5m_momentum_positive",
+                "label": "5m momentum positive",
+                "status": "satisfied" if (dir5 == "bullish" or momentum == "bullish" or ret10 > 0.015) else "failed" if (dir5 == "bearish" and ret10 < -0.015) else "pending",
+                "current": round(ret10, 5),
+                "threshold": 0.0,
+            },
+            {
+                "key": "15m_not_bearish",
+                "label": "15m not bearish",
+                "status": "failed" if dir15 == "bearish" else "satisfied" if dir15 in {"bullish", "neutral"} else "pending",
+                "current": dir15,
+                "threshold": "not_bearish",
+            },
+        ]
+    elif side == "short":
+        conditions = [
+            {
+                "key": "5m_close_below_fast_ema",
+                "label": "5m close below fast EMA",
+                "status": "satisfied" if close5 < ema_fast else "pending",
+                "current": round(close5, 4) if close5 else None,
+                "threshold": round(ema_fast, 4) if ema_fast else None,
+            },
+            {
+                "key": "5m_momentum_negative",
+                "label": "5m momentum negative",
+                "status": "satisfied" if (dir5 == "bearish" or momentum == "bearish" or ret10 < -0.015) else "failed" if (dir5 == "bullish" and ret10 > 0.015) else "pending",
+                "current": round(ret10, 5),
+                "threshold": 0.0,
+            },
+            {
+                "key": "15m_not_bullish",
+                "label": "15m not bullish",
+                "status": "failed" if dir15 == "bullish" else "satisfied" if dir15 in {"bearish", "neutral"} else "pending",
+                "current": dir15,
+                "threshold": "not_bullish",
+            },
+        ]
+
+    conditions.append({
+        "key": "strict_setup_confirmation",
+        "label": "Strict setup confirmation",
+        "status": "satisfied" if setup_confirmed else "pending",
+        "current": "confirmed" if setup_confirmed else "not_confirmed",
+        "threshold": "confirmed",
+    })
+
+    satisfied = sum(1 for item in conditions if item["status"] == "satisfied")
+    failed = sum(1 for item in conditions if item["status"] == "failed")
+    pending = len(conditions) - satisfied - failed
+    if not conditions:
+        state = "inactive"
+    elif failed:
+        state = "blocked"
+    elif pending:
+        state = "pending"
+    else:
+        state = "confirmed"
+
+    return {
+        "state": state,
+        "conditions": conditions,
+        "satisfied": satisfied,
+        "pending": pending,
+        "failed": failed,
+        "total": len(conditions),
+    }
 
 
 def _execution_plan(
@@ -1170,6 +1322,7 @@ def _execution_plan(
     perception: dict[str, Any],
     regime: dict[str, Any],
     hypotheses: list[dict[str, Any]],
+    scenarios: list[dict[str, Any]],
     confidence: dict[str, Any],
     adversarial: dict[str, Any],
     edge: dict[str, Any],
@@ -1188,7 +1341,6 @@ def _execution_plan(
     atr = max(0.0, _number(technical.get("atr_reference"), 0.0))
     frames = technical.get("frames") or {}
     five = frames.get("5m") or {}
-    fifteen = frames.get("15m") or {}
     ema_fast = _number(five.get("ema_fast"), price)
     extension_atr = abs(price - ema_fast) / atr if atr > 0 and price > 0 else 0.0
     calibrated = _number(confidence.get("calibrated_confidence"), 0.0)
@@ -1197,13 +1349,45 @@ def _execution_plan(
     primary_name = str(primary.get("name") or "none")
     edge_strength = _number(edge.get("strength"), 0.0)
 
+    activation = _activation_state(
+        side,
+        technical,
+        perception,
+        setup_confirmed=setup_confirmed,
+    )
+
+    dominant_scenario = max(scenarios, key=lambda item: _number(item.get("weight")), default={})
+    same_direction_weight = max(
+        (
+            _number(item.get("weight"))
+            for item in scenarios
+            if str(item.get("direction")) == edge_direction
+        ),
+        default=0.0,
+    )
+    dominant_direction = str(dominant_scenario.get("direction") or "neutral")
+    dominant_weight = _number(dominant_scenario.get("weight"), 0.0)
+    scenario_conflict = bool(
+        side
+        and edge_direction in {"bullish", "bearish"}
+        and dominant_direction in {"bullish", "bearish"}
+        and dominant_direction != edge_direction
+        and dominant_weight >= 0.45
+        and dominant_weight >= same_direction_weight + 0.08
+    )
+
     reasons: list[str] = []
     action = "STAND_DOWN"
-
     if side is None:
         reasons.append("no_directional_edge")
     elif adversarial.get("veto"):
         reasons.append("adversarial_veto")
+    elif scenario_conflict:
+        action = "WAIT_CONFIRMATION"
+        reasons.append("dominant_scenario_opposes_directional_edge")
+    elif activation.get("failed", 0) > 0:
+        action = "WAIT_CONFIRMATION"
+        reasons.append("activation_condition_failed")
     elif not setup_confirmed:
         if edge_strength < 0.24:
             action = "BIAS_ONLY"
@@ -1232,25 +1416,26 @@ def _execution_plan(
         action = "ENTER_NOW"
         reasons.append("cognitive_gates_passed")
 
-    trigger_level = round(ema_fast, 4) if price > 0 and ema_fast > 0 else None
-    activation_conditions: list[str] = []
+    swing_high = _number(technical.get("swing_high_reference"), 0.0)
+    swing_low = _number(technical.get("swing_low_reference"), 0.0)
+    close5 = _number(five.get("close"), price)
+
+    trigger_level = None
     if side == "long":
-        activation_conditions = [
-            "5m_close_above_fast_ema",
-            "5m_momentum_positive",
-            "15m_not_bearish",
-        ]
+        if close5 <= ema_fast and ema_fast > 0:
+            trigger_level = round(ema_fast, 4)
+        elif not setup_confirmed and swing_high > price:
+            trigger_level = round(swing_high, 4)
         invalidation = technical.get("swing_low_reference")
         entry_zone = (
             [round(price - 0.22 * atr, 4), round(price + 0.05 * atr, 4)]
             if price > 0 and atr > 0 else None
         )
     elif side == "short":
-        activation_conditions = [
-            "5m_close_below_fast_ema",
-            "5m_momentum_negative",
-            "15m_not_bullish",
-        ]
+        if close5 >= ema_fast and ema_fast > 0:
+            trigger_level = round(ema_fast, 4)
+        elif not setup_confirmed and swing_low > 0 and swing_low < price:
+            trigger_level = round(swing_low, 4)
         invalidation = technical.get("swing_high_reference")
         entry_zone = (
             [round(price - 0.05 * atr, 4), round(price + 0.22 * atr, 4)]
@@ -1267,10 +1452,16 @@ def _execution_plan(
         "source": "strict_setup" if setup_confirmed else "directional_edge" if side else "none",
         "entry_zone": entry_zone,
         "trigger_level": trigger_level,
-        "activation_conditions": activation_conditions,
+        "trigger_state": activation.get("state"),
+        "activation": activation,
+        "activation_conditions": activation.get("conditions", []),
         "invalidation_reference": invalidation,
         "extension_atr": round(extension_atr, 4),
         "primary_hypothesis": primary_name,
+        "dominant_scenario": dominant_scenario.get("name"),
+        "dominant_scenario_direction": dominant_direction,
+        "dominant_scenario_weight": round(dominant_weight, 4),
+        "scenario_conflict": scenario_conflict,
         "edge_score": edge.get("score"),
         "edge_strength": edge.get("strength"),
         "reasons": reasons,
@@ -1315,17 +1506,18 @@ def build_cognitive_state(
         min_confidence,
         memory_state,
     )
+    scenarios = _scenario_paths(technical, hypotheses, edge)
     plan = _execution_plan(
         technical,
         perception,
         regime,
         hypotheses,
+        scenarios,
         confidence,
         adversarial,
         edge,
         adaptive_threshold["effective"],
     )
-    scenarios = _scenario_paths(technical, hypotheses, edge)
 
     action = str(plan.get("action") or "STAND_DOWN")
     if action == "ENTER_NOW":
