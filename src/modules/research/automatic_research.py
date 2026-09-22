@@ -466,11 +466,75 @@ class AhmedToolboxResearchGateway:
         return documents
 
 
+def _relevant_excerpt(
+    text: str,
+    *,
+    signals: tuple[str, ...],
+    max_chars: int,
+) -> str:
+    """Select compact source-grounded passages most relevant to a probe."""
+    raw = str(text or "").strip()
+    if len(raw) <= max_chars:
+        return raw
+
+    keywords: set[str] = set()
+    for signal in signals:
+        for token in re.findall(r"[A-Za-z0-9%.$/-]{4,}", str(signal or "").lower()):
+            if token not in {
+                "current", "independent", "evidence", "target", "claim",
+                "search", "could", "would", "should", "against", "materially",
+            }:
+                keywords.add(token)
+
+    blocks = [
+        block.strip()
+        for block in re.split(r"\n{2,}|(?<=[.!?])\s+(?=[A-Z0-9])", raw)
+        if block.strip()
+    ]
+    if not blocks:
+        return raw[:max_chars]
+
+    scored: list[tuple[int, int, str]] = []
+    for index, block in enumerate(blocks):
+        lower = block.lower()
+        score = sum(1 for keyword in keywords if keyword in lower)
+        scored.append((score, index, block))
+
+    selected: list[tuple[int, str]] = []
+    used = 0
+    for score, index, block in sorted(
+        scored,
+        key=lambda item: (-item[0], item[1]),
+    ):
+        if score <= 0 and selected:
+            break
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        piece = block[:remaining]
+        selected.append((index, piece))
+        used += len(piece) + 2
+    if not selected:
+        return raw[:max_chars]
+
+    selected.sort(key=lambda item: item[0])
+    excerpt = "\n\n".join(block for _idx, block in selected)
+    return excerpt[:max_chars]
+
+
 class QuoteGroundedEvidenceExtractor:
     """LLM parser whose output is accepted only when quotes exist in-source."""
 
-    def __init__(self, ai_client) -> None:
+    def __init__(
+        self,
+        ai_client,
+        *,
+        timeout_seconds: int = 40,
+        max_source_chars: int = 6000,
+    ) -> None:
         self.ai = ai_client
+        self.timeout_seconds = max(15, int(timeout_seconds))
+        self.max_source_chars = max(1500, int(max_source_chars))
 
     async def extract(
         self,
@@ -483,7 +547,16 @@ class QuoteGroundedEvidenceExtractor:
         document: ResearchDocument,
         max_findings: int,
     ) -> list[ExtractedFinding]:
-        source_text = document.text[:24_000]
+        source_text = _relevant_excerpt(
+            document.text,
+            signals=(
+                probe.instruction,
+                claim_statement,
+                evidence_claim_key,
+                rule.description if rule else "",
+            ),
+            max_chars=self.max_source_chars,
+        )
         system = (
             "You are a conservative evidence extraction parser. "
             "Use ONLY the supplied source text. Return strict JSON only. "
@@ -526,14 +599,66 @@ class QuoteGroundedEvidenceExtractor:
             },
             ensure_ascii=False,
         )
-        raw = await asyncio.wait_for(
-            self.ai.chat(
-                system,
-                user,
-                temperature=0,
-            ),
-            timeout=35,
-        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        try:
+            raw = await asyncio.wait_for(
+                self.ai.chat_multi(
+                    messages,
+                    temperature=0,
+                    max_tokens=500,
+                ),
+                timeout=self.timeout_seconds,
+            )
+        except TimeoutError:
+            # One bounded retry with an ultra-compact excerpt. This keeps the
+            # research loop alive when the provider is slow on longer pages,
+            # without accepting ungrounded content or retrying indefinitely.
+            compact_text = _relevant_excerpt(
+                source_text,
+                signals=(
+                    probe.instruction,
+                    claim_statement,
+                    evidence_claim_key,
+                ),
+                max_chars=min(2200, self.max_source_chars),
+            )
+            compact_user = json.dumps(
+                {
+                    "research_probe": probe.instruction,
+                    "target_claim": claim_statement,
+                    "preferred_relation": desired_relation.value,
+                    "source_url": document.url,
+                    "instructions": {
+                        "max_findings": min(1, max_findings),
+                        "return": (
+                            "JSON only: {\"findings\":[{\"quote\":"
+                            "\"exact quote\",\"relation\":"
+                            "\"supports|contradicts|context\","
+                            "\"observation_kind\":\"actual|forecast|revision|"
+                            "estimate|guidance|policy_statement|market_pricing|"
+                            "opinion|historical\",\"confidence\":0.0}]}"
+                        ),
+                        "if_uncertain": {"findings": []},
+                    },
+                    "source_text": compact_text,
+                },
+                ensure_ascii=False,
+            )
+            raw = await asyncio.wait_for(
+                self.ai.chat_multi(
+                    [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": compact_user},
+                    ],
+                    temperature=0,
+                    max_tokens=260,
+                ),
+                timeout=max(15, self.timeout_seconds // 2),
+            )
+            source_text = compact_text
         parsed = _json_value(raw)
         rows = parsed.get("findings") if isinstance(parsed, dict) else []
         if not isinstance(rows, list):
@@ -1047,7 +1172,11 @@ async def run_automatic_research_once(
             settings=settings,
             max_fallbacks=2,
         )
-        extractor = QuoteGroundedEvidenceExtractor(ai)
+        extractor = QuoteGroundedEvidenceExtractor(
+            ai,
+            timeout_seconds=settings.auto_research_extraction_timeout_seconds,
+            max_source_chars=settings.auto_research_extraction_max_chars,
+        )
         loop = AutomaticResearchLoop(
             graph=graph,
             ledger=ledger,
