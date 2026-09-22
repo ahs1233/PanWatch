@@ -50,9 +50,9 @@ def _old_candidates():
 
 def main() -> None:
     provider = DukascopyXAUHistoryProvider(
-        timeout_seconds=8.0,
-        retries=1,
-        retry_backoff_seconds=0.25,
+        timeout_seconds=20.0,
+        retries=6,
+        retry_backoff_seconds=2.0,
     )
 
     old, old_attempts = _find_data_hour(provider, _old_candidates())
