@@ -188,9 +188,9 @@ async def get_research_bars(force: bool = False):
 async def get_market_context(force: bool = False) -> dict[str, Any]:
     """Higher-timeframe XAU context: 1h/4h/daily → weekly/monthly bias.
 
-    The source is MT5-backed XAUUSD research data. Tick volume is deliberately
-    labelled as a participation proxy because spot gold has no centralized
-    global volume tape.
+    XAUUSD spot is OTC, so MT5 tick volume is treated as participation proxy.
+    GC futures volume is fetched separately as a cross-market confirmation
+    sensor and is never substituted for spot execution data.
     """
     global _market_context_cache
     now = time.monotonic()
@@ -203,32 +203,64 @@ async def get_market_context(force: bool = False) -> dict[str, Any]:
             return _market_context_cache[1]
 
         provider = BiquoteXAUOHLCProvider()
+        yahoo = YahooGoldResearchProvider()
 
-        async def fetch(tf: XAUTimeframe):
-            return await asyncio.to_thread(
-                provider.bars,
-                tf,
-                limit=1000,
-                timeout_seconds=14.0,
-            )
+        async def fetch_primary(tf: XAUTimeframe):
+            try:
+                return await asyncio.to_thread(
+                    provider.bars,
+                    tf,
+                    limit=1000,
+                    timeout_seconds=14.0,
+                )
+            except Exception as exc:
+                logger.warning("XAU HTF primary fetch failed tf=%s error=%s", tf.value, type(exc).__name__)
+                return []
 
-        h1, h4, daily = await asyncio.gather(
-            fetch(XAUTimeframe.H1),
-            fetch(XAUTimeframe.H4),
-            fetch(XAUTimeframe.D1),
+        async def fetch_futures_hourly():
+            try:
+                return await asyncio.to_thread(yahoo.bars, XAUTimeframe.H1)
+            except Exception as exc:
+                logger.warning("GC futures hourly flow fetch failed error=%s", type(exc).__name__)
+                return []
+
+        h1, h4, daily, futures_h1 = await asyncio.gather(
+            fetch_primary(XAUTimeframe.H1),
+            fetch_primary(XAUTimeframe.H4),
+            fetch_primary(XAUTimeframe.D1),
+            fetch_futures_hourly(),
         )
-        data = build_market_context(h1, h4, daily)
+
+        if not h1:
+            try:
+                h1 = await asyncio.to_thread(yahoo.bars, XAUTimeframe.H1)
+            except Exception:
+                h1 = []
+        if not daily:
+            try:
+                daily = await asyncio.to_thread(yahoo.bars, XAUTimeframe.D1)
+            except Exception:
+                daily = []
+
+        data = build_market_context(
+            h1,
+            h4,
+            daily,
+            futures_hourly=futures_h1,
+        )
         data["sources"] = {
             "1h": h1[-1].source if h1 else None,
             "4h": h4[-1].source if h4 else None,
             "1d": daily[-1].source if daily else None,
+            "gc_futures_1h": futures_h1[-1].source if futures_h1 else None,
         }
         data["observed_at"] = max(
-            [row.timestamp for rows in (h1, h4, daily) for row in rows[-1:]],
+            [row.timestamp for rows in (h1, h4, daily, futures_h1) for row in rows[-1:]],
             default=datetime.now(timezone.utc),
         ).isoformat()
         _market_context_cache = (time.monotonic(), data)
         return data
+
 
 async def get_chart_series(
     timeframe: str = "5m",
