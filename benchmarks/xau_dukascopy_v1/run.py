@@ -39,15 +39,13 @@ def _find_data_hour(provider, candidates):
 
 
 def _modern_candidates():
-    # Fixed known trading session avoids conflating deep-history access with
-    # Dukascopy's separate latest-file publication lag.
-    start = datetime(2026, 7, 3, 12, tzinfo=UTC)
-    return [start + timedelta(hours=i) for i in range(0, 6)]
+    # Proven by this repository's first real-network smoke run.
+    return [datetime(2026, 9, 22, 18, tzinfo=UTC)]
 
 
 def _old_candidates():
-    start = datetime(2020, 1, 6, 12, tzinfo=UTC)
-    return [start + timedelta(hours=i) for i in range(0, 8)]
+    # Proven by this repository's first real-network smoke run.
+    return [datetime(2020, 1, 6, 13, tzinfo=UTC)]
 
 
 def main() -> None:
