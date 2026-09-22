@@ -32,6 +32,7 @@ from src.modules.market.price_alert_scheduler import PriceAlertScheduler
 from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
 from src.modules.research.belief_scheduler import PersistentBeliefScheduler
+from src.modules.research.store import init_research_store
 from src.modules.xau.scheduler import XAUResearchScheduler
 from src.modules.xau.paper import XAUPaperTradingScheduler
 from src.modules.xau.replay import XAUReplayScheduler
@@ -1681,6 +1682,14 @@ async def lifespan(app):
         db.close()
 
     settings = Settings()
+    research_store_external = await asyncio.to_thread(
+        init_research_store,
+        settings,
+    )
+    logger.info(
+        "PanWatch research store external=%s",
+        research_store_external,
+    )
     xau_mode = settings.panwatch_profile.strip().lower() == "xau"
     logger.info("PanWatch runtime profile: %s", "xau" if xau_mode else "legacy")
 
