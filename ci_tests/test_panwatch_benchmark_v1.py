@@ -20,8 +20,8 @@ def test_panwatch_benchmark_v1_is_explicit_about_unautomated_tracks():
     report = run_benchmark()
     coverage = report["track_coverage"]
     assert coverage == {
-        "automated": 3,
+        "automated": 4,
         "specified_not_automated": 1,
-        "total": 4,
+        "total": 5,
     }
     assert any("not automated" in item for item in report["limitations"])
