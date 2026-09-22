@@ -108,6 +108,8 @@ class AutomaticResearchResult:
     beliefs_changed: int
     before_cycle_id: str | None
     after_cycle_id: str | None
+    raw_evidence_added: int = 0
+    classified_evidence_added: int = 0
     errors: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -123,6 +125,8 @@ class AutomaticResearchResult:
             "beliefs_changed": self.beliefs_changed,
             "before_cycle_id": self.before_cycle_id,
             "after_cycle_id": self.after_cycle_id,
+            "raw_evidence_added": self.raw_evidence_added,
+            "classified_evidence_added": self.classified_evidence_added,
             "errors": list(self.errors),
         }
 
@@ -522,6 +526,53 @@ def _relevant_excerpt(
     return excerpt[:max_chars]
 
 
+def _raw_source_quote(
+    text: str,
+    *,
+    signals: tuple[str, ...],
+    max_chars: int = 900,
+) -> str:
+    """Return one contiguous source excerpt for provenance-safe raw capture."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    keywords: set[str] = set()
+    for signal in signals:
+        for token in re.findall(r"[A-Za-z0-9%.$/-]{4,}", str(signal or "").lower()):
+            if token not in {
+                "current", "independent", "evidence", "target", "claim",
+                "search", "could", "would", "should", "against", "materially",
+            }:
+                keywords.add(token)
+    blocks = [
+        block.strip()
+        for block in re.split(r"\n{2,}|(?<=[.!?])\s+(?=[A-Z0-9])", raw)
+        if block.strip()
+    ]
+    if not blocks:
+        return normalize_text(raw[:max_chars])
+    best = max(
+        enumerate(blocks),
+        key=lambda item: (
+            sum(1 for keyword in keywords if keyword in item[1].lower()),
+            -item[0],
+        ),
+    )[1]
+    if len(best) <= max_chars:
+        return normalize_text(best)
+    lower = best.lower()
+    positions = [
+        lower.find(keyword)
+        for keyword in keywords
+        if lower.find(keyword) >= 0
+    ]
+    center = min(positions) if positions else 0
+    start = max(0, center - max_chars // 3)
+    end = min(len(best), start + max_chars)
+    start = max(0, end - max_chars)
+    return normalize_text(best[start:end])
+
+
 class QuoteGroundedEvidenceExtractor:
     """LLM parser whose output is accepted only when quotes exist in-source."""
 
@@ -863,7 +914,7 @@ class AutomaticResearchLoop:
                 ResearchProbeAttemptRecord.probe_key == key,
                 ResearchProbeAttemptRecord.attempted_at >= cutoff,
                 ResearchProbeAttemptRecord.status.in_(
-                    ("success", "no_evidence", "no_documents")
+                    ("success", "raw_only", "no_evidence", "no_documents")
                 ),
             )
             .order_by(ResearchProbeAttemptRecord.attempted_at.desc())
@@ -923,6 +974,8 @@ class AutomaticResearchLoop:
         skipped = 0
         docs_read = 0
         evidence_added = 0
+        raw_evidence_added = 0
+        classified_evidence_added = 0
 
         try:
             active_ids = _active_claim_ids(self.graph)
@@ -1011,41 +1064,90 @@ class AutomaticResearchLoop:
                         continue
 
                     probe_evidence = 0
+                    probe_raw = 0
+                    classification_errors: list[str] = []
                     for document in documents:
-                        findings = await self.extractor.extract(
-                            probe=probe,
-                            rule=rule,
-                            claim_statement=claim_statement,
-                            evidence_claim_key=evidence_key,
-                            desired_relation=desired,
-                            document=document,
-                            max_findings=self.max_findings_per_document,
+                        now = datetime.now(timezone.utc)
+                        source = build_source(
+                            url=document.url,
+                            content=document.text,
+                            publisher=(
+                                document.publisher
+                                or (urlsplit(document.url).hostname or "")
+                            ),
+                            title=document.title,
+                            source_tier=SourceTier.UNKNOWN,
+                            source_family=(
+                                urlsplit(document.url).hostname
+                                or document.tool_name
+                            ),
+                            published_at=document.published_at,
+                            retrieved_at=now,
+                            observed_at=now,
+                            tool_name=document.tool_name,
+                            metadata={
+                                **document.metadata,
+                                "automatic_research_run_id": run_id,
+                                "probe_rule_id": probe.rule_id,
+                            },
                         )
-                        for finding in findings:
-                            source = build_source(
-                                url=document.url,
-                                content=document.text,
-                                publisher=(
-                                    document.publisher
-                                    or (urlsplit(document.url).hostname or "")
-                                ),
-                                title=document.title,
-                                source_tier=SourceTier.UNKNOWN,
-                                source_family=(
-                                    urlsplit(document.url).hostname
-                                    or document.tool_name
-                                ),
-                                published_at=document.published_at,
-                                retrieved_at=datetime.now(timezone.utc),
-                                observed_at=datetime.now(timezone.utc),
-                                tool_name=document.tool_name,
+                        self.ledger.register_source(source)
+
+                        raw_quote = _raw_source_quote(
+                            document.text,
+                            signals=(
+                                probe.instruction,
+                                claim_statement,
+                                evidence_key,
+                                rule.description if rule else "",
+                            ),
+                        )
+                        if raw_quote:
+                            raw_record = build_evidence(
+                                claim_key=f"raw.{probe.claim_id}",
+                                source=source,
+                                statement=raw_quote,
+                                relation=EvidenceRelation.CONTEXT,
+                                observation_kind=ObservationKind.RAW_SOURCE,
+                                event_time=document.published_at,
+                                observed_at=now,
+                                recorded_at=now,
+                                confidence=0.0,
                                 metadata={
-                                    **document.metadata,
+                                    "unclassified_raw": True,
+                                    "target_claim_id": probe.claim_id,
+                                    "target_claim_key": evidence_key,
                                     "automatic_research_run_id": run_id,
                                     "probe_rule_id": probe.rule_id,
                                 },
                             )
-                            self.ledger.register_source(source)
+                            if self.ledger.append(raw_record):
+                                probe_raw += 1
+                                raw_evidence_added += 1
+                                evidence_added += 1
+
+                        try:
+                            findings = await self.extractor.extract(
+                                probe=probe,
+                                rule=rule,
+                                claim_statement=claim_statement,
+                                evidence_claim_key=evidence_key,
+                                desired_relation=desired,
+                                document=document,
+                                max_findings=self.max_findings_per_document,
+                            )
+                        except Exception as exc:
+                            classification_errors.append(type(exc).__name__)
+                            logger.warning(
+                                "Automatic research classification deferred "
+                                "rule=%s url=%s error=%s",
+                                probe.rule_id,
+                                document.url,
+                                type(exc).__name__,
+                            )
+                            continue
+
+                        for finding in findings:
                             record = build_evidence(
                                 claim_key=evidence_key,
                                 source=source,
@@ -1053,8 +1155,8 @@ class AutomaticResearchLoop:
                                 relation=finding.relation,
                                 observation_kind=finding.observation_kind,
                                 event_time=document.published_at,
-                                observed_at=datetime.now(timezone.utc),
-                                recorded_at=datetime.now(timezone.utc),
+                                observed_at=now,
+                                recorded_at=now,
                                 confidence=finding.confidence,
                                 numeric_value=finding.numeric_value,
                                 unit=finding.unit,
@@ -1069,6 +1171,7 @@ class AutomaticResearchLoop:
                             if not inserted:
                                 continue
                             probe_evidence += 1
+                            classified_evidence_added += 1
                             evidence_added += 1
                             self.graph.link_evidence(
                                 claim_id=probe.claim_id,
@@ -1082,13 +1185,33 @@ class AutomaticResearchLoop:
                                 },
                             )
 
-                    if probe_evidence:
+                    if probe_raw or probe_evidence:
                         persist_ledger(db, self.ledger)
+                    if probe_evidence:
                         persist_claim_graph(db, self.graph)
                         attempt.status = "success"
+                    elif probe_raw:
+                        attempt.status = "raw_only"
                     else:
                         attempt.status = "no_evidence"
-                    attempt.evidence_count = probe_evidence
+                    attempt.evidence_count = probe_evidence + probe_raw
+                    attempt.error_code = (
+                        ",".join(sorted(set(classification_errors)))[:255]
+                        if classification_errors
+                        else ""
+                    )
+                    attempt.meta = {
+                        "raw_evidence_count": probe_raw,
+                        "classified_evidence_count": probe_evidence,
+                        "classification_errors": sorted(
+                            set(classification_errors)
+                        ),
+                    }
+                    if classification_errors:
+                        errors.extend(
+                            f"{probe.rule_id}:{name}"
+                            for name in sorted(set(classification_errors))
+                        )
                     db.commit()
                 except Exception as exc:
                     logger.warning(
@@ -1110,7 +1233,11 @@ class AutomaticResearchLoop:
                 evaluated_at=after_time,
                 metadata={"automatic_research_run_id": run_id, "phase": "after"},
             )
-            run_row.status = "success"
+            run_row.status = (
+                "success_degraded"
+                if errors and classified_evidence_added == 0
+                else "success"
+            )
             run_row.completed_at = after_time
             run_row.probes_executed = executed
             run_row.tool_calls = self.gateway.tool_calls
@@ -1118,10 +1245,15 @@ class AutomaticResearchLoop:
             run_row.evidence_added = evidence_added
             run_row.beliefs_changed = after_cycle.changed_count
             run_row.error = ";".join(errors)[:4000]
+            run_row.meta = {
+                "version": "automatic-research-v1",
+                "raw_evidence_added": raw_evidence_added,
+                "classified_evidence_added": classified_evidence_added,
+            }
             db.commit()
             return AutomaticResearchResult(
                 run_id=run_id,
-                status="success",
+                status=run_row.status,
                 probes_planned=len(probes),
                 probes_executed=executed,
                 probes_skipped_cooldown=skipped,
@@ -1131,6 +1263,8 @@ class AutomaticResearchLoop:
                 beliefs_changed=after_cycle.changed_count,
                 before_cycle_id=before_cycle.cycle_id,
                 after_cycle_id=after_cycle.cycle_id,
+                raw_evidence_added=raw_evidence_added,
+                classified_evidence_added=classified_evidence_added,
                 errors=tuple(errors),
             )
         except Exception as exc:
