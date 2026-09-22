@@ -1668,3 +1668,112 @@ class ResearchFalsificationRuleRecord(Base):
     required_kinds = Column(JSON, default=[])
     meta = Column(JSON, default={})
     created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchBeliefCycleRecord(Base):
+    """One durable PanWatch evaluation cycle over a set of claims."""
+
+    __tablename__ = "research_belief_cycles"
+    __table_args__ = (
+        Index("ix_research_belief_cycle_started", "started_at"),
+    )
+
+    cycle_id = Column(String, primary_key=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=False)
+    claim_count = Column(Integer, nullable=False, default=0)
+    changed_count = Column(Integer, nullable=False, default=0)
+    falsified_count = Column(Integer, nullable=False, default=0)
+    probe_count = Column(Integer, nullable=False, default=0)
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchBeliefSnapshotRecord(Base):
+    """Immutable historical belief state for one claim at one evaluation time."""
+
+    __tablename__ = "research_belief_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_research_belief_claim_evaluated",
+            "claim_id",
+            "evaluated_at",
+        ),
+        Index("ix_research_belief_cycle", "cycle_id"),
+        Index("ix_research_belief_final_status", "final_status"),
+        Index("ix_research_belief_fingerprint", "input_fingerprint"),
+    )
+
+    snapshot_id = Column(String, primary_key=True)
+    cycle_id = Column(
+        String,
+        ForeignKey("research_belief_cycles.cycle_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    claim_key = Column(String, nullable=False)
+    evaluated_at = Column(DateTime, nullable=False)
+    base_status = Column(String, nullable=False)
+    final_status = Column(String, nullable=False)
+    base_confidence = Column(Float, nullable=False)
+    final_confidence = Column(Float, nullable=False)
+    support_score = Column(Float, nullable=False, default=0.0)
+    contradiction_score = Column(Float, nullable=False, default=0.0)
+    falsification_coverage = Column(Float, nullable=False, default=0.0)
+    evidence_ids = Column(JSON, default=[])
+    triggered_rules = Column(JSON, default=[])
+    untestable_rules = Column(JSON, default=[])
+    dependency_failures = Column(JSON, default=[])
+    reasons = Column(JSON, default=[])
+    input_fingerprint = Column(String, nullable=False)
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchBeliefEventRecord(Base):
+    """Append-only explanation of a material belief-state transition."""
+
+    __tablename__ = "research_belief_events"
+    __table_args__ = (
+        Index(
+            "ix_research_belief_event_claim_time",
+            "claim_id",
+            "occurred_at",
+        ),
+        Index("ix_research_belief_event_type", "event_type"),
+        Index("ix_research_belief_event_cycle", "cycle_id"),
+    )
+
+    event_id = Column(String, primary_key=True)
+    cycle_id = Column(
+        String,
+        ForeignKey("research_belief_cycles.cycle_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    event_type = Column(String, nullable=False)
+    occurred_at = Column(DateTime, nullable=False)
+    previous_snapshot_id = Column(
+        String,
+        ForeignKey("research_belief_snapshots.snapshot_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    current_snapshot_id = Column(
+        String,
+        ForeignKey("research_belief_snapshots.snapshot_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    previous_status = Column(String, nullable=True)
+    current_status = Column(String, nullable=False)
+    confidence_delta = Column(Float, nullable=False, default=0.0)
+    detail = Column(Text, nullable=False, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
