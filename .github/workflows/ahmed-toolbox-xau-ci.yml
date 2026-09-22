@@ -34,7 +34,7 @@ on:
       - "ci_tests/test_research_claim_acquisition.py"
       - "ci_tests/test_research_entity_identity.py"
       - "ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py"
-      - "ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py ci_tests/test_panwatch_company_sector_benchmark_v1.py"
+      - "ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py"
       - "ci_tests/test_panwatch_company_sector_benchmark_v1.py"
       - "ci_tests/test_panwatch_automatic_research_benchmark_v1.py"
       - "ci_tests/test_panwatch_belief_benchmark_v1.py"
