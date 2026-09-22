@@ -1,6 +1,6 @@
 {
   "benchmark": "PanWatch Benchmark v1",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "purpose": "Measure current PanWatch decision integrity without confusing implemented core behavior with future research-engine capabilities.",
   "tracks": [
     {
@@ -102,6 +102,19 @@
       "scope_note": "Domain-neutral grounded claim admission, exact deduplication, conservative revision/versioning and automatic falsification-rule initialization."
     },
     {
+      "id": "semantic_claim_resolution",
+      "status": "automated",
+      "tasks": [
+        "paraphrase_merge",
+        "numeric_conflict",
+        "period_separation",
+        "polarity_conflict",
+        "explicit_revision"
+      ],
+      "runner": "benchmarks.panwatch_v1.semantic_resolution_runner",
+      "scope_note": "Conservative cross-document claim resolution using semantic keys, lexical overlap, numeric/period consistency, polarity, and explicit revision cues."
+    },
+    {
       "id": "company_sector_research",
       "status": "specified_not_automated",
       "tasks": [
@@ -140,6 +153,7 @@
     "persistent_belief_state is automated for cross-run memory, change explanation, temporal integrity and PanWatch integration.",
     "automatic_research_loop is automated for quote-grounded probe execution, tool-call budgets, cooldowns and belief re-evaluation.",
     "general_claim_acquisition is automated for grounded admission, deduplication, conservative supersession and domain-neutral ingestion.",
+    "semantic_claim_resolution is automated for paraphrase reuse, conflict separation, period integrity and conservative revision matching.",
     "company_sector_research remains specified but not automated as a blind comparative corpus.",
     "External baseline comparison is intentionally not faked without configured model access, frozen/live source packets and human labels."
   ]
