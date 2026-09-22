@@ -31,6 +31,7 @@ from src.modules.xau.market_structure import (
     volume_profile,
 )
 from src.modules.xau.market_context import build_market_context
+from src.modules.xau.xaut_runtime import get_xaut_order_flow
 from src.modules.xau.library_intelligence import library_consensus, vectorbt_validation
 from src.platform.ai.ai_client import AIClient
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
@@ -885,6 +886,7 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     micro_task = asyncio.create_task(get_micro_context(force=force))
     consensus_task = asyncio.create_task(get_spot_consensus(force=force))
     market_context_task = asyncio.create_task(get_market_context(force=force))
+    xaut_flow_task = asyncio.create_task(get_xaut_order_flow(force=force))
 
     bars = await bars_task
     spot = None
@@ -915,6 +917,20 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     except Exception as exc:
         market_context_error = type(exc).__name__
         logger.warning("XAU higher-timeframe context unavailable: %s", market_context_error)
+    xaut_order_flow = None
+    xaut_order_flow_error = None
+    try:
+        xaut_order_flow = await xaut_flow_task
+        if spot and spot.get("price"):
+            # Re-run against the in-memory live snapshot/cache only to attach
+            # current XAUUSD↔XAUT basis and ±10/20/30 forward range mapping.
+            xaut_order_flow = await get_xaut_order_flow(
+                xau_spot_price=float(spot["price"]),
+                force=False,
+            )
+    except Exception as exc:
+        xaut_order_flow_error = type(exc).__name__
+        logger.warning("XAUT free order-flow sensor unavailable: %s", xaut_order_flow_error)
 
     assessment = XAUIntradayEngine(require_execution_data=False).analyze(
         bars,
@@ -1122,6 +1138,8 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         warnings.append("spot_consensus_no_fresh_reference")
     elif consensus_delta_bps is not None and abs(consensus_delta_bps) >= 8.0:
         warnings.append("spot_consensus_disagreement")
+    if xaut_order_flow_error:
+        warnings.append("xaut_order_flow_unavailable")
 
     return {
         "instrument": "XAUUSD",
@@ -1142,6 +1160,8 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "micro_error": micro_error,
         "market_context": market_context,
         "market_context_error": market_context_error,
+        "xaut_order_flow": xaut_order_flow,
+        "xaut_order_flow_error": xaut_order_flow_error,
         "technical_mode": technical_mode,
         "spot_minus_proxy": basis,
         "spot_minus_proxy_bps": basis_bps,
@@ -1164,6 +1184,8 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "frames": frames,
         "disclaimer": (
             "The live spot reference is indicative and GC=F is a delayed research proxy. "
+            "Bitfinex XAUT/USD contributes centralized gold-proxy trades/raw-book microstructure, "
+            "but is not the OTC XAUUSD execution venue or global spot order flow. "
             "Neither is a broker execution quote. Live entry, stop-loss and take-profit "
             "automation remains locked until a tradable venue-specific bid/ask feed is connected."
         ),

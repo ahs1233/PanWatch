@@ -1,0 +1,238 @@
+"""Gen1 microstructure analytics for the free Bitfinex XAUT/USD sensor."""
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import timedelta
+from math import isfinite
+from typing import Any
+
+from src.platform.marketdata.xaut_bitfinex import XAUTMicrostructureSnapshot, XAUTTrade
+
+
+def _round_tick(price: float, tick: float) -> float:
+    return round(round(price / tick) * tick, 8)
+
+
+def _window_flow(trades: list[XAUTTrade], *, minutes: int) -> dict[str, Any]:
+    if not trades:
+        return {"available": False, "minutes": minutes, "reason": "no_trades"}
+    end = trades[-1].timestamp
+    start = end - timedelta(minutes=minutes)
+    window = [trade for trade in trades if trade.timestamp >= start]
+    if not window:
+        return {"available": False, "minutes": minutes, "reason": "no_window_trades"}
+    buy = sum(t.size for t in window if t.amount > 0)
+    sell = sum(t.size for t in window if t.amount < 0)
+    total = buy + sell
+    delta = buy - sell
+    notional = sum(t.size * t.price for t in window)
+    first = window[0].price
+    last = window[-1].price
+    return {
+        "available": True,
+        "minutes": minutes,
+        "trade_count": len(window),
+        "buy_volume": round(buy, 6),
+        "sell_volume": round(sell, 6),
+        "delta": round(delta, 6),
+        "delta_ratio": round(delta / total, 6) if total else 0.0,
+        "buy_share": round(buy / total, 6) if total else 0.0,
+        "notional_usd": round(notional, 2),
+        "price_change": round(last - first, 6),
+        "price_change_bps": round(((last - first) / first) * 10_000.0, 4) if first else 0.0,
+    }
+
+
+def _cvd(trades: list[XAUTTrade]) -> dict[str, Any]:
+    if not trades:
+        return {"available": False}
+    value = 0.0
+    path: list[tuple[XAUTTrade, float]] = []
+    for trade in trades:
+        value += trade.size if trade.amount > 0 else -trade.size
+        path.append((trade, value))
+    latest = path[-1][1]
+    end = path[-1][0].timestamp
+    changes = {}
+    for minutes in (1, 5, 15, 30):
+        cutoff = end - timedelta(minutes=minutes)
+        base = next((v for t, v in path if t.timestamp >= cutoff), path[0][1])
+        changes[f"change_{minutes}m"] = round(latest - base, 6)
+    return {
+        "available": True,
+        "value": round(latest, 6),
+        **changes,
+    }
+
+
+def _footprint(trades: list[XAUTTrade], *, tick: float = 0.1) -> dict[str, Any]:
+    levels: dict[float, dict[str, float]] = defaultdict(lambda: {"ask_volume": 0.0, "bid_volume": 0.0})
+    for trade in trades:
+        price = _round_tick(trade.price, tick)
+        if trade.amount > 0:
+            # Aggressive buy executes at/through ask.
+            levels[price]["ask_volume"] += trade.size
+        else:
+            # Aggressive sell executes at/through bid.
+            levels[price]["bid_volume"] += trade.size
+    rows = []
+    for price in sorted(levels):
+        ask = levels[price]["ask_volume"]
+        bid = levels[price]["bid_volume"]
+        total = ask + bid
+        delta = ask - bid
+        same_price_ratio = (
+            ask / bid if ask > bid and bid > 0
+            else bid / ask if bid > ask and ask > 0
+            else float("inf") if total > 0 and min(ask, bid) == 0
+            else 1.0
+        )
+        imbalance = "none"
+        if total > 0 and ask > 0 and (bid == 0 or ask >= 3.0 * bid):
+            imbalance = "buy"
+        elif total > 0 and bid > 0 and (ask == 0 or bid >= 3.0 * ask):
+            imbalance = "sell"
+        rows.append({
+            "price": round(price, 4),
+            "ask_volume": round(ask, 6),
+            "bid_volume": round(bid, 6),
+            "delta": round(delta, 6),
+            "total_volume": round(total, 6),
+            "delta_ratio": round(delta / total, 6) if total else 0.0,
+            "same_price_imbalance": imbalance,
+            "imbalance_ratio": None if not isfinite(same_price_ratio) else round(same_price_ratio, 4),
+        })
+    ranked = sorted(rows, key=lambda x: x["total_volume"], reverse=True)
+    return {
+        "available": bool(rows),
+        "tick_size": tick,
+        "levels": rows,
+        "highest_activity": ranked[:12],
+        "method": "aggressor-signed-trades",
+        "note": "same-price imbalance; not a diagonal CME footprint imbalance",
+    }
+
+
+def _book(snapshot: XAUTMicrostructureSnapshot, distance: float) -> dict[str, Any]:
+    mid = snapshot.mid
+    lower, upper = mid - distance, mid + distance
+    nearby = [o for o in snapshot.raw_book if lower <= o.price <= upper]
+    bids = [o for o in nearby if o.amount > 0]
+    asks = [o for o in nearby if o.amount < 0]
+    bid_qty = sum(o.size for o in bids)
+    ask_qty = sum(o.size for o in asks)
+    total = bid_qty + ask_qty
+    return {
+        "distance_usd": distance,
+        "bid_order_count": len(bids),
+        "ask_order_count": len(asks),
+        "bid_quantity": round(bid_qty, 6),
+        "ask_quantity": round(ask_qty, 6),
+        "imbalance": round((bid_qty - ask_qty) / total, 6) if total else 0.0,
+        "largest_bids": [
+            {"price": o.price, "size": round(o.size, 6), "order_id": o.order_id}
+            for o in sorted(bids, key=lambda x: x.size, reverse=True)[:8]
+        ],
+        "largest_asks": [
+            {"price": o.price, "size": round(o.size, 6), "order_id": o.order_id}
+            for o in sorted(asks, key=lambda x: x.size, reverse=True)[:8]
+        ],
+    }
+
+
+def _absorption(flow5: dict[str, Any], book10: dict[str, Any]) -> dict[str, Any]:
+    if not flow5.get("available"):
+        return {"state": "unavailable"}
+    delta_ratio = float(flow5.get("delta_ratio") or 0.0)
+    book_imbalance = float(book10.get("imbalance") or 0.0)
+    if delta_ratio <= -0.35 and book_imbalance >= 0.25:
+        return {
+            "state": "possible_sell_absorption",
+            "confidence": "candidate_only",
+            "reason": "aggressive_selling_meets_bid_heavy_raw_book",
+            "requires": ["price_stall_or_reclaim", "book_replenishment_confirmation"],
+        }
+    if delta_ratio >= 0.35 and book_imbalance <= -0.25:
+        return {
+            "state": "possible_buy_absorption",
+            "confidence": "candidate_only",
+            "reason": "aggressive_buying_meets_ask_heavy_raw_book",
+            "requires": ["price_stall_or_rejection", "book_replenishment_confirmation"],
+        }
+    return {"state": "none", "confidence": "candidate_only"}
+
+
+def analyze_xaut_microstructure(
+    snapshot: XAUTMicrostructureSnapshot,
+    *,
+    xau_spot_price: float | None = None,
+    footprint_tick: float = 0.1,
+) -> dict[str, Any]:
+    trades = sorted(snapshot.trades, key=lambda x: x.timestamp)
+    latest_trade = trades[-1] if trades else None
+    oldest_trade = trades[0] if trades else None
+    flows = {f"{m}m": _window_flow(trades, minutes=m) for m in (1, 5, 15, 30)}
+    books = {f"pm{int(d)}": _book(snapshot, d) for d in (10.0, 20.0, 30.0)}
+    basis = None
+    basis_bps = None
+    forward = None
+    if xau_spot_price is not None and xau_spot_price > 0:
+        basis = float(xau_spot_price) - snapshot.mid
+        basis_bps = (basis / float(xau_spot_price)) * 10_000.0
+        forward = {
+            f"pm{distance}": {
+                "xau_up": round(float(xau_spot_price) + distance, 4),
+                "xau_down": round(float(xau_spot_price) - distance, 4),
+                "xaut_equivalent_up": round(snapshot.mid + distance, 4),
+                "xaut_equivalent_down": round(snapshot.mid - distance, 4),
+            }
+            for distance in (10, 20, 30)
+        }
+    book10 = books["pm10"]
+    return {
+        "version": "xaut-free-order-flow-v1",
+        "status": "ready",
+        "source": snapshot.source,
+        "proxy_symbol": snapshot.symbol,
+        "reference_symbol": snapshot.reference_symbol,
+        "execution_eligible": False,
+        "centralized_proxy_market": True,
+        "global_xauusd_order_flow": False,
+        "observed_at": snapshot.observed_at.isoformat(),
+        "trade_tape": {
+            "trade_count": len(trades),
+            "latest_trade_at": latest_trade.timestamp.isoformat() if latest_trade else None,
+            "oldest_trade_at": oldest_trade.timestamp.isoformat() if oldest_trade else None,
+            "coverage_seconds": (
+                round((latest_trade.timestamp - oldest_trade.timestamp).total_seconds(), 3)
+                if latest_trade and oldest_trade else None
+            ),
+        },
+        "quote": {
+            "bid": snapshot.bid,
+            "ask": snapshot.ask,
+            "mid": round(snapshot.mid, 6),
+            "last": snapshot.last,
+            "spread": round(snapshot.spread, 6),
+        },
+        "basis": {
+            "available": basis is not None,
+            "xau_minus_xaut": round(basis, 6) if basis is not None else None,
+            "basis_bps": round(basis_bps, 4) if basis_bps is not None else None,
+            "mapping": "instantaneous_offset_only",
+        },
+        "flow": flows,
+        "cvd": _cvd(trades),
+        "footprint": _footprint(trades, tick=footprint_tick),
+        "raw_book": books,
+        "absorption": _absorption(flows["5m"], book10),
+        "forward_range_map": forward,
+        "evidence_policy": {
+            "trade_sign_is_real_for_xaut": True,
+            "raw_book_is_real_for_xaut": True,
+            "xaut_is_xauusd_execution_venue": False,
+            "xaut_flow_is_global_spot_gold_flow": False,
+            "basis_must_be_recomputed": True,
+        },
+    }
