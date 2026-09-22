@@ -265,10 +265,11 @@ class EvidenceLedger:
         *,
         preferred_kind: ObservationKind = ObservationKind.ACTUAL,
         tolerance: float = 1e-9,
+        as_of: datetime | None = None,
     ) -> NumericResolution:
         rows = [
             record
-            for record in self.for_claim(claim_key)
+            for record in self.for_claim(claim_key, as_of=as_of)
             if record.numeric_value is not None
         ]
         if not rows:

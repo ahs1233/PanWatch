@@ -4,6 +4,13 @@ It provides source provenance, append-only evidence, an inspectable Claim Graph,
 and explicit falsification rules to other PanWatch capabilities.
 """
 
+from .belief_state import (
+    BeliefEvent,
+    BeliefEventType,
+    BeliefSnapshot,
+    BeliefStateEngine,
+    BeliefUpdate,
+)
 from .claim_graph import (
     ClaimAssessment,
     ClaimEdge,
@@ -36,8 +43,14 @@ from .falsification import (
     build_falsification_rule,
 )
 from .ledger import EvidenceLedger, GuardResult, NumericResolution
+from .panwatch_monitor import PanWatchBeliefCycle, PanWatchBeliefMonitor
 
 __all__ = [
+    "BeliefEvent",
+    "BeliefEventType",
+    "BeliefSnapshot",
+    "BeliefStateEngine",
+    "BeliefUpdate",
     "ClaimAssessment",
     "ClaimEdge",
     "ClaimEvidenceLink",
@@ -59,6 +72,8 @@ __all__ = [
     "GuardResult",
     "NumericResolution",
     "ObservationKind",
+    "PanWatchBeliefCycle",
+    "PanWatchBeliefMonitor",
     "SourceProvenance",
     "SourceTier",
     "build_claim",

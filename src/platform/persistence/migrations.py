@@ -2164,6 +2164,113 @@ def _m128_claim_graph_and_falsification(conn: Connection) -> None:
     )
 
 
+
+def _m129_persistent_belief_state(conn: Connection) -> None:
+    """Persist PanWatch belief history and material state transitions."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_belief_cycles (
+            cycle_id TEXT PRIMARY KEY,
+            started_at DATETIME NOT NULL,
+            completed_at DATETIME NOT NULL,
+            claim_count INTEGER NOT NULL DEFAULT 0,
+            changed_count INTEGER NOT NULL DEFAULT 0,
+            falsified_count INTEGER NOT NULL DEFAULT 0,
+            probe_count INTEGER NOT NULL DEFAULT 0,
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_belief_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL REFERENCES research_belief_cycles(cycle_id) ON DELETE RESTRICT,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            claim_key TEXT NOT NULL,
+            evaluated_at DATETIME NOT NULL,
+            base_status TEXT NOT NULL,
+            final_status TEXT NOT NULL,
+            base_confidence REAL NOT NULL,
+            final_confidence REAL NOT NULL,
+            support_score REAL NOT NULL DEFAULT 0.0,
+            contradiction_score REAL NOT NULL DEFAULT 0.0,
+            falsification_coverage REAL NOT NULL DEFAULT 0.0,
+            evidence_ids JSON DEFAULT '[]',
+            triggered_rules JSON DEFAULT '[]',
+            untestable_rules JSON DEFAULT '[]',
+            dependency_failures JSON DEFAULT '[]',
+            reasons JSON DEFAULT '[]',
+            input_fingerprint TEXT NOT NULL,
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_belief_events (
+            event_id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL REFERENCES research_belief_cycles(cycle_id) ON DELETE RESTRICT,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            event_type TEXT NOT NULL,
+            occurred_at DATETIME NOT NULL,
+            previous_snapshot_id TEXT REFERENCES research_belief_snapshots(snapshot_id) ON DELETE RESTRICT,
+            current_snapshot_id TEXT NOT NULL REFERENCES research_belief_snapshots(snapshot_id) ON DELETE RESTRICT,
+            previous_status TEXT,
+            current_status TEXT NOT NULL,
+            confidence_delta REAL NOT NULL DEFAULT 0.0,
+            detail TEXT NOT NULL DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_cycle_started",
+        "CREATE INDEX ix_research_belief_cycle_started "
+        "ON research_belief_cycles(started_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_claim_evaluated",
+        "CREATE INDEX ix_research_belief_claim_evaluated "
+        "ON research_belief_snapshots(claim_id, evaluated_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_cycle",
+        "CREATE INDEX ix_research_belief_cycle "
+        "ON research_belief_snapshots(cycle_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_final_status",
+        "CREATE INDEX ix_research_belief_final_status "
+        "ON research_belief_snapshots(final_status)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_fingerprint",
+        "CREATE INDEX ix_research_belief_fingerprint "
+        "ON research_belief_snapshots(input_fingerprint)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_event_claim_time",
+        "CREATE INDEX ix_research_belief_event_claim_time "
+        "ON research_belief_events(claim_id, occurred_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_event_type",
+        "CREATE INDEX ix_research_belief_event_type "
+        "ON research_belief_events(event_type)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_event_cycle",
+        "CREATE INDEX ix_research_belief_event_cycle "
+        "ON research_belief_events(cycle_id)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2193,6 +2300,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(126, "assistant_task_events", _m126_assistant_task_events),
     Migration(127, "research_evidence_foundation", _m127_research_evidence_foundation),
     Migration(128, "claim_graph_and_falsification", _m128_claim_graph_and_falsification),
+    Migration(129, "persistent_belief_state", _m129_persistent_belief_state),
 )
 
 
