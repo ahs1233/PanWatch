@@ -3,15 +3,20 @@ import { useNavigate } from 'react-router-dom'
 import { Activity, AlertTriangle, ArrowRight, Brain, Database, Lock, Newspaper, RefreshCw, Sparkles, Target } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api/client'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import XAUChart, { type XAUChartBar } from '@/components/XAUChart'
 
 type Frame = { timeframe:string; close:number; ema_fast:number; ema_slow:number; rsi14:number; atr14:number; direction:string; recent_swing_high:number; recent_swing_low:number }
 type Snapshot = { indicative_spot?:{price:number;bid:number|null;ask:number|null;spread_bps:number|null;source:string;is_stale:boolean}|null; micro?:{direction:string;return_10m_pct:number|null;return_30m_pct:number|null;source:string}|null; candidate:string; alignment:string; blocked:boolean; block_reasons:string[]; warnings:string[]; atr_reference:number|null; swing_high_reference:number|null; swing_low_reference:number|null; frames:Record<string,Frame>; disclaimer:string }
 type Macro = { bias:number; bias_label:string; confidence:number; event_risk:boolean; summary:string; drivers:string[]; search_ok:boolean; synthesis_ok?:boolean; synthesis_error?:string|null; refresh_pending?:boolean }
 type Hypothesis = { name:string; weight:number; direction:string }
-type Cognition = { data_quality:{score:number;issues:string[]}; regime:{label:string;confidence:number}; hypotheses:Hypothesis[]; adversarial:{veto:boolean;counter_evidence:string[]}; confidence:{calibrated_confidence:number}; execution_plan:{action:string}; meta_controller:{decision:string} }
+type Scenario = { name:string; direction:string; weight:number; target:number|null; trigger:number|string|null; invalidation:number|null }
+type Edge = { score:number; direction:string; strength:number; band:string; macro_freshness:number; components:Record<string,number> }
+type Plan = { action:string; side:string|null; setup_confirmed:boolean; trigger_level:number|null; activation_conditions:string[]; invalidation_reference:number|null; reasons:string[] }
+type Cognition = { version?:string; data_quality:{score:number;issues:string[]}; regime:{label:string;confidence:number}; hypotheses:Hypothesis[]; scenarios?:Scenario[]; directional_edge?:Edge; adversarial:{veto:boolean;counter_evidence:string[]}; confidence:{calibrated_confidence:number}; execution_plan:Plan; meta_controller:{decision:string} }
 type Fusion = { state:string; macro_relation:string; research_ready:boolean; event_risk:boolean; reasons:string[]; cognition?:Cognition; execution_status:string }
 type Terminal = { technical:Snapshot; macro:Macro; fusion:Fusion }
 type Readiness = { profile:string; ai:{api_key_configured:boolean}; toolbox:{reachable:boolean;tool_count:number;scrapling_fetch_available:boolean} }
+type ChartSeries = { instrument:string; timeframe:string; count:number; bars:XAUChartBar[]; source?:string|null; observed_at?:string|null }
 
 const fmt=(v?:number|null,d=2)=>v==null||!Number.isFinite(v)?'--':v.toFixed(d)
 const nice=(v?:string)=>String(v||'--').replace(/_/g,' ').replace(/^./,x=>x.toUpperCase())
