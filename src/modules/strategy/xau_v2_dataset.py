@@ -119,11 +119,11 @@ class XAUV2DatasetPlan:
             },
             minimum_bars={
                 XAUTimeframe.M1: 100,
-                XAUTimeframe.M5: 300,
-                XAUTimeframe.M15: 400,
-                XAUTimeframe.H1: 1000,
-                XAUTimeframe.H4: 1000,
-                XAUTimeframe.D1: 1000,
+                XAUTimeframe.M5: 200,
+                XAUTimeframe.M15: 150,
+                XAUTimeframe.H1: 150,
+                XAUTimeframe.H4: 150,
+                XAUTimeframe.D1: 400,
             },
             minimum_intraday_research_days=365.0,
             max_chunks_per_timeframe=32,
@@ -142,6 +142,8 @@ class XAUV2FrameAudit:
     duplicate_timestamps: int
     minimum_bars: int
     minimum_met: bool
+    requested_lookback_days: float
+    coverage_ratio: float
     ema1000_supported: bool
     symbol_set: tuple[str, ...]
     source_set: tuple[str, ...]
@@ -163,6 +165,7 @@ class XAUV2DatasetAudit:
     warnings: tuple[str, ...]
     minimum_intraday_research_days: float
     observed_intraday_coverage_days: float
+    deep_history_source_required: bool
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -185,6 +188,8 @@ class XAUV2DatasetAudit:
                     "duplicate_timestamps": item.duplicate_timestamps,
                     "minimum_bars": item.minimum_bars,
                     "minimum_met": item.minimum_met,
+                    "requested_lookback_days": item.requested_lookback_days,
+                    "coverage_ratio": item.coverage_ratio,
                     "ema1000_supported": item.ema1000_supported,
                     "symbol_set": list(item.symbol_set),
                     "source_set": list(item.source_set),
@@ -195,6 +200,7 @@ class XAUV2DatasetAudit:
             "warnings": list(self.warnings),
             "minimum_intraday_research_days": self.minimum_intraday_research_days,
             "observed_intraday_coverage_days": self.observed_intraday_coverage_days,
+            "deep_history_source_required": self.deep_history_source_required,
         }
 
 
@@ -214,6 +220,7 @@ def _frame_audit(
     timeframe: XAUTimeframe,
     rows: tuple[XAUBar, ...],
     minimum_bars: int,
+    requested_lookback_days: float,
 ) -> XAUV2FrameAudit:
     ordered = sorted(rows, key=lambda item: _utc(item.timestamp))
     timestamps = [_utc(row.timestamp) for row in ordered]
@@ -237,6 +244,14 @@ def _frame_audit(
         duplicate_timestamps=duplicate_count,
         minimum_bars=int(minimum_bars),
         minimum_met=len(ordered) >= int(minimum_bars),
+        requested_lookback_days=float(requested_lookback_days),
+        coverage_ratio=round(
+            min(
+                1.0,
+                coverage_days / max(float(requested_lookback_days), 1e-9),
+            ),
+            6,
+        ),
         ema1000_supported=len(ordered) >= 1000,
         symbol_set=symbols,
         source_set=sources,
@@ -257,6 +272,7 @@ def audit_xau_v2_dataset(
             timeframe,
             rows,
             plan.minimum_bars[timeframe],
+            plan.lookback_days[timeframe],
         )
         frame_audits[timeframe.value] = audit
 
@@ -271,6 +287,12 @@ def audit_xau_v2_dataset(
             warnings.append(
                 f"minimum_{timeframe.value}_bars_not_met:"
                 f"{audit.bar_count}<{audit.minimum_bars}"
+            )
+        if audit.coverage_ratio < 0.40:
+            warnings.append(
+                f"provider_retention_shortfall_{timeframe.value}:"
+                f"{audit.coverage_days:.2f}d/"
+                f"{audit.requested_lookback_days:.2f}d"
             )
         if any(
             not source.lower().startswith("biquote.io:mt5-ohlc")
@@ -339,6 +361,10 @@ def audit_xau_v2_dataset(
             plan.minimum_intraday_research_days
         ),
         observed_intraday_coverage_days=intraday_coverage,
+        deep_history_source_required=bool(
+            missing_ema1000
+            or intraday_coverage < plan.minimum_intraday_research_days
+        ),
     )
 
 
