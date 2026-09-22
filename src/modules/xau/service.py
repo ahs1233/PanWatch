@@ -246,6 +246,75 @@ async def _refresh_market_context() -> dict[str, Any]:
             daily,
             futures_hourly=futures_h1,
         )
+        # Run the cross-library validation stack against the same completed
+        # 1h sample. It is a reliability guard, not duplicated market evidence.
+        if h1:
+            try:
+                libraries = await asyncio.to_thread(
+                    library_consensus,
+                    h1[-500:] if len(h1) > 500 else h1,
+                )
+            except Exception as exc:
+                libraries = {
+                    "version": "library-consensus-v2",
+                    "direction": "neutral",
+                    "agreement": 0.0,
+                    "status": {"runtime": f"error:{type(exc).__name__}"},
+                }
+        else:
+            libraries = {
+                "version": "library-consensus-v2",
+                "direction": "neutral",
+                "agreement": 0.0,
+                "status": {"runtime": "insufficient_data"},
+            }
+        data["library_intelligence"] = libraries
+
+        smart = data.get("smart_money") or {}
+        custom_direction = str(smart.get("bias") or "neutral")
+        library_direction = str(libraries.get("direction") or "neutral")
+        agreement = float(libraries.get("agreement") or 0.0)
+        if custom_direction in {"bullish", "bearish"} and library_direction in {"bullish", "bearish"}:
+            smc_concordance = "aligned" if custom_direction == library_direction else "conflict"
+        else:
+            smc_concordance = "unresolved"
+
+        profile = data.get("volume_profile") or {}
+        profile_oracle = libraries.get("profile_oracle") or {}
+        profile_parity = {"status": "unavailable"}
+        if profile.get("available") and profile_oracle.get("status") == "ok":
+            profile_parity = {
+                "status": "ok",
+                "poc_delta": round(abs(float(profile.get("poc") or 0.0) - float(profile_oracle.get("poc") or 0.0)), 4),
+                "vah_delta": round(abs(float(profile.get("vah") or 0.0) - float(profile_oracle.get("vah") or 0.0)), 4),
+                "val_delta": round(abs(float(profile.get("val") or 0.0) - float(profile_oracle.get("val") or 0.0)), 4),
+            }
+
+        ta_oracle = libraries.get("technical_oracle") or {}
+        h1_bias = (data.get("bias") or {}).get("h1") or {}
+        h1_ema = h1_bias.get("ema") or {}
+        ta_parity = {"status": "unavailable"}
+        if ta_oracle.get("status") == "ok":
+            ours_50 = h1_ema.get("50")
+            theirs_50 = ta_oracle.get("ema50")
+            ta_parity = {
+                "status": "ok",
+                "ema50_delta": (
+                    round(abs(float(ours_50) - float(theirs_50)), 6)
+                    if ours_50 is not None and theirs_50 is not None
+                    else None
+                ),
+            }
+
+        data["cross_validation"] = {
+            "smc_concordance": smc_concordance,
+            "library_direction": library_direction,
+            "library_agreement": round(agreement, 4),
+            "same_input_warning": True,
+            "profile_parity": profile_parity,
+            "technical_parity": ta_parity,
+        }
+
         if first_context_build:
             validation_rows = h1 if len(h1) >= 220 else daily
             if validation_rows:
