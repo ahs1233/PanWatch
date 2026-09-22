@@ -228,3 +228,26 @@ def test_audit_manifest_keeps_provider_and_instrument_identity_explicit():
     for frame in payload["frames"].values():
         assert frame["symbol_set"] == ["XAUUSD"]
         assert frame["source_set"] == ["biquote.io:MT5-ohlc"]
+
+
+def test_valid_but_short_dataset_is_not_mislabeled_invalid_or_wiring_ready():
+    plan = _plan()
+    too_strict = replace(
+        plan,
+        minimum_bars={
+            **plan.minimum_bars,
+            XAUTimeframe.M1: 100_000,
+        },
+    )
+    result = BiquoteXAUV2DatasetBuilder(FakeBiquoteProvider()).build(too_strict)
+    assert result.audit.valid is True
+    assert result.audit.wiring_ready is False
+    assert result.audit.edge_claim_ready is False
+    assert (
+        result.audit.readiness
+        is XAUV2DatasetReadiness.DATA_VALID_INSUFFICIENT
+    )
+    assert any(
+        "minimum_1m_bars_not_met" in warning
+        for warning in result.audit.warnings
+    )
