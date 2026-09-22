@@ -328,11 +328,27 @@ async def _refresh_market_context() -> dict[str, Any]:
 
         profile = data.get("volume_profile") or {}
         profile_oracle = libraries.get("profile_oracle") or {}
-        profile_parity = {"status": "unavailable"}
+        profile_parity = {"status": "unavailable", "concordance": "unavailable"}
         if profile.get("available") and profile_oracle.get("status") == "ok":
+            reference_price = float(h1[-1].close) if h1 else 0.0
+            manual_poc = float(profile.get("poc") or 0.0)
+            oracle_poc = float(profile_oracle.get("poc") or 0.0)
+            manual_side = 1 if reference_price > manual_poc else -1 if reference_price < manual_poc else 0
+            oracle_side = 1 if reference_price > oracle_poc else -1 if reference_price < oracle_poc else 0
+            concordance = (
+                "aligned"
+                if manual_side == oracle_side
+                else "conflict"
+                if manual_side and oracle_side
+                else "mixed"
+            )
             profile_parity = {
                 "status": "ok",
-                "poc_delta": round(abs(float(profile.get("poc") or 0.0) - float(profile_oracle.get("poc") or 0.0)), 4),
+                "concordance": concordance,
+                "reference_price": round(reference_price, 4),
+                "manual_poc": round(manual_poc, 4),
+                "oracle_poc": round(oracle_poc, 4),
+                "poc_delta": round(abs(manual_poc - oracle_poc), 4),
                 "vah_delta": round(abs(float(profile.get("vah") or 0.0) - float(profile_oracle.get("vah") or 0.0)), 4),
                 "val_delta": round(abs(float(profile.get("val") or 0.0) - float(profile_oracle.get("val") or 0.0)), 4),
             }
