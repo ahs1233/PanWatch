@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     ahmed_toolbox_token: str = ""
     ahmed_toolbox_timeout_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
 
+    # Automatic falsification/counter-research loop. Disabled by default in
+    # generic installs; production explicitly enables it after durable-store
+    # and external-tool verification.
+    auto_research_enabled: bool = False
+    auto_research_interval_minutes: int = Field(default=30, ge=15, le=1440)
+    auto_research_max_probes: int = Field(default=2, ge=1, le=8)
+    auto_research_max_sources_per_probe: int = Field(default=2, ge=1, le=5)
+    auto_research_max_findings_per_document: int = Field(default=2, ge=1, le=5)
+    auto_research_max_tool_calls: int = Field(default=8, ge=2, le=30)
+    auto_research_probe_cooldown_minutes: int = Field(default=180, ge=15, le=10080)
+    auto_research_bootstrap_xau_claims: bool = True
+
     # XAU weekly paper league. These settings are explicit so paper-risk rules
     # are inspectable and never confused with the research decision fusion.
     xau_paper_enabled: bool = True
