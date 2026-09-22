@@ -15,6 +15,20 @@ _PERIOD_BY_TIMEFRAME = {
     XAUTimeframe.M1: "5d",
     XAUTimeframe.M5: "1mo",
     XAUTimeframe.M15: "1mo",
+    XAUTimeframe.H1: "2y",
+    XAUTimeframe.D1: "5y",
+    XAUTimeframe.W1: "10y",
+    XAUTimeframe.MN1: "max",
+}
+
+_INTERVAL_BY_TIMEFRAME = {
+    XAUTimeframe.M1: "1m",
+    XAUTimeframe.M5: "5m",
+    XAUTimeframe.M15: "15m",
+    XAUTimeframe.H1: "1h",
+    XAUTimeframe.D1: "1d",
+    XAUTimeframe.W1: "1wk",
+    XAUTimeframe.MN1: "1mo",
 }
 
 
@@ -39,7 +53,7 @@ class YahooGoldResearchProvider:
 
         frame = yf.Ticker(self.symbol).history(
             period=_PERIOD_BY_TIMEFRAME[timeframe],
-            interval=timeframe.value,
+            interval=_INTERVAL_BY_TIMEFRAME[timeframe],
             auto_adjust=False,
             actions=False,
         )
