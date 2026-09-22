@@ -1466,6 +1466,9 @@ def _activation_state(
         1.0,
     )
     flow_score = _clip(_number((context.get("cash_flow") or {}).get("score"), 0.0), -1.0, 1.0)
+    validation = context.get("cross_validation") or {}
+    library_direction = str(validation.get("library_direction") or "neutral")
+    library_agreement = _clip(_number(validation.get("library_agreement"), 0.0))
     ret10 = _number(perception.get("return_10m_pct"), 0.0)
     momentum = str(perception.get("momentum") or "neutral")
 
@@ -1507,6 +1510,17 @@ def _activation_state(
                 "current": round(flow_score, 4),
                 "threshold": -0.30,
             },
+            {
+                "key": "smc_cross_validation_not_bearish",
+                "label": "SMC cross-validation not bearish",
+                "status": (
+                    "failed" if library_direction == "bearish" and library_agreement >= 0.67
+                    else "satisfied" if library_direction == "bullish" and library_agreement >= 0.50
+                    else "pending"
+                ),
+                "current": f"{library_direction}:{round(library_agreement, 2)}",
+                "threshold": "not_bearish_consensus",
+            },
         ]
     elif side == "short":
         conditions = [
@@ -1544,6 +1558,17 @@ def _activation_state(
                 "status": "failed" if flow_score >= 0.30 else "pending" if flow_score > 0.10 else "satisfied",
                 "current": round(flow_score, 4),
                 "threshold": 0.30,
+            },
+            {
+                "key": "smc_cross_validation_not_bullish",
+                "label": "SMC cross-validation not bullish",
+                "status": (
+                    "failed" if library_direction == "bullish" and library_agreement >= 0.67
+                    else "satisfied" if library_direction == "bearish" and library_agreement >= 0.50
+                    else "pending"
+                ),
+                "current": f"{library_direction}:{round(library_agreement, 2)}",
+                "threshold": "not_bullish_consensus",
             },
         ]
 
