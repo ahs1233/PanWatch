@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-COGNITION_VERSION = "5.0.0"
+COGNITION_VERSION = "5.1.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -380,6 +380,39 @@ def _directional_edge(
         trend /= active_weight
         ema_structure /= active_weight
 
+    long_ema_structure = 0.0
+    long_ema_weight = 0.0
+    for name, frame_weight in (("5m", 0.40), ("15m", 0.60)):
+        frame = frames.get(name) or {}
+        if not frame:
+            continue
+        close = _number(frame.get("close"), 0.0)
+        e50 = frame.get("ema50")
+        e200 = frame.get("ema200")
+        e1000 = frame.get("ema1000")
+        frame_score = 0.0
+        frame_den = 0.0
+        for value, weight in ((e50, 0.30), (e200, 0.40), (e1000, 0.30)):
+            if value is None or not close:
+                continue
+            ema_value = _number(value, 0.0)
+            if not ema_value:
+                continue
+            frame_score += weight * (1.0 if close > ema_value else -1.0 if close < ema_value else 0.0)
+            frame_den += weight
+        if e50 is not None and e200 is not None:
+            frame_score += 0.18 * (1.0 if _number(e50) > _number(e200) else -1.0 if _number(e50) < _number(e200) else 0.0)
+            frame_den += 0.18
+        if e200 is not None and e1000 is not None:
+            frame_score += 0.14 * (1.0 if _number(e200) > _number(e1000) else -1.0 if _number(e200) < _number(e1000) else 0.0)
+            frame_den += 0.14
+        if frame_den > 0:
+            long_ema_structure += frame_weight * (frame_score / frame_den)
+            long_ema_weight += frame_weight
+    if long_ema_weight > 0:
+        long_ema_structure /= long_ema_weight
+    long_ema_structure = _clip(long_ema_structure, -1.0, 1.0)
+
     micro = technical.get("micro") or {}
     ret10 = _number(perception.get("return_10m_pct"), 0.0)
     ret30 = _number(perception.get("return_30m_pct"), 0.0)
@@ -433,12 +466,13 @@ def _directional_edge(
     candidate_component = 1.0 if candidate == "long_setup" else -1.0 if candidate == "short_setup" else 0.0
 
     score = (
-        0.32 * htf_score
-        + 0.18 * smart_score
-        + 0.10 * flow_score
-        + 0.14 * trend
-        + 0.10 * ema_structure
-        + 0.08 * momentum
+        0.28 * htf_score
+        + 0.16 * smart_score
+        + 0.09 * flow_score
+        + 0.12 * trend
+        + 0.08 * ema_structure
+        + 0.12 * long_ema_structure
+        + 0.07 * momentum
         + 0.03 * rsi_impulse
         + 0.02 * breakout_score
         + 0.02 * macro_component
@@ -487,6 +521,7 @@ def _directional_edge(
             "cash_flow": round(flow_score, 4),
             "intraday_trend": round(trend, 4),
             "intraday_ema_structure": round(ema_structure, 4),
+            "long_ema_structure": round(long_ema_structure, 4),
             "momentum": round(momentum, 4),
             "rsi_impulse": round(rsi_impulse, 4),
             "breakout": round(breakout_score, 4),
