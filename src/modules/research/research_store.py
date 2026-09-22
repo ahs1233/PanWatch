@@ -24,6 +24,8 @@ from src.platform.persistence.models import (
     ResearchClaimRecord,
     ResearchEvidenceRecord,
     ResearchFalsificationRuleRecord,
+    ResearchLoopRunRecord,
+    ResearchProbeAttemptRecord,
     ResearchSourceRecord,
 )
 from src.platform.runtime.config import Settings
@@ -43,6 +45,8 @@ _RESEARCH_TABLES = [
     ResearchBeliefCycleRecord.__table__,
     ResearchBeliefSnapshotRecord.__table__,
     ResearchBeliefEventRecord.__table__,
+    ResearchLoopRunRecord.__table__,
+    ResearchProbeAttemptRecord.__table__,
 ]
 
 
