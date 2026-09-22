@@ -10,6 +10,7 @@ from src.modules.research.automatic_research import ResearchDocument
 from src.modules.research.claim_acquisition import (
     ClaimCandidate,
     GeneralClaimAcquisition,
+    GroundedClaimExtractor,
 )
 from src.modules.research.claim_graph import ClaimGraph, ClaimKind
 from src.modules.research.evidence import ObservationKind
@@ -366,3 +367,57 @@ def test_migration_131_creates_acquisition_tables_and_indexes():
     }
     assert "ix_research_candidate_fingerprint" in indexes
     assert "ix_research_candidate_decision" in indexes
+
+
+
+class _FakeAI:
+    def __init__(self, payload):
+        self.payload = payload
+
+    async def chat_multi(self, *_args, **_kwargs):
+        return self.payload
+
+
+@pytest.mark.asyncio
+async def test_grounded_extractor_rejects_hallucinated_quote():
+    extractor = GroundedClaimExtractor(
+        _FakeAI(
+            '{"claims":[{"quote":"profits doubled overnight",'
+            '"statement":"Profits doubled overnight.",'
+            '"claim_key":"company.profits.current","kind":"fact",'
+            '"observation_kind":"actual","confidence":0.9,"testable":true}]}'
+        )
+    )
+    doc = _doc(
+        "https://company.example/report",
+        "The company reported stable profits for the quarter.",
+    )
+    rows = await extractor.extract(
+        document=doc,
+        topic_hint="company profits",
+        max_candidates=3,
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_grounded_extractor_accepts_exact_quote():
+    extractor = GroundedClaimExtractor(
+        _FakeAI(
+            '{"claims":[{"quote":"revenue increased by 9 percent",'
+            '"statement":"Revenue increased by 9 percent.",'
+            '"claim_key":"company.revenue.growth","kind":"fact",'
+            '"observation_kind":"actual","confidence":0.8,"testable":true}]}'
+        )
+    )
+    doc = _doc(
+        "https://company.example/report",
+        "The company said revenue increased by 9 percent during the quarter.",
+    )
+    rows = await extractor.extract(
+        document=doc,
+        topic_hint="company revenue",
+        max_candidates=3,
+    )
+    assert len(rows) == 1
+    assert rows[0].proposed_claim_key == "company.revenue.growth"
