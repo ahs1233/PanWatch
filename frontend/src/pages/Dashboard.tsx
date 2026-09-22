@@ -28,13 +28,13 @@ export default function DashboardPage(){
  const gates=[...(snapshot?.block_reasons||[]),...(snapshot?.warnings||[])]
 
  return <div className="page-container pb-10">
-  <section className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+  <section className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
    <div>
     <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[.16em] text-muted-foreground"><span className="h-2 w-2 rounded-full bg-emerald-500"/> Live research terminal</div>
     <div className="mt-2 flex flex-wrap items-end gap-x-5 gap-y-1"><h1 className="text-3xl font-bold tracking-tight">XAU/USD</h1><div className="font-mono text-3xl font-bold">{fmt(price)}</div><div className={`pb-1 text-sm font-semibold uppercase ${tone(direction)}`}>{direction}</div></div>
     <p className="mt-1 text-xs text-muted-foreground">Gold intelligence · technical structure · macro context · adversarial reasoning</p>
    </div>
-   <Button onClick={()=>void load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading?'animate-spin':''}`}/>Refresh intelligence</Button>
+   <Button className="self-start lg:self-auto" onClick={()=>void load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading?'animate-spin':''}`}/>Refresh intelligence</Button>
   </section>
 
   {error&&<div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-500">{error}</div>}
