@@ -2049,6 +2049,121 @@ def _m127_research_evidence_foundation(conn: Connection) -> None:
     )
 
 
+
+def _m128_claim_graph_and_falsification(conn: Connection) -> None:
+    """Persist claim dependencies, evidence links and falsification rules."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claims (
+            claim_id TEXT PRIMARY KEY,
+            claim_key TEXT NOT NULL,
+            statement TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'hypothesis',
+            prior_confidence REAL NOT NULL DEFAULT 0.5,
+            created_at DATETIME NOT NULL,
+            valid_from DATETIME,
+            valid_until DATETIME,
+            supersedes TEXT REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            meta JSON DEFAULT '{}'
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claim_edges (
+            edge_id TEXT PRIMARY KEY,
+            source_claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            target_claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            relation TEXT NOT NULL,
+            weight REAL NOT NULL DEFAULT 1.0,
+            required INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            meta JSON DEFAULT '{}'
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claim_evidence_links (
+            link_id TEXT PRIMARY KEY,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            evidence_id TEXT NOT NULL REFERENCES research_evidence(evidence_id) ON DELETE RESTRICT,
+            relation TEXT NOT NULL DEFAULT 'supports',
+            weight REAL NOT NULL DEFAULT 1.0,
+            created_at DATETIME NOT NULL,
+            meta JSON DEFAULT '{}'
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_falsification_rules (
+            rule_id TEXT PRIMARY KEY,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            description TEXT NOT NULL,
+            rule_type TEXT NOT NULL,
+            hard_fail INTEGER NOT NULL DEFAULT 0,
+            weight REAL NOT NULL DEFAULT 1.0,
+            evidence_claim_key TEXT DEFAULT '',
+            operator TEXT DEFAULT '',
+            threshold REAL,
+            min_sources INTEGER NOT NULL DEFAULT 1,
+            max_age_seconds INTEGER,
+            related_claim_id TEXT REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            required_kinds JSON DEFAULT '[]',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_key_kind",
+        "CREATE INDEX ix_research_claim_key_kind "
+        "ON research_claims(claim_key, kind)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_validity",
+        "CREATE INDEX ix_research_claim_validity "
+        "ON research_claims(valid_from, valid_until)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_edge_source",
+        "CREATE INDEX ix_research_claim_edge_source "
+        "ON research_claim_edges(source_claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_edge_target",
+        "CREATE INDEX ix_research_claim_edge_target "
+        "ON research_claim_edges(target_claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_edge_relation",
+        "CREATE INDEX ix_research_claim_edge_relation "
+        "ON research_claim_edges(relation)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_evidence_claim",
+        "CREATE INDEX ix_research_claim_evidence_claim "
+        "ON research_claim_evidence_links(claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_evidence_evidence",
+        "CREATE INDEX ix_research_claim_evidence_evidence "
+        "ON research_claim_evidence_links(evidence_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_falsification_claim",
+        "CREATE INDEX ix_research_falsification_claim "
+        "ON research_falsification_rules(claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_falsification_type",
+        "CREATE INDEX ix_research_falsification_type "
+        "ON research_falsification_rules(rule_type)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2077,6 +2192,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(125, "assistant_task_protocol", _m125_assistant_task_protocol),
     Migration(126, "assistant_task_events", _m126_assistant_task_events),
     Migration(127, "research_evidence_foundation", _m127_research_evidence_foundation),
+    Migration(128, "claim_graph_and_falsification", _m128_claim_graph_and_falsification),
 )
 
 
