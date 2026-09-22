@@ -127,6 +127,9 @@ class _FakeAI:
     async def chat(self, *_args, **_kwargs):
         return self.payload
 
+    async def chat_multi(self, *_args, **_kwargs):
+        return self.payload
+
 
 @pytest.mark.asyncio
 async def test_quote_grounding_accepts_exact_source_quote():
