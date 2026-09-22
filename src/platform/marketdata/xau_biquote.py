@@ -115,6 +115,10 @@ class BiquoteXAUOHLCProvider:
             XAUTimeframe.M1: "1m",
             XAUTimeframe.M5: "5m",
             XAUTimeframe.M15: "15m",
+            XAUTimeframe.M30: "30m",
+            XAUTimeframe.H1: "1h",
+            XAUTimeframe.H4: "4h",
+            XAUTimeframe.D1: "1d",
         }.get(timeframe)
         if interval is None:
             raise ValueError(f"unsupported Biquote XAU timeframe: {timeframe}")
@@ -146,6 +150,10 @@ class BiquoteXAUOHLCProvider:
             XAUTimeframe.M1: "1m",
             XAUTimeframe.M5: "5m",
             XAUTimeframe.M15: "15m",
+            XAUTimeframe.M30: "30m",
+            XAUTimeframe.H1: "1h",
+            XAUTimeframe.H4: "4h",
+            XAUTimeframe.D1: "1d",
         }.get(timeframe)
         if interval is None:
             raise ValueError(f"unsupported Biquote XAU timeframe: {timeframe}")
@@ -161,6 +169,10 @@ class BiquoteXAUOHLCProvider:
             XAUTimeframe.M1: 1,
             XAUTimeframe.M5: 5,
             XAUTimeframe.M15: 15,
+            XAUTimeframe.M30: 30,
+            XAUTimeframe.H1: 60,
+            XAUTimeframe.H4: 240,
+            XAUTimeframe.D1: 1440,
         }[timeframe]
         request_cap = max(100, min(int(max_bars_per_request), 900))
         chunk_span = timedelta(minutes=minutes_per_bar * request_cap)
