@@ -548,8 +548,8 @@ def run_company_sector_benchmark() -> dict:
     earned = sum(item.earned for item in results)
     score = round((earned / total) * 100.0, 2) if total else 0.0
     return {
-        "benchmark": "PanWatch Company/Sector Research",
-        "version": "1.0.0-candidate",
+        "benchmark": "PanWatch Benchmark v1",
+        "version": "1.7.0",
         "track": "company_sector_research",
         "score_percent": score,
         "passed_cases": sum(1 for item in results if item.passed),
