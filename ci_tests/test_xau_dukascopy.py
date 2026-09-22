@@ -4,6 +4,7 @@ import lzma
 import struct
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 
 from src.platform.marketdata.xau_dukascopy import (
@@ -170,3 +171,57 @@ def test_cross_provider_audit_rejects_timeframe_mismatch():
     ]
     with pytest.raises(ValueError, match="timeframes must match"):
         audit_xau_provider_overlap(left, right)
+
+
+def test_fetch_hour_does_not_retry_404(monkeypatch):
+    calls = {"count": 0}
+
+    class Response:
+        status_code = 404
+        content = b""
+        headers = {}
+
+    def fake_get(*args, **kwargs):
+        calls["count"] += 1
+        return Response()
+
+    monkeypatch.setattr("src.platform.marketdata.xau_dukascopy.httpx.get", fake_get)
+    provider = DukascopyXAUHistoryProvider(retries=5)
+    result = provider.fetch_hour(HOUR)
+
+    assert result.status == "notfound"
+    assert result.attempts == 1
+    assert calls["count"] == 1
+
+
+def test_fetch_hour_retries_transient_503_then_decodes(monkeypatch):
+    payload = _payload([(1000, 1550500, 1550300, 1.0, 1.0)])
+    calls = {"count": 0}
+
+    class Response:
+        headers = {}
+        def __init__(self, status_code, content=b""):
+            self.status_code = status_code
+            self.content = content
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                request = httpx.Request("GET", "https://example.test")
+                response = httpx.Response(self.status_code, request=request)
+                raise httpx.HTTPStatusError("transient", request=request, response=response)
+
+    def fake_get(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return Response(503)
+        return Response(200, payload)
+
+    monkeypatch.setattr("src.platform.marketdata.xau_dukascopy.httpx.get", fake_get)
+    monkeypatch.setattr("src.platform.marketdata.xau_dukascopy.time.sleep", lambda _: None)
+
+    provider = DukascopyXAUHistoryProvider(retries=4, retry_backoff_seconds=0.01)
+    result = provider.fetch_hour(HOUR)
+
+    assert result.status == "data"
+    assert result.attempts == 3
+    assert len(result.ticks) == 1
+    assert calls["count"] == 3
