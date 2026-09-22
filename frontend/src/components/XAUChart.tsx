@@ -15,12 +15,28 @@ export interface XAUChartBar {
   source: string
 }
 
+interface VolumeProfile {
+  available?: boolean
+  poc?: number
+  vah?: number
+  val?: number
+  bins?: Array<{ price:number; volume:number; share:number }>
+}
+
+interface LiquidityLevel {
+  name:string
+  price:number
+  side:string
+}
+
 interface Props {
   bars: XAUChartBar[]
   loading?: boolean
   swingHigh?: number | null
   swingLow?: number | null
   triggerLevel?: number | null
+  volumeProfile?: VolumeProfile | null
+  liquidityLevels?: LiquidityLevel[]
 }
 
 function pathFor(values: Array<number | null>, x: (i: number) => number, y: (v: number) => number): string {
@@ -33,11 +49,19 @@ function pathFor(values: Array<number | null>, x: (i: number) => number, y: (v: 
   }).join(' ')
 }
 
-export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLevel }: Props) {
+export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLevel, volumeProfile, liquidityLevels=[] }: Props) {
   const model = useMemo(() => {
     const rows = bars.slice(-120)
     if (!rows.length) return null
-    const levels = [swingHigh, swingLow, triggerLevel].filter((v): v is number => v != null && Number.isFinite(v))
+    const levels = [
+      swingHigh,
+      swingLow,
+      triggerLevel,
+      volumeProfile?.poc,
+      volumeProfile?.vah,
+      volumeProfile?.val,
+      ...liquidityLevels.map(level => level.price),
+    ].filter((v): v is number => v != null && Number.isFinite(v))
     const lows = rows.map(r => r.low)
     const highs = rows.map(r => r.high)
     const rawMin = Math.min(...lows, ...levels)
@@ -63,8 +87,10 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
     const ema200 = pathFor(rows.map(r => r.ema200), x, y)
     const ema1000 = pathFor(rows.map(r => r.ema1000), x, y)
     const ticks = Array.from({ length: 6 }, (_, i) => max - (max - min) * i / 5)
-    return { rows, width, height, left, right, top, bottom, plotW, plotH, candleW, x, y, ema9, ema21, ema50, ema200, ema1000, ticks, min, max }
-  }, [bars, swingHigh, swingLow, triggerLevel])
+    const profileBins = (volumeProfile?.bins||[]).filter(bin => bin.price >= min && bin.price <= max)
+    const maxProfileShare = Math.max(0, ...profileBins.map(bin => bin.share||0))
+    return { rows, width, height, left, right, top, bottom, plotW, plotH, candleW, x, y, ema9, ema21, ema50, ema200, ema1000, ticks, min, max, profileBins, maxProfileShare }
+  }, [bars, swingHigh, swingLow, triggerLevel, volumeProfile, liquidityLevels])
 
   if (loading && !bars.length) {
     return <div className="flex h-[360px] items-center justify-center text-xs text-muted-foreground">Loading market structure…</div>
@@ -73,7 +99,7 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
     return <div className="flex h-[360px] items-center justify-center text-xs text-muted-foreground">Chart data unavailable.</div>
   }
 
-  const { rows, width, height, left, top, plotW, plotH, candleW, x, y, ema9, ema21, ema50, ema200, ema1000, ticks } = model
+  const { rows, width, height, left, top, plotW, plotH, candleW, x, y, ema9, ema21, ema50, ema200, ema1000, ticks, profileBins, maxProfileShare } = model
   const latest = rows[rows.length - 1]
 
   const renderLevel = (value: number | null | undefined, label: string, className: string) => {
@@ -106,6 +132,25 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
         {renderLevel(swingHigh, 'Swing H', 'stroke-rose-500/70')}
         {renderLevel(swingLow, 'Swing L', 'stroke-emerald-500/70')}
         {renderLevel(triggerLevel, 'Trigger', 'stroke-amber-500/70')}
+
+        {volumeProfile?.available && profileBins.map((bin, i) => {
+          const widthPx = maxProfileShare > 0 ? (bin.share / maxProfileShare) * plotW * 0.16 : 0
+          const nextPrice = profileBins[i + 1]?.price
+          const prevPrice = profileBins[i - 1]?.price
+          const spacing = Math.abs((nextPrice ?? prevPrice ?? bin.price) - bin.price)
+          const heightPx = Math.max(1.5, Math.abs(y(bin.price + spacing / 2) - y(bin.price - spacing / 2)))
+          return <rect key={bin.price} x={left + plotW - widthPx} y={y(bin.price) - heightPx / 2} width={widthPx} height={heightPx} className="fill-primary/10"/>
+        })}
+
+        {renderLevel(volumeProfile?.vah, 'VAH', 'stroke-primary/30')}
+        {renderLevel(volumeProfile?.poc, 'POC', 'stroke-primary/55')}
+        {renderLevel(volumeProfile?.val, 'VAL', 'stroke-primary/30')}
+        {liquidityLevels.slice(0,6).map(level => (
+          <g key={level.name + level.price}>
+            <line x1={left} x2={left + plotW} y1={y(level.price)} y2={y(level.price)} className="stroke-fuchsia-500/35" strokeWidth="1" strokeDasharray="3 6"/>
+            <text x={left + 6} y={y(level.price)-4} className="fill-fuchsia-400/80 text-[9px]">{level.name} {level.price.toFixed(2)}</text>
+          </g>
+        ))}
 
         {rows.map((bar, i) => {
           const xx = x(i)
@@ -144,6 +189,8 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
         <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-cyan-500"/>50</span>
         <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-amber-500"/>200</span>
         <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-muted-foreground"/>1000</span>
+        {volumeProfile?.available&&<span className="text-primary">VP</span>}
+        {!!liquidityLevels.length&&<span className="text-fuchsia-400">Liquidity</span>}
       </div>
     </div>
   )
