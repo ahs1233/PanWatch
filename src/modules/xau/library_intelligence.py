@@ -177,33 +177,97 @@ def pyvsmc_snapshot(rows: list[XAUBar]) -> dict[str, Any]:
         latest_bear_structure = max([x for x in (bos_bear_idx, choch_bear_idx) if x is not None], default=-1)
         direction = "bullish" if latest_bull_structure > latest_bear_structure else "bearish" if latest_bear_structure > latest_bull_structure else "neutral"
 
+        def value_at(obj: Any, attr: str, idx: int | None) -> Any:
+            if idx is None:
+                return None
+            values = getattr(obj, attr, None)
+            if values is None or idx < 0 or idx >= len(values):
+                return None
+            value = _native(values[idx])
+            try:
+                number = float(value)
+                if number != number:
+                    return None
+                return round(number, 6)
+            except Exception:
+                return value
+
+        latest_sweep_idx = max([x for x in (sweep_high_idx, sweep_low_idx) if x is not None], default=None)
         out.update({
             "direction": direction,
             "bos": {
                 "bullish_index": bos_bull_idx,
                 "bearish_index": bos_bear_idx,
+                "bullish_level": value_at(structure, "bos_level", bos_bull_idx),
+                "bearish_level": value_at(structure, "bos_level", bos_bear_idx),
             },
             "choch": {
                 "bullish_index": choch_bull_idx,
                 "bearish_index": choch_bear_idx,
+                "bullish_level": value_at(structure, "choch_level", choch_bull_idx),
+                "bearish_level": value_at(structure, "choch_level", choch_bear_idx),
             },
             "liquidity": {
                 "buy_side_sweep_index": sweep_high_idx,
                 "sell_side_sweep_index": sweep_low_idx,
+                "latest_sweep_index": latest_sweep_idx,
+                "latest_sweep_level": value_at(liquidity, "sweep_level", latest_sweep_idx),
             },
             "fvg": {
                 "bullish_index": bull_fvg_idx,
                 "bearish_index": bear_fvg_idx,
+                "bullish_zone": (
+                    {
+                        "low": value_at(fvg, "bullish_lower", bull_fvg_idx),
+                        "high": value_at(fvg, "bullish_upper", bull_fvg_idx),
+                        "mitigated": bool(value_at(fvg, "mitigated", bull_fvg_idx)),
+                        "inverted": bool(value_at(fvg, "inverted", bull_fvg_idx)),
+                    }
+                    if bull_fvg_idx is not None else None
+                ),
+                "bearish_zone": (
+                    {
+                        "low": value_at(fvg, "bearish_lower", bear_fvg_idx),
+                        "high": value_at(fvg, "bearish_upper", bear_fvg_idx),
+                        "mitigated": bool(value_at(fvg, "mitigated", bear_fvg_idx)),
+                        "inverted": bool(value_at(fvg, "inverted", bear_fvg_idx)),
+                    }
+                    if bear_fvg_idx is not None else None
+                ),
             },
             "order_blocks": {
                 "bullish_index": bull_ob_idx,
                 "bearish_index": bear_ob_idx,
+                "bullish_zone": (
+                    {
+                        "low": value_at(obs, "ob_low", bull_ob_idx),
+                        "high": value_at(obs, "ob_high", bull_ob_idx),
+                        "mitigated": bool(value_at(obs, "mitigated", bull_ob_idx)),
+                        "breaker": bool(value_at(obs, "is_breaker", bull_ob_idx)),
+                    }
+                    if bull_ob_idx is not None else None
+                ),
+                "bearish_zone": (
+                    {
+                        "low": value_at(obs, "ob_low", bear_ob_idx),
+                        "high": value_at(obs, "ob_high", bear_ob_idx),
+                        "mitigated": bool(value_at(obs, "mitigated", bear_ob_idx)),
+                        "breaker": bool(value_at(obs, "is_breaker", bear_ob_idx)),
+                    }
+                    if bear_ob_idx is not None else None
+                ),
             },
             "zones": {
                 "premium": bool(_native(getattr(zones, "premium", [False])[-1])),
                 "discount": bool(_native(getattr(zones, "discount", [False])[-1])),
                 "equilibrium": bool(_native(getattr(zones, "equilibrium", [False])[-1])),
                 "in_ote": bool(_native(getattr(zones, "in_ote", [False])[-1])),
+                "range_high": value_at(zones, "range_high", len(rows) - 1),
+                "range_low": value_at(zones, "range_low", len(rows) - 1),
+                "equilibrium_level": value_at(zones, "equilibrium_level", len(rows) - 1),
+                "ote_low": value_at(zones, "ote_low", len(rows) - 1),
+                "ote_705": value_at(zones, "ote_705", len(rows) - 1),
+                "ote_high": value_at(zones, "ote_high", len(rows) - 1),
             },
         })
     except Exception as exc:
