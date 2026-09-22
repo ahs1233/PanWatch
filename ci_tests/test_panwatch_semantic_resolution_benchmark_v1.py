@@ -12,7 +12,7 @@ def test_semantic_resolution_track_has_frozen_coverage():
 
 def test_semantic_resolution_track_regression_gate():
     report = run_semantic_resolution_benchmark()
-    assert report["version"] == "1.6.0"
+    assert report["version"] == "1.7.0"
     assert report["track"] == "semantic_claim_resolution"
     assert report["total_cases"] == 5
     assert report["regression_gate_percent"] == 90.0
