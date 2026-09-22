@@ -80,6 +80,22 @@ _REVISION_CUE_RE = re.compile(
     r"(تم تعديل|معد.?ل|محدث|محد.?ث|صحح|صُحح|ارتفع إلى|انخفض إلى)",
     re.IGNORECASE,
 )
+_FUTURE_CUE_RE = re.compile(
+    r"\b(will|expected to|expects to|forecast|forecasted|projected|"
+    r"plans to|set to|scheduled to|by 20\d{2})\b",
+    re.IGNORECASE,
+)
+_FACT_SIGNAL_RE = re.compile(
+    r"(\b20\d{2}\b|\d+(?:\.\d+)?\s*%|\$\s*\d|"
+    r"\b\d+(?:\.\d+)?\s*(?:billion|million|trillion|"
+    r"units|chips|wafers|months|years|days|percent)\b)",
+    re.IGNORECASE,
+)
+_BOILERPLATE_RE = re.compile(
+    r"\b(cookie|privacy policy|terms of use|subscribe|newsletter|"
+    r"sign in|log in|contact us|read more|all rights reserved)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -229,6 +245,92 @@ def _source_tier(document: ResearchDocument) -> SourceTier:
         return SourceTier.UNKNOWN
 
 
+def _deterministic_grounded_candidates(
+    source_text: str,
+    *,
+    max_candidates: int,
+    fallback_reason: str,
+) -> list[ClaimCandidate]:
+    """Extract only verbatim, strongly factual sentences without an LLM.
+
+    This path is intentionally narrow. It admits a sentence only when it has a
+    concrete numeric/year signal, rejects obvious page boilerplate, and uses
+    the exact sentence as both quote and statement. No paraphrase or causal
+    inference is introduced.
+    """
+    raw = str(source_text or "").strip()
+    if not raw:
+        return []
+
+    blocks = [
+        normalize_text(item)
+        for item in re.split(
+            r"\n{2,}|(?<=[.!?])\s+(?=[A-Z0-9])",
+            raw,
+        )
+        if normalize_text(item)
+    ]
+    ranked: list[tuple[int, int, str]] = []
+    for index, sentence in enumerate(blocks):
+        if len(sentence) < 40 or len(sentence) > 360:
+            continue
+        if _BOILERPLATE_RE.search(sentence):
+            continue
+        if sentence.count("http") or sentence.count("|") > 2:
+            continue
+        if not _FACT_SIGNAL_RE.search(sentence):
+            continue
+        future = bool(_FUTURE_CUE_RE.search(sentence))
+        score = 2 if future else 1
+        if "%" in sentence or "$" in sentence:
+            score += 1
+        if re.search(r"\b20\d{2}\b", sentence):
+            score += 1
+        ranked.append((score, index, sentence))
+
+    selected: list[ClaimCandidate] = []
+    seen: set[str] = set()
+    for _score, _index, sentence in sorted(
+        ranked,
+        key=lambda item: (-item[0], item[1]),
+    ):
+        normalized = sentence.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        is_future = bool(_FUTURE_CUE_RE.search(sentence))
+        selected.append(
+            ClaimCandidate(
+                quote=sentence,
+                statement=sentence,
+                proposed_claim_key="",
+                kind=(
+                    ClaimKind.FORECAST
+                    if is_future
+                    else ClaimKind.FACT
+                ),
+                observation_kind=(
+                    ObservationKind.FORECAST
+                    if is_future
+                    else ObservationKind.ACTUAL
+                ),
+                confidence=0.42,
+                testable=True,
+                time_sensitive=is_future,
+                freshness_seconds=(604800 if is_future else None),
+                supersedes_previous=False,
+                metadata={
+                    "extractor": "deterministic_grounded_fallback_v1",
+                    "fallback_reason": fallback_reason,
+                    "verbatim_statement": True,
+                },
+            )
+        )
+        if len(selected) >= max(1, int(max_candidates)):
+            break
+    return selected
+
+
 class GroundedClaimExtractor:
     """LLM-based claim parser with exact-quote admission validation."""
 
@@ -309,17 +411,42 @@ class GroundedClaimExtractor:
             },
             ensure_ascii=False,
         )
-        raw = await asyncio.wait_for(
-            self.ai.chat_multi(
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                temperature=0,
-                max_tokens=1100,
-            ),
-            timeout=self.timeout_seconds,
-        )
+        try:
+            raw = await asyncio.wait_for(
+                self.ai.chat_multi(
+                    [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    temperature=0,
+                    max_tokens=1100,
+                ),
+                timeout=self.timeout_seconds,
+            )
+        except Exception as exc:
+            error_name = type(exc).__name__
+            if error_name not in {
+                "TimeoutError",
+                "APITimeoutError",
+                "RateLimitError",
+                "APIConnectionError",
+                "InternalServerError",
+            }:
+                raise
+            fallback = _deterministic_grounded_candidates(
+                source_text,
+                max_candidates=max_candidates,
+                fallback_reason=error_name,
+            )
+            logger.warning(
+                "Claim extraction degraded to deterministic grounded fallback "
+                "url=%s error=%s candidates=%s",
+                document.url,
+                error_name,
+                len(fallback),
+            )
+            return fallback
+
         parsed = _json_value(raw)
         rows = parsed.get("claims") if isinstance(parsed, dict) else []
         if not isinstance(rows, list):

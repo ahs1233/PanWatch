@@ -429,3 +429,61 @@ async def test_grounded_extractor_accepts_exact_quote():
     )
     assert len(rows) == 1
     assert rows[0].proposed_claim_key == "company.revenue.growth"
+
+
+
+class _TimeoutAI:
+    async def chat_multi(self, *_args, **_kwargs):
+        raise TimeoutError("provider timeout")
+
+
+@pytest.mark.asyncio
+async def test_timeout_fallback_emits_only_verbatim_grounded_claims():
+    extractor = GroundedClaimExtractor(
+        _TimeoutAI(),
+        timeout_seconds=15,
+        max_source_chars=7000,
+    )
+    doc = _doc(
+        "https://semiconductor.example/report",
+        (
+            "The industry is undergoing rapid change. "
+            "Global semiconductor sales reached $627.6 billion in 2025. "
+            "Analysts expect advanced packaging capacity to grow by 18 percent by 2027. "
+            "Subscribe to our newsletter for weekly updates."
+        ),
+    )
+    rows = await extractor.extract(
+        document=doc,
+        topic_hint="semiconductor supply chain",
+        max_candidates=3,
+    )
+    assert len(rows) == 2
+    source = doc.text.casefold()
+    for row in rows:
+        assert row.quote == row.statement
+        assert row.quote.casefold() in source
+        assert row.metadata["extractor"] == "deterministic_grounded_fallback_v1"
+        assert row.metadata["fallback_reason"] == "TimeoutError"
+        assert row.confidence == 0.42
+    assert any(row.kind is ClaimKind.FORECAST for row in rows)
+    assert any(row.kind is ClaimKind.FACT for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_timeout_fallback_rejects_boilerplate_and_non_numeric_opinion():
+    extractor = GroundedClaimExtractor(_TimeoutAI())
+    doc = _doc(
+        "https://example.com/opinion",
+        (
+            "The future of technology feels extremely exciting. "
+            "Subscribe to our newsletter for 20 weekly updates. "
+            "Privacy Policy 2026 applies to this website."
+        ),
+    )
+    rows = await extractor.extract(
+        document=doc,
+        topic_hint="technology",
+        max_candidates=3,
+    )
+    assert rows == []
