@@ -11,6 +11,9 @@ on:
       - "src/modules/strategy/xau_intraday.py"
       - "src/modules/assistant/xau_tools.py"
       - "src/modules/xau/**"
+      - "src/modules/research/**"
+      - "src/platform/persistence/models.py"
+      - "src/platform/persistence/migrations.py"
       - "src/modules/assistant/service.py"
       - "src/modules/automation/tradingagents/xau_support.py"
       - "src/platform/runtime/config.py"
@@ -20,6 +23,8 @@ on:
       - "ci_tests/test_xau_replay.py"
       - "ci_tests/test_xau_resilience.py"
       - "ci_tests/test_panwatch_benchmark_v1.py"
+      - "ci_tests/test_panwatch_economic_benchmark_v1.py"
+      - "ci_tests/test_research_evidence_foundation.py"
       - ".github/workflows/ahmed-toolbox-xau-ci.yml"
 
 jobs:
@@ -51,11 +56,14 @@ jobs:
             benchmarks \
             src/bootstrap/application.py \
             src/platform/external_tools \
+            src/platform/persistence/models.py \
+            src/platform/persistence/migrations.py \
             src/platform/marketdata/xau_models.py \
             src/platform/marketdata/xau_research_provider.py \
             src/platform/marketdata/xau_spot_reference.py \
             src/platform/marketdata/xau_micro_reference.py \
             src/modules/xau \
+            src/modules/research \
             src/modules/strategy/xau_intraday.py \
             src/modules/assistant/xau_tools.py \
             src/modules/assistant/service.py \
@@ -65,7 +73,7 @@ jobs:
       - name: Run focused tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py ci_tests/test_xau_replay.py ci_tests/test_xau_resilience.py ci_tests/test_panwatch_benchmark_v1.py
+        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py ci_tests/test_xau_replay.py ci_tests/test_xau_resilience.py ci_tests/test_panwatch_benchmark_v1.py ci_tests/test_research_evidence_foundation.py ci_tests/test_panwatch_economic_benchmark_v1.py
 
       - name: Run PanWatch Benchmark v1
         env:
@@ -77,6 +85,17 @@ jobs:
         with:
           name: panwatch-benchmark-v1-python-${{ matrix.python-version }}
           path: benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Economic Evidence Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.economic_runner --json economic-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload economic benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-economic-evidence-v1-python-${{ matrix.python-version }}
+          path: economic-benchmark-result-${{ matrix.python-version }}.json
 
   frontend:
     runs-on: ubuntu-latest
