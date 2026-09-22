@@ -6,6 +6,7 @@ GC=F is a research proxy only. It never satisfies an execution-data gate.
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
 import logging
 import re
@@ -956,8 +957,8 @@ def _parse_json(value: str) -> dict[str, Any]:
     value = str(value or "").strip()
     # Providers commonly wrap otherwise-valid JSON in Markdown fences.
     # Accept both backtick and tilde fences while keeping the parser strict.
-    value = re.sub(r"^(?:```|~~~)(?:json)?\\s*", "", value, flags=re.I)
-    value = re.sub(r"\\s*(?:```|~~~)\\s*$", "", value)
+    value = re.sub(r"^(?:```|~~~)(?:json)?\s*", "", value, flags=re.I)
+    value = re.sub(r"\s*(?:```|~~~)\s*$", "", value)
     try:
         parsed = json.loads(value)
         return parsed if isinstance(parsed, dict) else {}
@@ -969,7 +970,11 @@ def _parse_json(value: str) -> dict[str, Any]:
             parsed = json.loads(match.group(0))
             return parsed if isinstance(parsed, dict) else {}
         except json.JSONDecodeError:
-            return {}
+            try:
+                parsed = ast.literal_eval(match.group(0))
+                return parsed if isinstance(parsed, dict) else {}
+            except (ValueError, SyntaxError):
+                return {}
 
 
 async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
@@ -1090,10 +1095,29 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     timeout=60,
                 )
                 parsed = _parse_json(answer)
-                if not parsed or not isinstance(parsed.get("summary"), str) or not parsed["summary"].strip():
+                if not parsed:
                     raise ValueError("invalid_macro_synthesis")
 
-                raw_bias = parsed.get("bias", 0)
+                summary_value = (
+                    parsed.get("summary")
+                    or parsed.get("macro_summary")
+                    or parsed.get("analysis")
+                    or parsed.get("context")
+                    or ""
+                )
+                drivers_value = parsed.get("drivers")
+                if not isinstance(drivers_value, list):
+                    drivers_value = parsed.get("key_drivers")
+                if not isinstance(drivers_value, list):
+                    drivers_value = parsed.get("factors")
+                drivers = drivers_value if isinstance(drivers_value, list) else []
+                if not isinstance(summary_value, str) or not summary_value.strip():
+                    if drivers:
+                        summary_value = "; ".join(str(item).strip() for item in drivers[:2] if str(item).strip())
+                    else:
+                        raise ValueError("invalid_macro_synthesis")
+
+                raw_bias = parsed.get("bias", parsed.get("direction", 0))
                 if isinstance(raw_bias, str):
                     normalized = raw_bias.strip().lower()
                     label_map = {"bullish": 1, "positive": 1, "bearish": -1, "negative": -1, "neutral": 0, "mixed": 0}
@@ -1115,7 +1139,6 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0))))
                 except (TypeError, ValueError):
                     confidence = 0.0
-                drivers = parsed.get("drivers") if isinstance(parsed.get("drivers"), list) else []
                 ai_event_gate = _validated_event_gate(
                     parsed,
                     now=macro_now,
@@ -1125,7 +1148,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     "bias": bias,
                     "bias_label": "bullish" if bias > 0 else "bearish" if bias < 0 else "neutral",
                     "confidence": confidence,
-                    "summary": str(parsed.get("summary") or "").strip() or data["summary"],
+                    "summary": summary_value.strip() or data["summary"],
                     "drivers": [str(item).strip() for item in drivers[:4] if str(item).strip()],
                 })
                 logger.info(
