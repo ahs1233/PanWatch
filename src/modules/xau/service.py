@@ -1064,28 +1064,30 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     model=settings.ai_model,
                 )
                 prompt = (
-                    "Using ONLY the search material below, summarize the current macro context for gold. "
-                    "Return JSON only with keys bias, confidence, event_risk, event_kind, "
+                    "Using ONLY the evidence below, synthesize the current macro context for gold. "
+                    "Return compact JSON only with keys bias, confidence, event_risk, event_kind, "
                     "event_name, event_time_utc, event_age_minutes, event_confidence, summary, drivers. "
-                    "bias must be -1, 0, or 1. confidence and event_confidence must be 0..1. "
-                    "event_kind must be breaking or none. Scheduled-event gating is handled separately "
-                    "by a structured economic calendar, so NEVER set event_risk=true for scheduled releases. "
-                    "Set event_risk=true only for a breaking market-moving shock explicitly supported by "
-                    "the search material and occurring/published within the last 30 minutes. "
-                    "For breaking events provide event_age_minutes. "
-                    "Do NOT flag general ongoing geopolitics, old news, earlier-day events outside the window, "
-                    "generic volatility, or events with uncertain timing. If uncertain, event_risk=false. "
-                    "drivers must contain at most five short factual bullets. "
-                    "Do not invent facts, prices, dates, or event times. If evidence conflicts, use bias 0.\n\n"
-                    + raw[:24000]
+                    "bias is -1, 0, or 1; confidence values are 0..1. "
+                    "event_kind is breaking or none. Scheduled-event gating is handled separately. "
+                    "Only set event_risk=true for an explicitly supported market-moving breaking shock "
+                    "from the last 30 minutes. Never invent facts, prices, dates, or times. "
+                    "If evidence conflicts or is insufficient, bias=0. Keep summary under 90 words and "
+                    "drivers to at most four short factual bullets.\n\n"
+                    + raw[:10000]
                 )
                 answer = await asyncio.wait_for(
-                    ai.chat(
-                        "You are a conservative macro research parser. Output strict JSON only.",
-                        prompt,
+                    ai.chat_multi(
+                        [
+                            {
+                                "role": "system",
+                                "content": "You are a conservative gold macro parser. Output strict JSON only.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
                         temperature=0.1,
+                        max_tokens=500,
                     ),
-                    timeout=35,
+                    timeout=45,
                 )
                 parsed = _parse_json(answer)
                 if not parsed or parsed.get("bias") not in (-1, 0, 1) or not isinstance(parsed.get("summary"), str) or not parsed["summary"].strip():
@@ -1109,11 +1111,22 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     "bias_label": "bullish" if bias > 0 else "bearish" if bias < 0 else "neutral",
                     "confidence": confidence,
                     "summary": str(parsed.get("summary") or "").strip() or data["summary"],
-                    "drivers": [str(item).strip() for item in drivers[:5] if str(item).strip()],
+                    "drivers": [str(item).strip() for item in drivers[:4] if str(item).strip()],
                 })
+                logger.info(
+                    "XAU macro synthesis ok bias=%s confidence=%.2f drivers=%s",
+                    bias,
+                    confidence,
+                    len(data["drivers"]),
+                )
             except Exception as exc:
                 data["summary"] = "Web research succeeded, but macro synthesis failed."
                 data["synthesis_error"] = type(exc).__name__
+                logger.warning(
+                    "XAU macro synthesis degraded error=%s evidence_chars=%s",
+                    type(exc).__name__,
+                    len(raw),
+                )
 
         data.update(_resolve_event_gate(ai_event_gate, calendar_event))
 
