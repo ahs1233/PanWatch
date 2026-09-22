@@ -80,6 +80,24 @@ class PanWatchBeliefMonitor:
         self.falsification = falsification
         self.belief_engine = belief_engine or BeliefStateEngine()
 
+    def run_persistent_cycle(
+        self,
+        *,
+        claim_ids: Iterable[str] | None = None,
+        evaluated_at: datetime | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> PanWatchBeliefCycle:
+        """Run a cycle against the configured durable Research Store."""
+        from .research_store import research_session
+
+        with research_session() as db:
+            return self.run_cycle(
+                db=db,
+                claim_ids=claim_ids,
+                evaluated_at=evaluated_at,
+                metadata=metadata,
+            )
+
     def run_cycle(
         self,
         *,
