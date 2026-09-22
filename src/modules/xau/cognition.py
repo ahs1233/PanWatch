@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-COGNITION_VERSION = "5.2.0"
+COGNITION_VERSION = "5.3.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -1417,6 +1417,17 @@ def _activation_state(
     ema_fast = _number(five.get("ema_fast"), 0.0)
     dir5 = str(five.get("direction") or "neutral")
     dir15 = str(fifteen.get("direction") or "neutral")
+    context = technical.get("market_context") or {}
+    bias_context = context.get("bias") or {}
+    htf_score = _clip(
+        _number(
+            bias_context.get("today_score"),
+            _number(bias_context.get("composite_score"), 0.0),
+        ),
+        -1.0,
+        1.0,
+    )
+    flow_score = _clip(_number((context.get("cash_flow") or {}).get("score"), 0.0), -1.0, 1.0)
     ret10 = _number(perception.get("return_10m_pct"), 0.0)
     momentum = str(perception.get("momentum") or "neutral")
 
@@ -1444,6 +1455,20 @@ def _activation_state(
                 "current": dir15,
                 "threshold": "not_bearish",
             },
+            {
+                "key": "top_down_bias_not_strongly_bearish",
+                "label": "Top-down bias not strongly bearish",
+                "status": "failed" if htf_score <= -0.35 else "pending" if htf_score < -0.10 else "satisfied",
+                "current": round(htf_score, 4),
+                "threshold": -0.35,
+            },
+            {
+                "key": "flow_not_strongly_opposed",
+                "label": "Cash flow not strongly opposed",
+                "status": "failed" if flow_score <= -0.30 else "pending" if flow_score < -0.10 else "satisfied",
+                "current": round(flow_score, 4),
+                "threshold": -0.30,
+            },
         ]
     elif side == "short":
         conditions = [
@@ -1467,6 +1492,20 @@ def _activation_state(
                 "status": "failed" if dir15 == "bullish" else "satisfied" if dir15 in {"bearish", "neutral"} else "pending",
                 "current": dir15,
                 "threshold": "not_bullish",
+            },
+            {
+                "key": "top_down_bias_not_strongly_bullish",
+                "label": "Top-down bias not strongly bullish",
+                "status": "failed" if htf_score >= 0.35 else "pending" if htf_score > 0.10 else "satisfied",
+                "current": round(htf_score, 4),
+                "threshold": 0.35,
+            },
+            {
+                "key": "flow_not_strongly_opposed",
+                "label": "Cash flow not strongly opposed",
+                "status": "failed" if flow_score >= 0.30 else "pending" if flow_score > 0.10 else "satisfied",
+                "current": round(flow_score, 4),
+                "threshold": 0.30,
             },
         ]
 
