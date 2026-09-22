@@ -165,6 +165,68 @@ async def get_research_bars(force: bool = False):
         return data
 
 
+
+async def get_chart_series(
+    timeframe: str = "5m",
+    *,
+    limit: int = 160,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Return bounded real OHLC research bars for the terminal chart.
+
+    The chart uses the exact same source family as the cognition engine so the
+    visual state and machine reasoning cannot silently diverge.
+    """
+    timeframe_map = {
+        "1m": XAUTimeframe.M1,
+        "5m": XAUTimeframe.M5,
+        "15m": XAUTimeframe.M15,
+    }
+    key = str(timeframe or "5m").strip().lower()
+    if key not in timeframe_map:
+        key = "5m"
+    limit = max(30, min(int(limit), 240))
+    bars = await get_research_bars(force=force)
+    rows = list(bars.get(timeframe_map[key]) or [])[-limit:]
+
+    def ema(values: list[float], period: int) -> list[float]:
+        if not values:
+            return []
+        alpha = 2.0 / (period + 1.0)
+        out: list[float] = []
+        current = values[0]
+        for value in values:
+            current = value if not out else (value - current) * alpha + current
+            out.append(current)
+        return out
+
+    closes = [float(row.close) for row in rows]
+    ema9 = ema(closes, 9)
+    ema21 = ema(closes, 21)
+    payload = []
+    for i, row in enumerate(rows):
+        payload.append({
+            "time": row.timestamp.isoformat(),
+            "open": float(row.open),
+            "high": float(row.high),
+            "low": float(row.low),
+            "close": float(row.close),
+            "volume": float(getattr(row, "volume", 0.0) or 0.0),
+            "ema9": round(ema9[i], 6),
+            "ema21": round(ema21[i], 6),
+            "source": str(getattr(row, "source", "") or ""),
+        })
+
+    return {
+        "instrument": "XAUUSD",
+        "timeframe": key,
+        "count": len(payload),
+        "bars": payload,
+        "source": payload[-1]["source"] if payload else None,
+        "observed_at": payload[-1]["time"] if payload else None,
+        "research_only": True,
+    }
+
 def _spot_fill_state(provider_health: list[dict[str, Any]]) -> dict[str, Any]:
     """Classify paper-fill availability independently from analysis context."""
     healthy_bidask = [
