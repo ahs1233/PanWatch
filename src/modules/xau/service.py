@@ -1153,7 +1153,9 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     "Only set event_risk=true for an explicitly supported market-moving breaking shock "
                     "from the last 30 minutes. Never invent facts, prices, dates, or times. "
                     "If evidence conflicts or is insufficient, bias=0. Keep summary under 50 words and "
-                    "drivers to at most three short factual bullets.\n\n"
+                    "drivers to at most three short factual bullets. Do NOT quote or infer the current gold spot "
+                    "price from web material; live price comes from the market-data layer and may have moved. "
+                    "Describe macro forces only, and avoid presenting stale article prices as current.\n\n"
                     + raw[:3000]
                 )
                 answer = await asyncio.wait_for(
