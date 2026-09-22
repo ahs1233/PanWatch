@@ -34,6 +34,7 @@ on:
       - "ci_tests/test_research_claim_acquisition.py"
       - "ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py"
       - "ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py"
+      - "ci_tests/test_panwatch_company_sector_benchmark_v1.py"
       - "ci_tests/test_panwatch_automatic_research_benchmark_v1.py"
       - "ci_tests/test_panwatch_belief_benchmark_v1.py"
       - ".github/workflows/ahmed-toolbox-xau-ci.yml"
@@ -162,6 +163,17 @@ jobs:
         with:
           name: panwatch-semantic-resolution-v1-python-${{ matrix.python-version }}
           path: semantic-resolution-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Company/Sector Research Candidate
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.company_sector_runner --no-gate --json company-sector-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload company/sector research candidate result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-company-sector-candidate-python-${{ matrix.python-version }}
+          path: company-sector-benchmark-result-${{ matrix.python-version }}.json
 
   frontend:
     runs-on: ubuntu-latest
