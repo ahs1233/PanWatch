@@ -1,4 +1,4 @@
-# PanWatch Benchmark v1.6
+# PanWatch Benchmark v1.7
 
 PanWatch Benchmark is the reproducible measurement layer for the project. It separates implemented research integrity from future capabilities and prevents architectural progress from being judged by intuition alone.
 
@@ -116,17 +116,38 @@ Persistence adds `research_claim_resolutions`, including match score and all sig
 
 Regression gate: **90%**.
 
-## Specified track — Company / sector research
+## Automated track 8 — Company / sector research
+
+v1.7 adds entity-aware comparative research. The core rule is:
+
+```
+Different entity identity
+  → hard semantic boundary
+  → never merge as paraphrase
+  → never create cross-entity contradiction by wording alone
+```
+
+Entity identity uses:
+
+- grounded entity name/type when explicitly present in the source quote;
+- a conservative claim-key scope fallback;
+- legal-name normalization such as `Apple == Apple Inc.`;
+- explicit aliases only; no fuzzy alias guessing;
+- generic namespaces such as macro/energy/policy remain entity-unknown.
+
+The frozen 10-case company/sector benchmark covers earnings source precedence, guidance vs consensus, duplicate PR independence, restatements, filing vs rumor, cross-company KPI isolation, periods, conflicting revenue, recency and thesis updates.
+
+Regression gate: **90%**. Current frozen-fixture result after Entity Identity: **10/10** on Python 3.11 and 3.12.
 
 The company/sector research benchmark remains specified but not automated. The generic engine can accept such claims, but the frozen company/sector corpus and comparative scoring harness still need implementation.
 
-## What v1.6 does not claim
+## What v1.7 does not claim
 
 A deterministic 100% score does not prove general research superiority over ChatGPT, Claude, or a professional researcher.
 
 Current boundaries:
 
-- claim extraction and conservative cross-document resolution are generalized, but entity linking and embedding-scale clustering over very large corpora are not yet proven;
+- claim extraction, conservative cross-document resolution, and deterministic entity identity are generalized; large-scale external entity registries (LEI/ticker/knowledge-graph reconciliation) and embedding-scale clustering are not yet proven;
 - external live search quality is provider-dependent and verified separately from deterministic CI;
 - blind human-scored external comparative benchmarks are not yet implemented.
 
@@ -140,6 +161,7 @@ PYTHONPATH=. python -m benchmarks.panwatch_v1.belief_runner
 PYTHONPATH=. python -m benchmarks.panwatch_v1.automatic_research_runner
 PYTHONPATH=. python -m benchmarks.panwatch_v1.claim_acquisition_runner
 PYTHONPATH=. python -m benchmarks.panwatch_v1.semantic_resolution_runner
+PYTHONPATH=. python -m benchmarks.panwatch_v1.company_sector_runner
 
 python -m pytest -q \
   ci_tests/test_panwatch_benchmark_v1.py \
@@ -154,5 +176,6 @@ python -m pytest -q \
   ci_tests/test_panwatch_belief_benchmark_v1.py \
   ci_tests/test_panwatch_automatic_research_benchmark_v1.py \
   ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py \
-  ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py
+  ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py \
+  ci_tests/test_panwatch_company_sector_benchmark_v1.py
 ```
