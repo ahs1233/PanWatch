@@ -462,11 +462,8 @@ async def get_library_validation(force: bool = False) -> dict[str, Any]:
         "observed_at": rows[-1].timestamp.isoformat() if rows else None,
         "library_consensus": consensus,
         "vectorbt_validation": {**backtest, "timeframe": validation_timeframe},
-        "structure_scope_reference": {
-            "mode": "reference_architecture",
-            "runtime_dependency": False,
-            "reason": "structure-scope pins MetaTrader5, which is not Linux/Railway compatible; PanWatch implements its multi-timeframe/session concepts over the existing MT5-compatible HTTP data provider instead.",
-        },
+        "structure_scope_reference": consensus.get("structure_scope_reference"),
+        "all_library_status": consensus.get("status"),
         "execution_allowed": False,
     }
 
