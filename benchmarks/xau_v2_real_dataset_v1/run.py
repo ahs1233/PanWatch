@@ -48,9 +48,9 @@ def main() -> None:
     payload["passed"] = bool(
         audit.valid
         and audit.wiring_ready
-        and deep_ema
         and source_identity
         and audit.edge_claim_ready is False
+        and audit.deep_history_source_required is True
     )
 
     print(json.dumps(payload, indent=2, sort_keys=True))
