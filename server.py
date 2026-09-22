@@ -1697,6 +1697,8 @@ async def lifespan(app):
 
     global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler, automatic_research_scheduler, claim_acquisition_scheduler
 
+    macro_warmup_task = None
+
     if xau_mode:
         # Keep the process focused on XAU/USD. The original stock catalogue,
         # CN/HK/US market scanners, stock strategy rebalancing and stock paper
@@ -1713,6 +1715,13 @@ async def lifespan(app):
         xau_paper_scheduler.start()
         xau_replay_scheduler = XAUReplayScheduler(settings)
         xau_replay_scheduler.start()
+        # Warm the slow macro layer immediately so the dashboard does not pay
+        # the first-request latency. Other AI-heavy background jobs are delayed.
+        from src.modules.xau.service import get_macro_context
+        macro_warmup_task = asyncio.create_task(
+            get_macro_context(force=True),
+            name="xau-macro-warmup",
+        )
         logger.info("XAU profile active: legacy stock background jobs are disabled")
     else:
         try:
@@ -1808,7 +1817,7 @@ async def lifespan(app):
     else:
         logger.info("Automatic Research scheduler disabled by configuration")
 
-    if settings.claim_acquisition_enabled:
+    if settings.claim_acquisition_enabled and not xau_mode:
         if not settings.ahmed_toolbox_url:
             logger.warning(
                 "Claim Acquisition requested but Ahmed ToolBox URL is not configured"
@@ -1827,7 +1836,10 @@ async def lifespan(app):
                     type(exc).__name__,
                 )
     else:
-        logger.info("Claim Acquisition scheduler disabled by configuration")
+        logger.info(
+            "Claim Acquisition scheduler disabled%s",
+            " for XAU profile" if xau_mode else " by configuration",
+        )
 
     yield
     if scheduler:
@@ -1854,6 +1866,9 @@ async def lifespan(app):
         automatic_research_scheduler.shutdown()
     if claim_acquisition_scheduler:
         claim_acquisition_scheduler.shutdown()
+    if macro_warmup_task and not macro_warmup_task.done():
+        macro_warmup_task.cancel()
+        await asyncio.gather(macro_warmup_task, return_exceptions=True)
     if runtime_smoke_task and not runtime_smoke_task.done():
         runtime_smoke_task.cancel()
         await asyncio.gather(runtime_smoke_task, return_exceptions=True)
