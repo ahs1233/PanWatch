@@ -29,6 +29,7 @@ from src.platform.persistence.migrations import (
     _m129_persistent_belief_state,
     _m130_automatic_research_loop,
     _m131_general_claim_acquisition,
+    _m132_semantic_claim_resolution,
 )
 
 
@@ -54,6 +55,7 @@ def _db():
         _m129_persistent_belief_state(conn)
         _m130_automatic_research_loop(conn)
         _m131_general_claim_acquisition(conn)
+        _m132_semantic_claim_resolution(conn)
     Session = sessionmaker(bind=engine)
     return Session()
 
@@ -284,7 +286,7 @@ def run_claim_acquisition_benchmark() -> dict:
     score=round(earned/total*100.0,2) if total else 0.0
     return {
         "benchmark":"PanWatch Benchmark v1",
-        "version":"1.5.0",
+        "version":"1.6.0",
         "track":"general_claim_acquisition",
         "score_percent":score,
         "passed_cases":sum(1 for r in results if r.passed),

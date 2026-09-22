@@ -12,7 +12,7 @@ from src.modules.research.claim_acquisition import (
     GeneralClaimAcquisition,
     GroundedClaimExtractor,
 )
-from src.modules.research.claim_graph import ClaimGraph, ClaimKind
+from src.modules.research.claim_graph import ClaimGraph, ClaimKind, ClaimRelation
 from src.modules.research.evidence import ObservationKind
 from src.modules.research.falsification import (
     FalsificationEngine,
@@ -25,10 +25,12 @@ from src.platform.persistence.migrations import (
     _m129_persistent_belief_state,
     _m130_automatic_research_loop,
     _m131_general_claim_acquisition,
+    _m132_semantic_claim_resolution,
 )
 from src.platform.persistence.models import (
     ResearchAcquisitionRunRecord,
     ResearchClaimCandidateRecord,
+    ResearchClaimResolutionRecord,
 )
 
 
@@ -44,6 +46,7 @@ def _db():
         _m129_persistent_belief_state(conn)
         _m130_automatic_research_loop(conn)
         _m131_general_claim_acquisition(conn)
+        _m132_semantic_claim_resolution(conn)
     Session = sessionmaker(bind=engine)
     return engine, Session()
 
@@ -664,3 +667,216 @@ async def test_stale_acquisition_run_is_recovered_before_new_run():
         assert recovered.completed_at == T0.replace(tzinfo=None)
     finally:
         db.close()
+
+
+
+@pytest.mark.asyncio
+async def test_semantic_paraphrase_reuses_existing_claim():
+    _engine, db = _db()
+    try:
+        d1 = _doc(
+            "https://energy-a.example/report",
+            "Data centres consumed around 415 TWh of electricity globally in 2024.",
+        )
+        d2 = _doc(
+            "https://energy-b.example/report",
+            "Global data centres consumed approximately 415 TWh of electricity in 2024.",
+        )
+        c1 = _candidate(
+            quote="Data centres consumed around 415 TWh of electricity globally in 2024.",
+            statement="Data centres consumed around 415 TWh of electricity globally in 2024.",
+            key="energy.data_centres.electricity.2024",
+        )
+        c2 = _candidate(
+            quote="Global data centres consumed approximately 415 TWh of electricity in 2024.",
+            statement="Global data centres consumed approximately 415 TWh of electricity in 2024.",
+            key="energy.data_centres.electricity.2024",
+        )
+        graph = ClaimGraph()
+        ledger = EvidenceLedger()
+        result = await GeneralClaimAcquisition(
+            graph=graph,
+            ledger=ledger,
+            falsification=FalsificationEngine(),
+            extractor=_Extractor({d1.url: [c1], d2.url: [c2]}),
+        ).run(
+            db=db,
+            documents=[d1, d2],
+            seed_topic="data centre electricity",
+            evaluated_at=T0,
+        )
+
+        assert len(graph.claims) == 1
+        assert len(ledger.records) == 2
+        assert result.claims_accepted == 1
+        assert result.duplicates == 1
+        rows = db.query(ResearchClaimResolutionRecord).all()
+        assert any(row.relation == "paraphrase" for row in rows)
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_semantic_numeric_conflict_creates_bidirectional_contradiction():
+    _engine, db = _db()
+    try:
+        d1 = _doc(
+            "https://company-a.example/report",
+            "Company revenue was 10 billion dollars in 2025.",
+        )
+        d2 = _doc(
+            "https://company-b.example/report",
+            "Company revenue was 8 billion dollars in 2025.",
+        )
+        c1 = _candidate(
+            quote="Company revenue was 10 billion dollars in 2025.",
+            statement="Company revenue was 10 billion dollars in 2025.",
+            key="company.revenue.2025",
+        )
+        c2 = _candidate(
+            quote="Company revenue was 8 billion dollars in 2025.",
+            statement="Company revenue was 8 billion dollars in 2025.",
+            key="company.revenue.2025",
+        )
+        graph = ClaimGraph()
+        result = await GeneralClaimAcquisition(
+            graph=graph,
+            ledger=EvidenceLedger(),
+            falsification=FalsificationEngine(),
+            extractor=_Extractor({d1.url: [c1], d2.url: [c2]}),
+        ).run(
+            db=db,
+            documents=[d1, d2],
+            seed_topic="company revenue",
+            evaluated_at=T0,
+        )
+
+        assert result.claims_accepted == 2
+        assert len(graph.claims) == 2
+        contradictions = [
+            edge
+            for edge in graph.edges
+            if edge.relation is ClaimRelation.CONTRADICTS
+        ]
+        assert len(contradictions) == 1
+        rows = db.query(ResearchClaimResolutionRecord).all()
+        assert any(row.relation == "contradiction" for row in rows)
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_same_metric_different_explicit_period_stays_distinct():
+    _engine, db = _db()
+    try:
+        d1 = _doc(
+            "https://company.example/2024",
+            "Company revenue was 10 billion dollars in 2024.",
+        )
+        d2 = _doc(
+            "https://company.example/2025",
+            "Company revenue was 12 billion dollars in 2025.",
+        )
+        c1 = _candidate(
+            quote="Company revenue was 10 billion dollars in 2024.",
+            statement="Company revenue was 10 billion dollars in 2024.",
+            key="company.revenue",
+        )
+        c2 = _candidate(
+            quote="Company revenue was 12 billion dollars in 2025.",
+            statement="Company revenue was 12 billion dollars in 2025.",
+            key="company.revenue",
+        )
+        graph = ClaimGraph()
+        result = await GeneralClaimAcquisition(
+            graph=graph,
+            ledger=EvidenceLedger(),
+            falsification=FalsificationEngine(),
+            extractor=_Extractor({d1.url: [c1], d2.url: [c2]}),
+        ).run(
+            db=db,
+            documents=[d1, d2],
+            seed_topic="company revenue",
+            evaluated_at=T0,
+        )
+
+        assert result.claims_accepted == 2
+        assert len(graph.claims) == 2
+        assert not [
+            edge
+            for edge in graph.edges
+            if edge.relation is ClaimRelation.CONTRADICTS
+        ]
+        rows = db.query(ResearchClaimResolutionRecord).all()
+        assert any(
+            row.relation == "distinct"
+            and row.reason == "different_explicit_period"
+            for row in rows
+        )
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_semantic_polarity_conflict_creates_contradiction():
+    _engine, db = _db()
+    try:
+        d1 = _doc(
+            "https://macro-a.example/report",
+            "Electricity demand increased in 2025.",
+        )
+        d2 = _doc(
+            "https://macro-b.example/report",
+            "Electricity demand decreased in 2025.",
+        )
+        c1 = _candidate(
+            quote="Electricity demand increased in 2025.",
+            statement="Electricity demand increased in 2025.",
+            key="energy.electricity_demand.2025",
+        )
+        c2 = _candidate(
+            quote="Electricity demand decreased in 2025.",
+            statement="Electricity demand decreased in 2025.",
+            key="energy.electricity_demand.2025",
+        )
+        graph = ClaimGraph()
+        result = await GeneralClaimAcquisition(
+            graph=graph,
+            ledger=EvidenceLedger(),
+            falsification=FalsificationEngine(),
+            extractor=_Extractor({d1.url: [c1], d2.url: [c2]}),
+        ).run(
+            db=db,
+            documents=[d1, d2],
+            seed_topic="electricity demand",
+            evaluated_at=T0,
+        )
+
+        assert result.claims_accepted == 2
+        assert len(graph.claims) == 2
+        assert len([
+            edge
+            for edge in graph.edges
+            if edge.relation is ClaimRelation.CONTRADICTS
+        ]) == 1
+    finally:
+        db.close()
+
+
+def test_migration_132_creates_resolution_table_and_indexes():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        _m127_research_evidence_foundation(conn)
+        _m128_claim_graph_and_falsification(conn)
+        _m129_persistent_belief_state(conn)
+        _m130_automatic_research_loop(conn)
+        _m131_general_claim_acquisition(conn)
+        _m132_semantic_claim_resolution(conn)
+    inspector = inspect(engine)
+    assert "research_claim_resolutions" in inspector.get_table_names()
+    indexes = {
+        row["name"]
+        for row in inspector.get_indexes("research_claim_resolutions")
+    }
+    assert "ix_research_resolution_relation" in indexes
+    assert "ix_research_resolution_matched_claim" in indexes

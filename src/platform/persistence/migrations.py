@@ -2411,6 +2411,52 @@ def _m131_general_claim_acquisition(conn: Connection) -> None:
     )
 
 
+
+def _m132_semantic_claim_resolution(conn: Connection) -> None:
+    """Persist semantic claim-resolution decisions for acquired candidates."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claim_resolutions (
+            resolution_id TEXT PRIMARY KEY,
+            candidate_id TEXT NOT NULL REFERENCES research_claim_candidates(candidate_id) ON DELETE RESTRICT,
+            matched_claim_id TEXT REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            relation TEXT NOT NULL,
+            score REAL NOT NULL DEFAULT 0.0,
+            lexical_score REAL NOT NULL DEFAULT 0.0,
+            key_match INTEGER NOT NULL DEFAULT 0,
+            numeric_match INTEGER NOT NULL DEFAULT 0,
+            period_match INTEGER NOT NULL DEFAULT 0,
+            polarity_match INTEGER NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL DEFAULT '',
+            signals JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_resolution_candidate",
+        "CREATE INDEX ix_research_resolution_candidate "
+        "ON research_claim_resolutions(candidate_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_resolution_matched_claim",
+        "CREATE INDEX ix_research_resolution_matched_claim "
+        "ON research_claim_resolutions(matched_claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_resolution_relation",
+        "CREATE INDEX ix_research_resolution_relation "
+        "ON research_claim_resolutions(relation)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_resolution_created",
+        "CREATE INDEX ix_research_resolution_created "
+        "ON research_claim_resolutions(created_at)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2443,6 +2489,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(129, "persistent_belief_state", _m129_persistent_belief_state),
     Migration(130, "automatic_research_loop", _m130_automatic_research_loop),
     Migration(131, "general_claim_acquisition", _m131_general_claim_acquisition),
+    Migration(132, "semantic_claim_resolution", _m132_semantic_claim_resolution),
 )
 
 
