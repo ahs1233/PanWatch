@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-COGNITION_VERSION = "5.4.0"
+COGNITION_VERSION = "5.5.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -455,7 +455,15 @@ def _directional_edge(
         smart_reliability = 0.75 + 0.25 * library_agreement
     else:
         smart_reliability = 0.80
-    smart_score = _clip(raw_smart_score * smart_reliability, -1.0, 1.0)
+
+    if abs(raw_smart_score) < 0.14 and library_agreement >= 0.67 and library_direction in {"bullish", "bearish"}:
+        # Let the validated external implementation resolve an otherwise
+        # neutral custom SMC state, but cap it so same-input agreement cannot
+        # manufacture a strong signal.
+        library_sign = 1.0 if library_direction == "bullish" else -1.0
+        smart_score = library_sign * min(0.24, 0.18 * library_agreement + 0.04)
+    else:
+        smart_score = _clip(raw_smart_score * smart_reliability, -1.0, 1.0)
     flow = context.get("cash_flow") or {}
     flow_score = _clip(_number(flow.get("score"), 0.0), -1.0, 1.0)
 
@@ -795,7 +803,11 @@ def _hypotheses(
             setup_dir = -1
     smart_money = context.get("smart_money") or {}
     smart_score = _clip(_number(smart_money.get("score"), 0.0), -1.0, 1.0)
-    sweep_state = str(smart_money.get("liquidity_sweep") or "none")
+    sweep_state = str(
+        smart_money.get("validated_liquidity_sweep")
+        or smart_money.get("liquidity_sweep")
+        or "none"
+    )
     displacement = str(smart_money.get("displacement") or "none")
     profile = context.get("volume_profile") or {}
     profile_location = str(profile.get("location") or "unknown")
@@ -1317,7 +1329,11 @@ def _scenario_paths(
         else "unresolved"
     )
 
-    sweep_signal = str(smart_money.get("liquidity_sweep") or "none")
+    sweep_signal = str(
+        smart_money.get("validated_liquidity_sweep")
+        or smart_money.get("liquidity_sweep")
+        or "none"
+    )
     flow_direction = str(flow.get("direction") or "balanced")
     profile_location = str(profile.get("location") or "unknown")
     rsi5 = _number(five.get("rsi14"), 50.0)
