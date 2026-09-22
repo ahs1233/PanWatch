@@ -11,6 +11,7 @@ from src.modules.strategy.validation.models import (
     ValidationPolicy,
     ValidationReport,
     ValidationVerdict,
+    WalkForwardFoldResult,
 )
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "ValidationPolicy",
     "ValidationReport",
     "ValidationVerdict",
+    "WalkForwardFoldResult",
     "validate_experiment",
 ]
