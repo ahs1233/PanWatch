@@ -392,8 +392,8 @@ export default function DashboardPage() {
               <div className="mt-1 text-[13px] font-semibold uppercase">{friendlyReason(fusion.cognition.regime.label)}</div>
             </div>
             <div className="rounded-xl bg-accent/30 p-3">
-              <div className="text-[10px] text-muted-foreground">Calibrated confidence</div>
-              <div className="mt-1 text-[13px] font-semibold">{Math.round(fusion.cognition.confidence.calibrated_confidence * 100)}%</div>
+              <div className="text-[10px] text-muted-foreground">Decision score · not win probability</div>
+              <div className="mt-1 text-[13px] font-semibold">{Math.round(fusion.cognition.confidence.calibrated_confidence * 100)} / 100</div>
             </div>
             <div className="rounded-xl bg-accent/30 p-3">
               <div className="text-[10px] text-muted-foreground">Data quality</div>

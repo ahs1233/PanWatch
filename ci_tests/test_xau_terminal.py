@@ -175,6 +175,8 @@ def test_live_micro_replaces_only_stale_gc_1m_gate(monkeypatch):
 
 
 def test_decision_fusion_support_conflict_and_event_gate():
+    ready = {"calendar_ok": True, "search_ok": True, "synthesis_ok": True,
+             "observed_at": datetime.now(timezone.utc).isoformat()}
     technical = {
         "candidate": "long_setup",
         "blocked": False,
@@ -187,6 +189,7 @@ def test_decision_fusion_support_conflict_and_event_gate():
     support = service.build_decision_fusion(
         technical,
         {
+            **ready,
             "bias": 1,
             "bias_label": "bullish",
             "confidence": 0.8,
@@ -200,6 +203,7 @@ def test_decision_fusion_support_conflict_and_event_gate():
     conflict = service.build_decision_fusion(
         technical,
         {
+            **ready,
             "bias": -1,
             "bias_label": "bearish",
             "confidence": 0.9,
@@ -212,6 +216,7 @@ def test_decision_fusion_support_conflict_and_event_gate():
     event = service.build_decision_fusion(
         technical,
         {
+            **ready,
             "bias": 1,
             "bias_label": "bullish",
             "confidence": 0.9,

@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import threading
 import time
+from copy import deepcopy
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -23,6 +26,7 @@ from src.modules.xau.cognition import (
 from src.modules.xau.service import (
     build_decision_fusion,
     get_macro_context,
+    get_indicative_spot,
     get_xau_snapshot,
 )
 from src.modules.xau.paper_store import (
@@ -30,6 +34,7 @@ from src.modules.xau.paper_store import (
     open_xau_replay_session,
     paper_store_is_external,
     replay_store_is_external,
+    paper_writer_guard,
 )
 from src.platform.persistence.models import (
     XAUPaperAccount,
@@ -96,6 +101,7 @@ _TRANSIENT_SIGNAL_REJECTIONS = frozenset({
     "market_closed_or_rollover",
     "stale_bid_ask",
     "spread_too_wide",
+    "macro_unavailable",
 })
 
 
@@ -207,7 +213,13 @@ def _paper_management_quote(side: str, spot: dict | None) -> float | None:
     fill_state = str(spot.get("fill_state") or "")
     if fill_state and fill_state != "ready":
         return None
-    return _paper_exit_quote(side, spot)
+    quote = _paper_exit_quote(side, spot)
+    bid, ask = _number(spot.get("bid")), _number(spot.get("ask"))
+    if quote is None or not math.isfinite(quote) or quote <= 0:
+        return None
+    if bid is not None and ask is not None and (not math.isfinite(bid) or not math.isfinite(ask) or bid > ask):
+        return None
+    return quote
 
 
 def _weekly_reset_fill_price(side: str, spot: dict | None) -> float | None:
@@ -1133,6 +1145,31 @@ class XAUPaperTradingEngine:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings()
         self._reversal_streaks: dict[str, dict[str, object]] = {}
+        self._memory_cache = None
+        self._autopsy_checked_at = 0.0
+
+    def _invalidate_memory(self):
+        self._memory_cache = None
+
+    def _backfill_protective_autopsies(self, db):
+        if time.monotonic() - self._autopsy_checked_at < 60:
+            return
+        trades = db.query(XAUPaperTrade).order_by(XAUPaperTrade.closed_at.desc()).limit(120).all()
+        for trade in trades:
+            meta = dict(trade.meta or {})
+            if meta.get("autopsy_status") != "deferred_protective_exit":
+                continue
+            signal = db.query(XAUPaperSignal).filter(XAUPaperSignal.setup_key == trade.setup_key).first()
+            signal_meta = dict(signal.meta or {}) if signal else {}
+            meta.update({"entry_state_vector": signal_meta.get("state_vector"),
+                         "entry_cognition": signal_meta.get("cognition") or {},
+                         "autopsy": _trade_autopsy(trade, signal_meta, exit_reason=trade.exit_reason,
+                                                   pnl=trade.pnl, r_multiple=trade.r_multiple),
+                         "autopsy_status": "completed"})
+            trade.meta = meta
+            self._invalidate_memory()
+        db.flush()
+        self._autopsy_checked_at = time.monotonic()
 
     def _active_account(self, db) -> XAUPaperAccount | None:
         return (
@@ -1148,16 +1185,12 @@ class XAUPaperTradingEngine:
             query = query.filter(XAUPaperPosition.account_id == account_id)
         return query.order_by(XAUPaperPosition.id.desc()).first()
 
-    def _memory_snapshot(
-        self,
-        db,
-        technical: dict,
-        macro: dict,
-    ) -> dict:
-        """Retrieve state-vector-nearest episodes and calibration history."""
-        candidate = str(technical.get("candidate") or "none")
-        current_vector = build_market_state_vector(technical, macro)
-
+    def _memory_history(self, db, candidate: str) -> dict:
+        """Cache immutable historical inputs, never the current decision or quote."""
+        key = (id(db.get_bind()), candidate)
+        cached = self._memory_cache
+        if cached and cached[0] == key and time.monotonic() - cached[1] < 30:
+            return cached[2]
         signals = (
             db.query(XAUPaperSignal)
             .filter(
@@ -1178,6 +1211,67 @@ class XAUPaperTradingEngine:
                 .limit(500)
                 .all()
             )
+        shadow_signals = (
+            db.query(XAUPaperSignal)
+            .filter(XAUPaperSignal.candidate == candidate)
+            .order_by(XAUPaperSignal.observed_at.desc(), XAUPaperSignal.id.desc())
+            .limit(500)
+            .all()
+        )
+        if replay_store_is_external():
+            replay_db = open_xau_replay_session()
+            try:
+                replay_episodes = (
+                    replay_db.query(XAUReplayEpisode)
+                    .filter(XAUReplayEpisode.candidate == candidate)
+                    .order_by(
+                        XAUReplayEpisode.observed_at.desc(),
+                        XAUReplayEpisode.id.desc(),
+                    )
+                    .limit(1000)
+                    .all()
+                )
+            except Exception:
+                replay_episodes = []
+            finally:
+                replay_db.close()
+        else:
+            replay_episodes = (
+                db.query(XAUPaperSignal)
+                .filter(
+                    XAUPaperSignal.candidate == f"replay_{candidate}",
+                    XAUPaperSignal.rejection_reason == "historical_replay",
+                )
+                .order_by(
+                    XAUPaperSignal.observed_at.desc(),
+                    XAUPaperSignal.id.desc(),
+                )
+                .limit(1000)
+                .all()
+            )
+
+        fallback = db.query(XAUPaperTrade).order_by(XAUPaperTrade.closed_at.desc(), XAUPaperTrade.id.desc()).limit(120).all()
+        def freeze(rows):
+            return [SimpleNamespace(**{column.name: deepcopy(getattr(row, column.name))
+                                      for column in row.__table__.columns}) for row in rows]
+        history = {"signals": freeze(signals), "trades": freeze(trades),
+                   "fallback_trades": freeze(fallback), "shadow": freeze(shadow_signals),
+                   "replay": freeze(replay_episodes)}
+        self._memory_cache = (key, time.monotonic(), history)
+        return history
+
+    def _memory_snapshot(
+        self,
+        db,
+        technical: dict,
+        macro: dict,
+    ) -> dict:
+        """Retrieve state-vector-nearest episodes and calibration history."""
+        candidate = str(technical.get("candidate") or "none")
+        current_vector = build_market_state_vector(technical, macro)
+
+        history = self._memory_history(db, candidate)
+        signals, trades = history["signals"], history["trades"]
         trade_by_key = {trade.setup_key: trade for trade in trades}
 
         scored: list[tuple[float, XAUPaperSignal, XAUPaperTrade]] = []
@@ -1228,59 +1322,18 @@ class XAUPaperTradingEngine:
             similarities = [item[0] for item in selected]
             similar_samples = len(selected_trades)
         else:
-            memory_trades = (
-                db.query(XAUPaperTrade)
-                .order_by(XAUPaperTrade.closed_at.desc(), XAUPaperTrade.id.desc())
-                .limit(120)
-                .all()
-            )
+            memory_trades = history["fallback_trades"]
             source = "global_closed_paper_trades_fallback"
             similarities = []
             similar_samples = 0
 
-        shadow_signals = (
-            db.query(XAUPaperSignal)
-            .filter(XAUPaperSignal.candidate == candidate)
-            .order_by(XAUPaperSignal.observed_at.desc(), XAUPaperSignal.id.desc())
-            .limit(500)
-            .all()
-        )
+        shadow_signals = history["shadow"]
         shadow_memory = _shadow_research_memory(
             shadow_signals,
             current_vector,
         )
 
-        if replay_store_is_external():
-            replay_db = open_xau_replay_session()
-            try:
-                replay_episodes = (
-                    replay_db.query(XAUReplayEpisode)
-                    .filter(XAUReplayEpisode.candidate == candidate)
-                    .order_by(
-                        XAUReplayEpisode.observed_at.desc(),
-                        XAUReplayEpisode.id.desc(),
-                    )
-                    .limit(1000)
-                    .all()
-                )
-            except Exception:
-                replay_episodes = []
-            finally:
-                replay_db.close()
-        else:
-            replay_episodes = (
-                db.query(XAUPaperSignal)
-                .filter(
-                    XAUPaperSignal.candidate == f"replay_{candidate}",
-                    XAUPaperSignal.rejection_reason == "historical_replay",
-                )
-                .order_by(
-                    XAUPaperSignal.observed_at.desc(),
-                    XAUPaperSignal.id.desc(),
-                )
-                .limit(1000)
-                .all()
-            )
+        replay_episodes = history["replay"]
 
         replay_memory = _replay_research_memory(
             replay_episodes,
@@ -1408,6 +1461,7 @@ class XAUPaperTradingEngine:
                 changed += 1
 
         if changed:
+            self._invalidate_memory()
             db.flush()
         return changed
 
@@ -1436,6 +1490,8 @@ class XAUPaperTradingEngine:
         exit_reason: str,
         now_utc: datetime,
         meta: dict | None = None,
+        *,
+        research_metadata: bool = True,
     ) -> XAUPaperTrade:
         pnl = _pnl(position.side, position.entry_price, exit_price, position.quantity_oz)
         pnl = round(pnl, 4)
@@ -1447,21 +1503,24 @@ class XAUPaperTradingEngine:
         trade_meta = dict(meta or {})
         trade_meta.setdefault("engine_version", PAPER_ENGINE_VERSION)
 
-        signal = (
-            db.query(XAUPaperSignal)
-            .filter(XAUPaperSignal.setup_key == position.setup_key)
-            .first()
-        )
-        signal_meta = dict(signal.meta or {}) if signal else {}
-        trade_meta["entry_state_vector"] = signal_meta.get("state_vector")
-        trade_meta["entry_cognition"] = signal_meta.get("cognition") or {}
-        trade_meta["autopsy"] = _trade_autopsy(
-            position,
-            signal_meta,
-            exit_reason=exit_reason,
-            pnl=pnl,
-            r_multiple=r_multiple,
-        )
+        if research_metadata:
+            signal = (
+                db.query(XAUPaperSignal)
+                .filter(XAUPaperSignal.setup_key == position.setup_key)
+                .first()
+            )
+            signal_meta = dict(signal.meta or {}) if signal else {}
+            trade_meta["entry_state_vector"] = signal_meta.get("state_vector")
+            trade_meta["entry_cognition"] = signal_meta.get("cognition") or {}
+            trade_meta["autopsy"] = _trade_autopsy(
+                position,
+                signal_meta,
+                exit_reason=exit_reason,
+                pnl=pnl,
+                r_multiple=r_multiple,
+            )
+        else:
+            trade_meta["autopsy_status"] = "deferred_protective_exit"
         if position.opened_at:
             trade_meta["holding_minutes"] = round(
                 _position_age_minutes(position.opened_at, now_utc),
@@ -1492,6 +1551,7 @@ class XAUPaperTradingEngine:
             meta=trade_meta,
         )
         db.add(trade)
+        self._invalidate_memory()
 
         position.status = "closed"
         position.closed_at = now_utc
@@ -1960,6 +2020,28 @@ class XAUPaperTradingEngine:
         )
         return position
 
+    def _confirm_persisted_reversal(self, db, position, management, observation_id, now_utc):
+        signal = db.query(XAUPaperSignal).filter(XAUPaperSignal.setup_key == position.setup_key).first()
+        meta = dict(signal.meta or {}) if signal else {}
+        saved = meta.get("guardian_confirmation") or {}
+        streaks = {}
+        try:
+            saved_at = datetime.fromisoformat(str(saved.get("saved_at") or ""))
+            age = (_utc_naive(now_utc) - _utc_naive(saved_at)).total_seconds()
+            if 0 <= age <= max(60, int(self.settings.xau_paper_scan_seconds) * 3):
+                streaks[position.setup_key] = saved.get("streak") or {}
+        except (TypeError, ValueError):
+            pass
+        result = _confirm_reversal_exit(position.setup_key, management, streaks,
+                                        observation_id=observation_id, required=2)
+        if signal:
+            meta["guardian_confirmation"] = {
+                "saved_at": _utc_naive(now_utc).isoformat(),
+                "streak": streaks.get(position.setup_key, {}),
+            }
+            signal.meta = meta
+        return result
+
     async def eligibility(self) -> dict:
         technical = await get_xau_snapshot(force=False)
         macro = await get_macro_context(force=False)
@@ -2073,22 +2155,91 @@ class XAUPaperTradingEngine:
             return {"status": "disabled", "execution_allowed": False}
 
         started = time.monotonic()
-        technical = await get_xau_snapshot(force=False)
-        macro = await get_macro_context(force=False)
-        fetched = time.monotonic()
-        result = await asyncio.to_thread(self._scan_serialized, technical, macro, now)
-        result["timing_ms"] = {
-            "snapshot": round((fetched - started) * 1000, 2),
-            "paper_worker": round((time.monotonic() - fetched) * 1000, 2),
-            "total": round((time.monotonic() - started) * 1000, 2),
-        }
-        return result
+        # A fresh bid/ask is sufficient for hard protection. Do not wait for
+        # research bars, macro synthesis, memory or calibration to manage risk.
+        spot = await get_indicative_spot(force=False)
+        protection = await asyncio.to_thread(self._protect_serialized, spot, now)
+        if protection.get("status") == "busy" or protection.get("closed_trade"):
+            return protection
+        try:
+            technical = await asyncio.wait_for(get_xau_snapshot(force=False), timeout=15)
+            macro = await get_macro_context(force=False)
+            fetched = time.monotonic()
+            result = await asyncio.to_thread(self._scan_serialized, technical, macro, now)
+            result["timing_ms"] = {
+                "snapshot": round((fetched - started) * 1000, 2),
+                "paper_worker": round((time.monotonic() - fetched) * 1000, 2),
+                "total": round((time.monotonic() - started) * 1000, 2),
+            }
+            return result
+        except Exception as exc:
+            logger.exception("[XAU paper] research failed after committed protection: %s", type(exc).__name__)
+            return {**protection, "status": "degraded", "research_error": type(exc).__name__,
+                    "paper_entry_allowed": False, "execution_allowed": False}
+
+    def _protect_serialized(self, spot: dict, now: datetime | None) -> dict:
+        if not _paper_scan_lock.acquire(blocking=False):
+            return {"status": "busy", "execution_allowed": False}
+        try:
+            with paper_writer_guard() as acquired:
+                if not acquired:
+                    return {"status": "busy", "execution_allowed": False}
+                return self._protect_sync(spot, now)
+        finally:
+            _paper_scan_lock.release()
+
+    def _protect_sync(self, spot: dict, now: datetime | None) -> dict:
+        """Commit hard exits independently of all research work."""
+        db = open_xau_paper_session()
+        try:
+            account = self._active_account(db)
+            position = self._open_position(db, account.id) if account else None
+            trade = None
+            reason = None
+            if position:
+                quote = _paper_management_quote(position.side, spot)
+                if quote is not None:
+                    if (position.side == "long" and quote <= position.stop_loss) or (position.side == "short" and quote >= position.stop_loss):
+                        reason = "stop_loss"
+                    elif (position.side == "long" and quote >= position.target_price) or (position.side == "short" and quote <= position.target_price):
+                        reason = "target_price"
+                    elif position.opened_at and _position_age_minutes(position.opened_at, _utc_naive(now)) >= float(self.settings.xau_paper_max_hold_minutes):
+                        reason = "time_stop"
+                    if reason:
+                        fill = _paper_exit_fill_price(position.side, quote, position.stop_loss, position.target_price, reason)
+                        trade = self._close_position(db, account, position, fill, reason, _utc_naive(now),
+                                                     {"risk_path": "independent", "spot_source": spot.get("source")},
+                                                     research_metadata=False)
+                        position = None
+                        self._invalidate_memory()
+                    else:
+                        self._mark_position(account, position, spot)
+                        management = _position_guardian(position, {}, quote)
+                        new_stop = _number((management or {}).get("new_stop_loss"))
+                        if new_stop is not None:
+                            position.stop_loss = new_stop
+            db.commit()
+            return {"status": "ok", "protection_checked": True,
+                    "week_key": account.week_key if account else None,
+                    "account": _serialize_account(account), "position": _serialize_position(position),
+                    "closed_trade": _serialize_trade(trade) if trade else None,
+                    "opened": False, "execution_allowed": False}
+        except Exception:
+            db.rollback()
+            self._invalidate_memory()
+            self._autopsy_checked_at = 0.0
+            raise
+        finally:
+            db.close()
 
     def _scan_serialized(self, technical: dict, macro: dict, now: datetime | None) -> dict:
         if not _paper_scan_lock.acquire(blocking=False):
             return {"status": "busy", "reason": "paper_scan_in_progress", "execution_allowed": False}
         try:
-            return self._scan_sync(technical, macro, now)
+            with paper_writer_guard() as acquired:
+                if not acquired:
+                    return {"status": "busy", "execution_allowed": False}
+                return self._scan_sync(technical, macro, now)
         finally:
             _paper_scan_lock.release()
 
@@ -2100,6 +2251,7 @@ class XAUPaperTradingEngine:
         db = open_xau_paper_session()
         try:
             account = self._ensure_week(db, spot, now=now)
+            self._backfill_protective_autopsies(db)
             analysis_reference = technical.get("analysis_reference") or {}
             shadow_updates = self._update_shadow_outcomes(
                 db,
@@ -2131,6 +2283,7 @@ class XAUPaperTradingEngine:
                 exit_quote = _paper_management_quote(position.side, spot)
                 if exit_quote is None:
                     # Missing/closed fill market interrupts reversal confirmation.
+                    self._confirm_persisted_reversal(db, position, None, "", now_utc)
                     self._reversal_streaks.pop(reversal_key, None)
                 else:
                     exit_reason = None
@@ -2157,12 +2310,8 @@ class XAUPaperTradingEngine:
                             or technical.get("observed_at")
                             or ""
                         )
-                        position_management = _confirm_reversal_exit(
-                            reversal_key,
-                            position_management,
-                            self._reversal_streaks,
-                            observation_id=observation_id,
-                            required=2,
+                        position_management = self._confirm_persisted_reversal(
+                            db, position, position_management, observation_id, now_utc,
                         )
                         new_stop = _number(
                             (position_management or {}).get("new_stop_loss")
@@ -2266,6 +2415,8 @@ class XAUPaperTradingEngine:
             }
         except Exception:
             db.rollback()
+            self._invalidate_memory()
+            self._autopsy_checked_at = 0.0
             raise
         finally:
             db.close()

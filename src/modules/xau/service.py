@@ -693,6 +693,24 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     }
 
 
+def macro_entry_readiness(macro: dict[str, Any]) -> tuple[bool, str]:
+    """Unknown, failed or expired research is not a neutral market assessment."""
+    if macro.get("cache_stale") or macro.get("refresh_pending"):
+        return False, "macro_refresh_pending"
+    if not all(macro.get(key) is True for key in ("calendar_ok", "search_ok", "synthesis_ok")):
+        return False, "macro_inputs_unavailable"
+    try:
+        observed = datetime.fromisoformat(str(macro.get("observed_at") or "").replace("Z", "+00:00"))
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - observed).total_seconds()
+        if not 0 <= age <= _MACRO_TTL:
+            return False, "macro_expired"
+    except (TypeError, ValueError):
+        return False, "macro_timestamp_unavailable"
+    return True, "ready"
+
+
 def build_decision_fusion(
     technical: dict[str, Any],
     macro: dict[str, Any],
@@ -705,6 +723,7 @@ def build_decision_fusion(
     candidate = str(technical.get("candidate") or "none")
     technical_blocked = bool(technical.get("blocked"))
     event_risk = bool(macro.get("event_risk"))
+    macro_ready, macro_readiness_reason = macro_entry_readiness(macro)
     try:
         macro_bias = max(-1, min(1, int(macro.get("bias", 0))))
     except (TypeError, ValueError):
@@ -713,6 +732,8 @@ def build_decision_fusion(
     setup_direction = 1 if candidate == "long_setup" else -1 if candidate == "short_setup" else 0
     if setup_direction == 0:
         macro_relation = "not_applicable"
+    elif not macro_ready:
+        macro_relation = "unknown"
     elif macro_bias == 0:
         macro_relation = "neutral"
     elif macro_bias == setup_direction:
@@ -751,6 +772,9 @@ def build_decision_fusion(
     elif candidate == "none":
         base_state = "no_setup"
         reasons.append("no_aligned_technical_setup")
+    elif not macro_ready:
+        base_state = "macro_unavailable"
+        reasons.append(macro_readiness_reason)
     elif macro_relation == "conflict":
         base_state = "setup_macro_conflict"
         reasons.append("macro_bias_conflicts_with_technical_setup")
@@ -789,6 +813,8 @@ def build_decision_fusion(
         "macro_bias_label": macro.get("bias_label"),
         "macro_confidence": macro.get("confidence"),
         "macro_relation": macro_relation,
+        "macro_ready": macro_ready,
+        "macro_readiness_reason": macro_readiness_reason,
         "event_risk": event_risk,
         "event_kind": macro.get("event_kind"),
         "event_name": macro.get("event_name"),
@@ -1023,6 +1049,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
             "drivers": [],
             "search_ok": bool(raw),
             "search_error": search_error,
+            "synthesis_ok": False,
         }
 
         ai_event_gate = _validated_event_gate({}, now=macro_now)
@@ -1059,6 +1086,8 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     timeout=35,
                 )
                 parsed = _parse_json(answer)
+                if not parsed or parsed.get("bias") not in (-1, 0, 1) or not isinstance(parsed.get("summary"), str) or not parsed["summary"].strip():
+                    raise ValueError("invalid_macro_synthesis")
                 try:
                     bias = max(-1, min(1, int(parsed.get("bias", 0))))
                 except (TypeError, ValueError):
@@ -1073,6 +1102,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     now=macro_now,
                 )
                 data.update({
+                    "synthesis_ok": True,
                     "bias": bias,
                     "bias_label": "bullish" if bias > 0 else "bearish" if bias < 0 else "neutral",
                     "confidence": confidence,
