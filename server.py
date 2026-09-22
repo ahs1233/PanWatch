@@ -31,6 +31,7 @@ from src.modules.automation.agent_scheduler import AgentScheduler
 from src.modules.market.price_alert_scheduler import PriceAlertScheduler
 from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
+from src.modules.research.research_store import init_research_store
 from src.modules.xau.scheduler import XAUResearchScheduler
 from src.modules.xau.paper import XAUPaperTradingScheduler
 from src.modules.xau.replay import XAUReplayScheduler
@@ -1659,6 +1660,12 @@ async def lifespan(app):
     setup_proxy()  # 设置进程 env 代理(HTTP_PROXY/NO_PROXY);所有 httpx(trust_env=True)据此走代理
     setup_ssl()
     setup_playwright()
+
+    research_store_external = await asyncio.to_thread(init_research_store)
+    logger.info(
+        "Research durable store external=%s",
+        research_store_external,
+    )
 
     # Runtime smoke checks are observability probes, not readiness gates.
     # Run them in the background so an external AI/research outage cannot
