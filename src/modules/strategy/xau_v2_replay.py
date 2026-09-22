@@ -23,6 +23,7 @@ import json
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+from functools import cached_property
 from hashlib import sha256
 from typing import Any, Iterable
 
@@ -83,7 +84,7 @@ class XAUV2HistoricalDataset:
                 + ", ".join(sorted(missing))
             )
 
-    @property
+    @cached_property
     def fingerprint(self) -> str:
         payload = {
             "dataset_id": self.dataset_id,
