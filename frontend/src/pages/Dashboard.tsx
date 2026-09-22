@@ -104,6 +104,43 @@ export default function DashboardPage(){
   </section>
 
   <section className="mb-4 grid gap-3 lg:grid-cols-12">
+   <div className="card p-4 lg:col-span-7">
+    <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-semibold">Top-down bias</div><div className="mt-1 text-[10px] text-muted-foreground">Monthly → weekly → daily → 4H → 1H · EMA 9/21/50/200/1000</div></div><div className={'text-sm font-bold '+tone(context?.bias.today_direction)}>{nice(context?.bias.today_direction)} {context?Math.round(context.bias.today_score*100):'--'}</div></div>
+    <div className="mt-4 grid grid-cols-5 gap-2">
+     {[
+       ['1M',context?.bias.monthly],
+       ['1W',context?.bias.weekly],
+       ['1D',context?.bias.daily],
+       ['4H',context?.bias.h4],
+       ['1H',context?.bias.h1],
+     ].map(([label,state])=>{const s=state as BiasState|undefined;return <div key={String(label)} className="rounded-xl bg-accent/25 p-3"><div className="text-[10px] text-muted-foreground">{String(label)}</div><div className={'mt-1 text-xs font-semibold '+tone(s?.direction)}>{nice(s?.direction)}</div><div className="mt-1 font-mono text-[10px] text-muted-foreground">{s?Math.round(s.score*100):'--'}</div></div>})}
+    </div>
+    <div className="mt-3 grid gap-2 md:grid-cols-3">
+     {[
+       ['Daily',context?.bias.daily],
+       ['4H',context?.bias.h4],
+       ['1H',context?.bias.h1],
+     ].map(([label,state])=>{const s=state as BiasState|undefined;return <div key={String(label)} className="rounded-xl border border-border/60 p-3"><div className="text-[10px] font-semibold">{String(label)} EMA ladder</div><div className="mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-[9px] font-mono text-muted-foreground"><span>50 {fmt(s?.ema?.['50'])}</span><span>200 {fmt(s?.ema?.['200'])}</span><span>1000 {fmt(s?.ema?.['1000'])}</span></div></div>})}
+    </div>
+   </div>
+
+   <div className="card p-4 lg:col-span-5">
+    <div className="flex items-center justify-between"><div><div className="text-sm font-semibold">Liquidity & smart money</div><div className="mt-1 text-[10px] text-muted-foreground">Structure + participation + volume-at-price proxy</div></div><div className={'text-xs font-bold '+tone(context?.smart_money.bias)}>{nice(context?.smart_money.bias)}</div></div>
+    <div className="mt-4 grid grid-cols-3 gap-2 text-[10px]">
+     <div className="rounded-xl bg-accent/25 p-3"><span className="text-muted-foreground">POC</span><div className="mt-1 font-mono text-xs">{fmt(context?.volume_profile.poc)}</div></div>
+     <div className="rounded-xl bg-accent/25 p-3"><span className="text-muted-foreground">VAH</span><div className="mt-1 font-mono text-xs">{fmt(context?.volume_profile.vah)}</div></div>
+     <div className="rounded-xl bg-accent/25 p-3"><span className="text-muted-foreground">VAL</span><div className="mt-1 font-mono text-xs">{fmt(context?.volume_profile.val)}</div></div>
+    </div>
+    <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+     <div className="rounded-xl border border-border/60 p-3"><span className="text-muted-foreground">Cash flow</span><div className={'mt-1 text-xs font-semibold '+tone(context?.cash_flow.direction==='inflow'?'bullish':context?.cash_flow.direction==='outflow'?'bearish':'neutral')}>{nice(context?.cash_flow.direction)}</div><div className="mt-1 font-mono text-[9px] text-muted-foreground">CMF {fmt(context?.cash_flow.cmf20,3)} · ΔVol {fmt(context?.cash_flow.signed_tick_volume_imbalance,3)}</div></div>
+     <div className="rounded-xl border border-border/60 p-3"><span className="text-muted-foreground">Structure</span><div className="mt-1 text-xs font-semibold">{nice(context?.smart_money.break_of_structure)}</div><div className="mt-1 text-[9px] text-muted-foreground">Sweep {nice(context?.smart_money.liquidity_sweep)} · {nice(context?.smart_money.dealing_range?.zone)}</div></div>
+    </div>
+    <div className="mt-3 flex flex-wrap gap-2">{(context?.liquidity.levels||[]).slice(0,6).map(level=><span key={level.name} className="rounded-full bg-accent/35 px-2.5 py-1 text-[9px]"><b>{level.name}</b> <span className="font-mono">{fmt(level.price)}</span></span>)}</div>
+    <div className="mt-3 text-[9px] leading-4 text-muted-foreground">{context?.volume_note||'Higher-timeframe context is loading.'}</div>
+   </div>
+  </section>
+
+  <section className="mb-4 grid gap-3 lg:grid-cols-12">
    <div className="card p-5 lg:col-span-7">
     <div className="flex items-center justify-between"><div className="flex items-center gap-2"><Newspaper className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Macro & news context</h2></div><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${macro?.synthesis_ok?'bg-emerald-500/10 text-emerald-500':'bg-amber-500/10 text-amber-500'}`}>{macro?.synthesis_ok?'SYNTHESIZED':'DEGRADED'}</span></div>
     <p className="mt-4 text-sm leading-6">{macro?.summary||'Macro research is refreshing.'}</p>
