@@ -85,7 +85,7 @@ export default function DashboardPage(){
   <section className="mb-4 grid gap-3 lg:grid-cols-12">
    <div className="card p-5 lg:col-span-7">
     <div className="flex items-start justify-between gap-3">
-     <div><div className="text-xs text-muted-foreground">PanWatch decision</div><div className={`mt-1 text-2xl font-bold ${tone(snapshot?.candidate)}`}>{snapshot?.candidate==='long_setup'?'LONG SETUP':snapshot?.candidate==='short_setup'?'SHORT SETUP':'OBSERVE'}</div><div className="mt-1 text-sm text-muted-foreground">{statusText}</div></div>
+     <div><div className="text-xs text-muted-foreground">PanWatch decision</div><div className={'mt-1 text-2xl font-bold '+tone(direction)}>{directionLabel}</div><div className="mt-1 text-sm text-muted-foreground">{statusText}</div><div className="mt-1 text-[10px] text-muted-foreground">{plan?.setup_confirmed?'Strict entry setup confirmed':'Directional bias only · entry trigger not yet confirmed'}</div></div>
      <div className="text-right"><div className="text-xs text-muted-foreground">Decision score</div><div className="mt-1 font-mono text-3xl font-bold">{score}<span className="text-sm text-muted-foreground"> / 100</span></div><div className="text-[10px] text-muted-foreground">not win probability</div></div>
     </div>
     <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -95,7 +95,7 @@ export default function DashboardPage(){
    <div className="card p-5 lg:col-span-5">
     <div className="flex items-center gap-2"><Brain className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Why now</h2></div>
     <div className="mt-4 space-y-2 text-xs">
-     <div className="flex justify-between"><span className="text-muted-foreground">Technical alignment</span><b className={tone(direction)}>{nice(direction)}</b></div>
+     <div className="flex justify-between"><span className="text-muted-foreground">Directional edge</span><b className={tone(direction)}>{nice(direction)} {edge?Math.round(edge.strength*100)+'%':''}</b></div>
      <div className="flex justify-between"><span className="text-muted-foreground">Macro relation</span><b>{nice(fusion?.macro_relation)}</b></div>
      <div className="flex justify-between"><span className="text-muted-foreground">Adversarial check</span><b>{cog?.adversarial.veto?'VETO':'CLEAR'}</b></div>
      <div className="flex justify-between"><span className="text-muted-foreground">Execution</span><b className="text-amber-500">LOCKED</b></div>
