@@ -16,6 +16,15 @@ from typing import Any
 
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
+from src.modules.xau.market_structure import (
+    aggregate_bars,
+    ema_stack,
+    fair_value_gaps,
+    flow_proxy,
+    liquidity_map,
+    top_down_bias,
+    volume_profile,
+)
 from src.modules.xau.market_context import build_market_context
 from src.platform.ai.ai_client import AIClient
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
@@ -46,6 +55,7 @@ _MICRO_TTL = 15.0
 _SERIES_TTL = 15.0
 _MACRO_TTL = 180.0
 _CONSENSUS_TTL = 60.0
+_CONTEXT_TTL = 300.0
 _MARKET_CONTEXT_TTL = 120.0
 _bars_cache = None
 _spot_cache = None
@@ -55,6 +65,7 @@ _series_cache = None
 _macro_cache = None
 _macro_last_good = None
 _macro_refresh_task = None
+_context_cache = None
 _market_context_cache = None
 _bars_lock = asyncio.Lock()
 _spot_lock = asyncio.Lock()
@@ -62,6 +73,7 @@ _consensus_lock = asyncio.Lock()
 _micro_lock = asyncio.Lock()
 _series_lock = asyncio.Lock()
 _macro_lock = asyncio.Lock()
+_context_lock = asyncio.Lock()
 _market_context_lock = asyncio.Lock()
 
 
@@ -101,7 +113,7 @@ async def get_research_bars(force: bool = False):
                 return await asyncio.to_thread(
                     biquote.bars,
                     timeframe,
-                    limit=240,
+                    limit=1000,
                 )
             except Exception:
                 return []
