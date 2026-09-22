@@ -26,6 +26,7 @@ from src.modules.xau.market_structure import (
     volume_profile,
 )
 from src.modules.xau.market_context import build_market_context
+from src.modules.xau.library_intelligence import library_consensus, vectorbt_validation
 from src.platform.ai.ai_client import AIClient
 from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.marketdata.xau_biquote import (
@@ -297,6 +298,52 @@ async def get_market_context(force: bool = False) -> dict[str, Any]:
     stale["refresh_pending"] = True
     stale["cache_age_seconds"] = round(max(0.0, now - _market_context_cache[0]), 3)
     return stale
+
+
+async def get_library_validation(force: bool = False) -> dict[str, Any]:
+    """Run the independent XAU analytics stack on a common 1h sample.
+
+    This endpoint is research/validation only. It never unlocks live execution.
+    """
+    provider = BiquoteXAUOHLCProvider()
+    yahoo = YahooGoldResearchProvider()
+    rows = []
+    try:
+        rows = await asyncio.to_thread(
+            provider.bars,
+            XAUTimeframe.H1,
+            limit=1000,
+            timeout_seconds=14.0,
+        )
+    except Exception:
+        try:
+            rows = await asyncio.wait_for(
+                asyncio.to_thread(yahoo.bars, XAUTimeframe.H1),
+                timeout=12.0,
+            )
+        except Exception:
+            rows = []
+
+    rows = sorted(rows, key=lambda row: row.timestamp)
+    consensus = await asyncio.to_thread(
+        library_consensus,
+        rows[-500:] if len(rows) > 500 else rows,
+    )
+    backtest = await asyncio.to_thread(vectorbt_validation, rows)
+    return {
+        "instrument": "XAUUSD",
+        "timeframe": "1h",
+        "bar_count": len(rows),
+        "observed_at": rows[-1].timestamp.isoformat() if rows else None,
+        "library_consensus": consensus,
+        "vectorbt_validation": backtest,
+        "structure_scope_reference": {
+            "mode": "reference_architecture",
+            "runtime_dependency": False,
+            "reason": "structure-scope pins MetaTrader5, which is not Linux/Railway compatible; PanWatch implements its multi-timeframe/session concepts over the existing MT5-compatible HTTP data provider instead.",
+        },
+        "execution_allowed": False,
+    }
 
 
 async def get_chart_series(
