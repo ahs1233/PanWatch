@@ -32,6 +32,7 @@ from src.modules.research.reasoning_store import (
     persist_claim_graph,
     persist_falsification_engine,
 )
+from src.platform.persistence.models import ResearchProbeAttemptRecord
 from src.platform.persistence.migrations import (
     _m127_research_evidence_foundation,
     _m128_claim_graph_and_falsification,
@@ -214,6 +215,16 @@ class _StaticExtractor:
         return list(self.findings)
 
 
+class _FailingExtractor:
+    def __init__(self, exc):
+        self.exc = exc
+        self.calls = 0
+
+    async def extract(self, **_kwargs):
+        self.calls += 1
+        raise self.exc
+
+
 @pytest.mark.asyncio
 async def test_counter_research_adds_evidence_and_changes_belief():
     _engine, db = _db()
@@ -363,3 +374,81 @@ def test_migration_130_creates_loop_tables_and_indexes():
         for row in inspector.get_indexes("research_probe_attempts")
     }
     assert "ix_research_probe_key_attempted" in indexes
+
+
+
+@pytest.mark.asyncio
+async def test_classifier_timeout_persists_raw_evidence_without_touching_claim():
+    _engine, db = _db()
+    try:
+        ledger, graph, falsification, claim = _base_graph()
+        persist_ledger(db, ledger)
+        persist_claim_graph(db, graph)
+        persist_falsification_engine(db, falsification)
+
+        gateway = _FakeGateway(
+            [
+                ResearchDocument(
+                    url="https://independent.example.com/raw-report",
+                    title="Independent raw report",
+                    text=(
+                        "Gold market positioning remains mixed. "
+                        "Treasury yields moved lower while the dollar stayed firm."
+                    ),
+                    tool_name="reach_read_url",
+                    publisher="Independent",
+                )
+            ]
+        )
+        loop = AutomaticResearchLoop(
+            graph=graph,
+            ledger=ledger,
+            falsification=falsification,
+            gateway=gateway,
+            extractor=_FailingExtractor(TimeoutError()),
+            max_probes=1,
+            max_sources_per_probe=1,
+            cooldown_minutes=180,
+        )
+        result = await loop.run(
+            db=db,
+            evaluated_at=T0 + timedelta(minutes=5),
+        )
+
+        raw = [
+            row
+            for row in ledger.records
+            if row.observation_kind is ObservationKind.RAW_SOURCE
+        ]
+        assert result.status == "success_degraded"
+        assert result.raw_evidence_added == 1
+        assert result.classified_evidence_added == 0
+        assert result.evidence_added == 1
+        assert result.beliefs_changed == 0
+        assert len(raw) == 1
+        assert raw[0].claim_key == f"raw.{claim.claim_id}"
+        assert raw[0].relation is EvidenceRelation.CONTEXT
+        assert raw[0].metadata["unclassified_raw"] is True
+        assert all(
+            link.evidence_id != raw[0].evidence_id
+            for link in graph.evidence_links
+        )
+
+        attempt = (
+            db.query(ResearchProbeAttemptRecord)
+            .order_by(ResearchProbeAttemptRecord.attempted_at.desc())
+            .first()
+        )
+        assert attempt.status == "raw_only"
+        assert attempt.evidence_count == 1
+        assert attempt.error_code == "TimeoutError"
+
+        second = await loop.run(
+            db=db,
+            evaluated_at=T0 + timedelta(minutes=15),
+        )
+        assert second.probes_executed == 0
+        assert second.probes_skipped_cooldown >= 1
+        assert gateway.search_calls == 1
+    finally:
+        db.close()
