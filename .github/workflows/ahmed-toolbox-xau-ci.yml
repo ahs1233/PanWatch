@@ -12,6 +12,7 @@ on:
       - "src/modules/strategy/xau_intraday.py"
       - "src/modules/strategy/xau_strategy_exporter.py"
       - "src/modules/strategy/xau_v2.py"
+      - "src/modules/strategy/xau_v2_replay.py"
       - "src/modules/strategy/trading_engine.py"
       - "src/modules/strategy/trading_engine_adapters.py"
       - "src/modules/strategy/validation/**"
@@ -30,6 +31,7 @@ on:
       - "ci_tests/test_xau_resilience.py"
       - "ci_tests/test_xau_strategy_exporter.py"
       - "ci_tests/test_xau_strategy_v2.py"
+      - "ci_tests/test_xau_v2_replay.py"
       - "ci_tests/test_trading_engine_core.py"
       - "ci_tests/test_trading_validation_v1.py"
       - "ci_tests/test_panwatch_benchmark_v1.py"
@@ -89,6 +91,7 @@ jobs:
             src/modules/strategy/xau_intraday.py \
             src/modules/strategy/xau_strategy_exporter.py \
             src/modules/strategy/xau_v2.py \
+            src/modules/strategy/xau_v2_replay.py \
             src/modules/strategy/trading_engine.py \
             src/modules/strategy/trading_engine_adapters.py \
             src/modules/strategy/validation \
@@ -100,7 +103,18 @@ jobs:
       - name: Run focused tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py ci_tests/test_xau_replay.py ci_tests/test_xau_resilience.py ci_tests/test_xau_strategy_exporter.py ci_tests/test_xau_strategy_v2.py ci_tests/test_trading_engine_core.py ci_tests/test_trading_validation_v1.py ci_tests/test_panwatch_benchmark_v1.py ci_tests/test_research_evidence_foundation.py ci_tests/test_research_claim_graph_falsification.py ci_tests/test_panwatch_economic_benchmark_v1.py ci_tests/test_panwatch_reasoning_benchmark_v1.py ci_tests/test_research_persistent_belief_state.py ci_tests/test_research_external_store.py ci_tests/test_research_automatic_loop.py ci_tests/test_research_claim_acquisition.py ci_tests/test_research_entity_identity.py ci_tests/test_panwatch_belief_benchmark_v1.py ci_tests/test_panwatch_automatic_research_benchmark_v1.py ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py ci_tests/test_panwatch_company_sector_benchmark_v1.py
+        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py ci_tests/test_xau_replay.py ci_tests/test_xau_resilience.py ci_tests/test_xau_strategy_exporter.py ci_tests/test_xau_strategy_v2.py ci_tests/test_xau_v2_replay.py ci_tests/test_trading_engine_core.py ci_tests/test_trading_validation_v1.py ci_tests/test_panwatch_benchmark_v1.py ci_tests/test_research_evidence_foundation.py ci_tests/test_research_claim_graph_falsification.py ci_tests/test_panwatch_economic_benchmark_v1.py ci_tests/test_panwatch_reasoning_benchmark_v1.py ci_tests/test_research_persistent_belief_state.py ci_tests/test_research_external_store.py ci_tests/test_research_automatic_loop.py ci_tests/test_research_claim_acquisition.py ci_tests/test_research_entity_identity.py ci_tests/test_panwatch_belief_benchmark_v1.py ci_tests/test_panwatch_automatic_research_benchmark_v1.py ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py ci_tests/test_panwatch_company_sector_benchmark_v1.py
+
+      - name: Run XAU Strategy v2 Causal Ablation Benchmark
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python benchmarks/xau_v2_ablation_v1/run.py > xau-v2-ablation-${{ matrix.python-version }}.json
+
+      - name: Upload XAU Strategy v2 ablation benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: xau-v2-ablation-v1-python-${{ matrix.python-version }}
+          path: xau-v2-ablation-${{ matrix.python-version }}.json
 
       - name: Run Trading Validation Benchmark v1
         env:
