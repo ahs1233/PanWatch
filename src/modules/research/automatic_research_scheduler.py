@@ -76,10 +76,15 @@ class AutomaticResearchScheduler:
 
     def start(self) -> None:
         interval = max(15, int(self.settings.auto_research_interval_minutes))
+        bootstrap_delay_seconds = (
+            150
+            if self.settings.panwatch_profile.strip().lower() == "xau"
+            else 20
+        )
         self.scheduler.add_job(
             self._run,
             "date",
-            run_date=datetime.now(self.scheduler.timezone) + timedelta(seconds=20),
+            run_date=datetime.now(self.scheduler.timezone) + timedelta(seconds=bootstrap_delay_seconds),
             id="automatic_research_bootstrap",
             replace_existing=True,
             coalesce=True,
