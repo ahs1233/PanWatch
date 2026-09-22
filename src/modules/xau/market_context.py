@@ -183,16 +183,28 @@ def volume_profile(rows: list[XAUBar], bins: int = 40, value_area: float = 0.70)
     hvn = sorted(range(bins), key=lambda i: profile[i], reverse=True)[:4]
     positive = [i for i, value in enumerate(profile) if value > 0]
     lvn = sorted(positive, key=lambda i: profile[i])[:4]
+    latest = float(usable[-1].close)
+    vah = max(centers[i] for i in selected)
+    val = min(centers[i] for i in selected)
     return {
         "available": True,
         "poc": round(centers[poc_index], 4),
-        "vah": round(max(centers[i] for i in selected), 4),
-        "val": round(min(centers[i] for i in selected), 4),
+        "vah": round(vah, 4),
+        "val": round(val, 4),
+        "location": "above_value" if latest > vah else "below_value" if latest < val else "inside_value",
         "hvn": [round(centers[i], 4) for i in hvn],
         "lvn": [round(centers[i], 4) for i in lvn],
         "range_low": round(low, 4),
         "range_high": round(high, 4),
         "total_tick_volume": round(total, 2),
+        "bins": [
+            {
+                "price": round(centers[i], 4),
+                "volume": round(profile[i], 2),
+                "share": round(profile[i] / total, 6) if total else 0.0,
+            }
+            for i in range(bins)
+        ],
         "source_type": "mt5_tick_volume_proxy",
         "centralized_volume": False,
     }
@@ -378,6 +390,7 @@ def build_market_context(
     hourly: list[XAUBar],
     h4: list[XAUBar],
     daily: list[XAUBar],
+    futures_hourly: list[XAUBar] | None = None,
 ) -> dict[str, Any]:
     weekly = aggregate_bars(daily, XAUTimeframe.W1)
     monthly = aggregate_bars(daily, XAUTimeframe.MN1)
@@ -405,10 +418,38 @@ def build_market_context(
 
     profile = volume_profile(hourly[-160:])
     flow = cash_flow(hourly, 20)
+    futures_flow = cash_flow(futures_hourly or [], 20)
     liquidity = liquidity_map(daily, hourly)
-    smart_money = smart_money_structure(hourly, h4, liquidity, profile, flow)
 
-    today_score = 0.62 * composite + 0.23 * float(smart_money.get("score") or 0.0) + 0.15 * float(flow.get("score") or 0.0)
+    spot_flow_score = float(flow.get("score") or 0.0)
+    futures_flow_score = float(futures_flow.get("score") or 0.0) if futures_flow.get("available") else 0.0
+    if futures_flow.get("available") and flow.get("available"):
+        combined_flow_score = 0.55 * spot_flow_score + 0.45 * futures_flow_score
+        flow_agreement = (
+            "aligned"
+            if (spot_flow_score == 0 or futures_flow_score == 0 or spot_flow_score * futures_flow_score > 0)
+            else "divergent"
+        )
+    elif futures_flow.get("available"):
+        combined_flow_score = futures_flow_score
+        flow_agreement = "futures_only"
+    else:
+        combined_flow_score = spot_flow_score
+        flow_agreement = "spot_tick_only"
+
+    combined_flow = {
+        "available": bool(flow.get("available") or futures_flow.get("available")),
+        "score": round(max(-1.0, min(1.0, combined_flow_score)), 4),
+        "direction": "inflow" if combined_flow_score >= 0.08 else "outflow" if combined_flow_score <= -0.08 else "balanced",
+        "agreement": flow_agreement,
+        "spot_tick": flow,
+        "gc_futures": futures_flow,
+    }
+
+    smart_money = smart_money_structure(hourly, h4, liquidity, profile, combined_flow)
+    smart_score = float(smart_money.get("score") or 0.0)
+
+    today_score = 0.58 * composite + 0.24 * smart_score + 0.18 * combined_flow_score
     today_score = max(-1.0, min(1.0, today_score))
     today_direction = "bullish" if today_score >= 0.15 else "bearish" if today_score <= -0.15 else "neutral"
 
@@ -430,11 +471,14 @@ def build_market_context(
             for name, state in biases.items()
         },
         "volume_profile": profile,
-        "cash_flow": flow,
+        "cash_flow": combined_flow,
+        "spot_tick_flow": flow,
+        "futures_flow": futures_flow,
         "liquidity": liquidity,
         "smart_money": smart_money,
         "volume_note": (
             "XAUUSD is OTC; MT5 tick volume is an activity proxy, not centralized exchange volume. "
-            "Use it for relative participation and structure, not as literal global traded volume."
+            "GC futures volume is used only as a cross-market participation proxy. Neither is treated "
+            "as literal global spot order flow."
         ),
     }
