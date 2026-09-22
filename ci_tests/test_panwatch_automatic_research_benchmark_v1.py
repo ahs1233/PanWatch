@@ -14,7 +14,7 @@ def test_automatic_research_track_has_frozen_case_coverage():
 
 def test_automatic_research_track_regression_gate():
     report = run_automatic_research_benchmark()
-    assert report["version"] == "1.4.0"
+    assert report["version"] == "1.5.0"
     assert report["track"] == "automatic_research_loop"
     assert report["total_cases"] == 6
     assert report["regression_gate_percent"] == 90.0
