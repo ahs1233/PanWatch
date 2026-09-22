@@ -350,6 +350,122 @@ def _perception(technical: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _directional_edge(
+    technical: dict[str, Any],
+    macro: dict[str, Any],
+    perception: dict[str, Any],
+    data_quality: float,
+) -> dict[str, Any]:
+    """Continuous market lean independent from the stricter entry trigger.
+
+    The previous engine collapsed weak-but-useful states into candidate=none.
+    This layer preserves a continuous directional edge while keeping execution
+    gated behind the stricter setup logic.
+    """
+    frames = technical.get("frames") or {}
+    weights = {"1m": 0.18, "5m": 0.34, "15m": 0.48}
+    trend = 0.0
+    ema_structure = 0.0
+    active_weight = 0.0
+    for name, weight in weights.items():
+        frame = frames.get(name) or {}
+        if not frame:
+            continue
+        active_weight += weight
+        trend += weight * _direction_value(frame.get("direction"))
+        atr = max(1e-9, abs(_number(frame.get("atr14"), 0.0)))
+        gap = (_number(frame.get("ema_fast")) - _number(frame.get("ema_slow"))) / atr
+        ema_structure += weight * _clip(gap / 1.5, -1.0, 1.0)
+    if active_weight > 0:
+        trend /= active_weight
+        ema_structure /= active_weight
+
+    micro = technical.get("micro") or {}
+    ret10 = _number(perception.get("return_10m_pct"), 0.0)
+    ret30 = _number(perception.get("return_30m_pct"), 0.0)
+    momentum = (
+        0.55 * _clip(ret10 / 0.18, -1.0, 1.0)
+        + 0.30 * _clip(ret30 / 0.40, -1.0, 1.0)
+        + 0.15 * _direction_value(micro.get("direction"))
+    )
+
+    rsi5 = _number(perception.get("rsi_5m"), 50.0)
+    rsi15 = _number(perception.get("rsi_15m"), 50.0)
+    rsi_impulse = (
+        0.60 * _clip((rsi5 - 50.0) / 28.0, -1.0, 1.0)
+        + 0.40 * _clip((rsi15 - 50.0) / 28.0, -1.0, 1.0)
+    )
+
+    breakout = str(perception.get("breakout") or "none").lower()
+    breakout_score = 1.0 if breakout == "up" else -1.0 if breakout == "down" else 0.0
+
+    macro_bias = max(-1.0, min(1.0, _number(macro.get("bias"), 0.0)))
+    macro_conf = _clip(_number(macro.get("confidence"), 0.0))
+    market_time = _parse_time(technical.get("observed_at"))
+    macro_time = _parse_time(macro.get("observed_at"))
+    macro_age = None
+    macro_freshness = 0.0
+    if market_time and macro_time:
+        macro_age = max(0.0, (market_time - macro_time).total_seconds())
+        if macro_age <= 180:
+            macro_freshness = 1.0
+        elif macro_age <= 600:
+            macro_freshness = 0.55
+        elif macro_age <= 1800:
+            macro_freshness = 0.25
+    macro_component = macro_bias * macro_conf * macro_freshness
+
+    candidate = str(technical.get("candidate") or "none")
+    candidate_component = 1.0 if candidate == "long_setup" else -1.0 if candidate == "short_setup" else 0.0
+
+    score = (
+        0.29 * trend
+        + 0.20 * ema_structure
+        + 0.22 * momentum
+        + 0.10 * rsi_impulse
+        + 0.07 * breakout_score
+        + 0.07 * macro_component
+        + 0.05 * candidate_component
+    )
+    score *= 0.55 + 0.45 * _clip(data_quality)
+    score = _clip(score, -1.0, 1.0)
+    strength = abs(score)
+
+    if score >= 0.18:
+        direction = "bullish"
+    elif score <= -0.18:
+        direction = "bearish"
+    else:
+        direction = "neutral"
+
+    if strength >= 0.58:
+        band = "strong"
+    elif strength >= 0.36:
+        band = "moderate"
+    elif strength >= 0.18:
+        band = "weak"
+    else:
+        band = "none"
+
+    return {
+        "score": round(score, 4),
+        "direction": direction,
+        "strength": round(strength, 4),
+        "band": band,
+        "macro_age_seconds": round(macro_age, 1) if macro_age is not None else None,
+        "macro_freshness": round(macro_freshness, 3),
+        "components": {
+            "trend": round(trend, 4),
+            "ema_structure": round(ema_structure, 4),
+            "momentum": round(momentum, 4),
+            "rsi_impulse": round(rsi_impulse, 4),
+            "breakout": round(breakout_score, 4),
+            "macro": round(macro_component, 4),
+            "candidate": round(candidate_component, 4),
+        },
+    }
+
+
 def _regime(
     perception: dict[str, Any],
     technical: dict[str, Any],
