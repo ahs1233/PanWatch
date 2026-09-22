@@ -31,6 +31,7 @@ from src.modules.automation.agent_scheduler import AgentScheduler
 from src.modules.market.price_alert_scheduler import PriceAlertScheduler
 from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
+from src.modules.research.belief_scheduler import PersistentBeliefScheduler
 from src.modules.xau.scheduler import XAUResearchScheduler
 from src.modules.xau.paper import XAUPaperTradingScheduler
 from src.modules.xau.replay import XAUReplayScheduler
@@ -61,6 +62,7 @@ context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
 xau_research_scheduler: XAUResearchScheduler | None = None
 xau_paper_scheduler: XAUPaperTradingScheduler | None = None
 xau_replay_scheduler: XAUReplayScheduler | None = None
+persistent_belief_scheduler: PersistentBeliefScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -1684,7 +1686,7 @@ async def lifespan(app):
 
     seed_agents()
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler, persistent_belief_scheduler
 
     if xau_mode:
         # Keep the process focused on XAU/USD. The original stock catalogue,
@@ -1775,6 +1777,29 @@ async def lifespan(app):
             register_mcp_log_cleanup(scheduler)
         except Exception as e:
             logger.error(f"MCP 日志清理任务注册失败: {e}")
+
+    belief_enabled = os.environ.get(
+        "PANWATCH_BELIEF_ENABLED", "true"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if belief_enabled:
+        try:
+            belief_interval = int(
+                os.environ.get(
+                    "PANWATCH_BELIEF_SCAN_SECONDS",
+                    "60",
+                )
+            )
+            persistent_belief_scheduler = PersistentBeliefScheduler(
+                timezone=settings.app_timezone,
+                interval_seconds=belief_interval,
+            )
+            persistent_belief_scheduler.start()
+        except Exception as e:
+            logger.error(
+                "Persistent belief scheduler startup failed: %s",
+                type(e).__name__,
+            )
+
     yield
     if scheduler:
         scheduler.shutdown()
@@ -1796,6 +1821,9 @@ async def lifespan(app):
     if xau_replay_scheduler:
         xau_replay_scheduler.shutdown()
         logger.info("XAU paper scheduler stopped")
+    if persistent_belief_scheduler:
+        persistent_belief_scheduler.shutdown()
+        logger.info("Persistent belief scheduler stopped")
     if runtime_smoke_task and not runtime_smoke_task.done():
         runtime_smoke_task.cancel()
         await asyncio.gather(runtime_smoke_task, return_exceptions=True)
