@@ -20,7 +20,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -101,6 +101,29 @@ _PAGE_METADATA_RE = re.compile(
     r"date\s+published|reading\s+time|author|byline)\s*:\s*",
     re.IGNORECASE,
 )
+_STRUCTURAL_NON_CLAIM_RE = re.compile(
+    r"^\s*(?:#{1,6}\s+|"
+    r"(?:figure|fig\.?|table|chart|source|note|section|contents?)\s*[:#-]\s*)",
+    re.IGNORECASE,
+)
+
+
+def _is_structural_non_claim(text: str) -> bool:
+    value = normalize_text(str(text or ""))
+    if not value:
+        return True
+    if _STRUCTURAL_NON_CLAIM_RE.search(value):
+        return True
+    words = re.findall(r"\b[\w%-]+\b", value, flags=re.UNICODE)
+    if len(words) <= 10 and not re.search(r"[.!?]$", value):
+        if re.match(
+            r"^(?:share|breakdown|distribution|overview|summary|"
+            r"electricity consumption|market share|capacity|production)\b",
+            value,
+            flags=re.IGNORECASE,
+        ):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -217,6 +240,7 @@ def _active_claims(graph: ClaimGraph) -> list[ClaimNode]:
         claim
         for claim in graph.claims
         if claim.claim_id not in superseded
+        and not bool(claim.metadata.get("admission_invalidated"))
     ]
 
 
@@ -282,6 +306,8 @@ def _deterministic_grounded_candidates(
         if _BOILERPLATE_RE.search(sentence):
             continue
         if _PAGE_METADATA_RE.search(sentence):
+            continue
+        if _is_structural_non_claim(sentence):
             continue
         if sentence.count("http") or sentence.count("|") > 2:
             continue
@@ -645,6 +671,23 @@ class GeneralClaimAcquisition:
             seed_topic,
             "|".join(document.url for document in documents),
         )
+
+        stale_before = started - timedelta(minutes=10)
+        stale_runs = (
+            db.query(ResearchAcquisitionRunRecord)
+            .filter(
+                ResearchAcquisitionRunRecord.status == "running",
+                ResearchAcquisitionRunRecord.started_at < stale_before,
+            )
+            .all()
+        )
+        for stale in stale_runs:
+            stale.status = "abandoned"
+            stale.completed_at = started
+            stale.error = "stale_acquisition_recovered"
+        if stale_runs:
+            db.commit()
+
         run = ResearchAcquisitionRunRecord(
             run_id=run_id,
             started_at=started,
@@ -760,6 +803,12 @@ class GeneralClaimAcquisition:
                     ):
                         decision = "rejected"
                         reason = "page_metadata"
+                    elif (
+                        _is_structural_non_claim(normalized_quote)
+                        or _is_structural_non_claim(normalized_statement)
+                    ):
+                        decision = "rejected"
+                        reason = "structural_non_claim"
                     elif not candidate.testable:
                         decision = "rejected"
                         reason = "not_testable"
