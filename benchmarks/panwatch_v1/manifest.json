@@ -1,6 +1,6 @@
 {
   "benchmark": "PanWatch Benchmark v1",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "purpose": "Measure current PanWatch decision integrity without confusing implemented core behavior with future research-engine capabilities.",
   "tracks": [
     {
@@ -26,7 +26,7 @@
     },
     {
       "id": "economic_research",
-      "status": "specified_not_automated",
+      "status": "automated_evidence_integrity",
       "tasks": [
         "actual_vs_forecast_macro_release",
         "revision_vs_original_release",
@@ -38,7 +38,9 @@
         "oil_shock_delayed_transmission",
         "forecast_to_realization_update",
         "confidence_change_after_new_evidence"
-      ]
+      ],
+      "runner": "benchmarks.panwatch_v1.economic_runner",
+      "scope_note": "Automated frozen-fixture checks for evidence semantics; not a live research superiority benchmark."
     },
     {
       "id": "company_sector_research",
@@ -73,8 +75,9 @@
     "human_researcher"
   ],
   "notes": [
-    "Only xau_decision_core is automated in v1.",
-    "The two research tracks are test specifications, not claimed capabilities.",
-    "External baseline comparison is intentionally not faked without configured model access and human labels."
+    "xau_decision_core is automated as a deterministic decision-core regression track.",
+    "economic_research now has an automated evidence-integrity foundation track using frozen fixtures.",
+    "company_sector_research remains specified but not automated.",
+    "External baseline comparison is intentionally not faked without configured model access, live/frozen source packets and human labels."
   ]
 }
