@@ -6,11 +6,20 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import XAUChart, { type XAUChartBar } from '@/components/XAUChart'
 
 type Frame = { timeframe:string; close:number; ema_fast:number; ema_slow:number; rsi14:number; atr14:number; direction:string; recent_swing_high:number; recent_swing_low:number }
-type Snapshot = { indicative_spot?:{price:number;bid:number|null;ask:number|null;spread_bps:number|null;source:string;is_stale:boolean}|null; micro?:{direction:string;return_10m_pct:number|null;return_30m_pct:number|null;source:string}|null; candidate:string; alignment:string; blocked:boolean; block_reasons:string[]; warnings:string[]; atr_reference:number|null; swing_high_reference:number|null; swing_low_reference:number|null; frames:Record<string,Frame>; disclaimer:string }
+type BiasState = { direction:string; score:number; close?:number; ema?:Record<string,number|null>; available?:boolean }
+type MarketContext = {
+ bias:{monthly:BiasState;weekly:BiasState;daily:BiasState;h4:BiasState;h1:BiasState;composite_score:number;composite_direction:string;today_score:number;today_direction:string}
+ volume_profile:{available:boolean;poc?:number;vah?:number;val?:number;hvn?:number[];lvn?:number[];source_type?:string;centralized_volume?:boolean}
+ cash_flow:{available:boolean;direction?:string;score?:number;cmf20?:number;signed_tick_volume_imbalance?:number}
+ liquidity:{available:boolean;levels?:Array<{name:string;price:number;side:string;distance:number}>;equal_highs?:number[];equal_lows?:number[]}
+ smart_money:{available:boolean;bias?:string;score?:number;break_of_structure?:string;liquidity_sweep?:string;displacement?:string;dealing_range?:{high:number;low:number;midpoint:number;zone:string};fair_value_gaps?:Array<{direction:string;low:number;high:number;time:string}>}
+ volume_note?:string
+}
+type Snapshot = { indicative_spot?:{price:number;bid:number|null;ask:number|null;spread_bps:number|null;source:string;is_stale:boolean}|null; micro?:{direction:string;return_10m_pct:number|null;return_30m_pct:number|null;source:string}|null; candidate:string; alignment:string; blocked:boolean; block_reasons:string[]; warnings:string[]; atr_reference:number|null; swing_high_reference:number|null; swing_low_reference:number|null; frames:Record<string,Frame>; market_context?:MarketContext|null; market_context_error?:string|null; disclaimer:string }
 type Macro = { bias:number; bias_label:string; confidence:number; event_risk:boolean; summary:string; drivers:string[]; search_ok:boolean; synthesis_ok?:boolean; synthesis_error?:string|null; refresh_pending?:boolean }
 type Hypothesis = { name:string; weight:number; direction:string }
 type Scenario = { name:string; direction:string; weight:number; target:number|null; trigger:number|string|null; trigger_kind?:string; invalidation:number|null }
-type Edge = { score:number; direction:string; strength:number; band:string; macro_freshness:number; components:Record<string,number> }
+type Edge = { score:number; direction:string; strength:number; band:string; macro_freshness:number; higher_timeframe_score?:number; higher_timeframe_direction?:string; higher_timeframe_conflict?:boolean; smart_money_score?:number; cash_flow_score?:number; components:Record<string,number> }
 type ActivationCondition = { key:string; label:string; status:'satisfied'|'pending'|'failed'; current:number|string|null; threshold:number|string|null }
 type ActivationState = { state:string; conditions:ActivationCondition[]; satisfied:number; pending:number; failed:number; total:number }
 type Plan = { action:string; side:string|null; setup_confirmed:boolean; trigger_level:number|null; trigger_state?:string; activation?:ActivationState; activation_conditions:ActivationCondition[]; invalidation_reference:number|null; dominant_scenario?:string; dominant_scenario_direction?:string; dominant_scenario_weight?:number; scenario_conflict?:boolean; reasons:string[] }
@@ -35,7 +44,7 @@ export default function DashboardPage(){
  useEffect(()=>{void load();fetch('/api/runtime-readiness').then(r=>r.json()).then(b=>setReady(b?.data||b)).catch(()=>{});const id=window.setInterval(()=>void refreshQuiet(),20000);return()=>window.clearInterval(id)},[load,refreshQuiet])
  useEffect(()=>{void loadChart(timeframe);const id=window.setInterval(()=>void loadChart(timeframe,false,true),20000);return()=>window.clearInterval(id)},[timeframe,loadChart])
  const cog=fusion?.cognition; const edge=cog?.directional_edge; const plan=cog?.execution_plan; const scenarios=cog?.scenarios||[]; const score=Math.round((cog?.confidence.calibrated_confidence||0)*100); const quality=Math.round((cog?.data_quality.score||0)*100)
- const price=snapshot?.indicative_spot?.price; const direction=edge?.direction||snapshot?.alignment||'mixed'
+ const context=snapshot?.market_context; const price=snapshot?.indicative_spot?.price; const direction=edge?.direction||snapshot?.alignment||'mixed'
  const directionLabel=direction==='bullish'?'BULLISH LEAN':direction==='bearish'?'BEARISH LEAN':'NO CLEAR EDGE'
  const statusText=plan?.action?nice(plan.action):nice(fusion?.state)
  const gates=[...(snapshot?.block_reasons||[]),...(snapshot?.warnings||[]),...(cog?.adversarial.counter_evidence||[])]
