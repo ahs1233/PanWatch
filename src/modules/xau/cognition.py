@@ -1290,8 +1290,9 @@ def build_cognitive_state(
     min_confidence = _clip(float(min_confidence), 0.50, 0.90)
     data_quality, quality_issues, sensors = _data_quality(technical)
     perception = _perception(technical)
+    edge = _directional_edge(technical, macro, perception, data_quality)
     regime = _regime(perception, technical, macro, data_quality)
-    hypotheses = _hypotheses(technical, macro, perception, regime)
+    hypotheses = _hypotheses(technical, macro, perception, regime, edge)
     market_state = build_market_state_vector(technical, macro)
     memory_state = _memory_adjustment(memory)
     adversarial = _adversarial_review(
@@ -1321,13 +1322,15 @@ def build_cognitive_state(
         hypotheses,
         confidence,
         adversarial,
+        edge,
         adaptive_threshold["effective"],
     )
+    scenarios = _scenario_paths(technical, hypotheses, edge)
 
     action = str(plan.get("action") or "STAND_DOWN")
     if action == "ENTER_NOW":
         decision = "eligible"
-    elif action in {"WAIT", "WAIT_PULLBACK", "WAIT_CONFIRMATION"}:
+    elif action in {"WAIT", "WAIT_PULLBACK", "WAIT_CONFIRMATION", "WAIT_TRIGGER", "BIAS_ONLY"}:
         decision = "wait"
     elif technical.get("candidate") in {"long_setup", "short_setup"}:
         decision = "veto"
@@ -1343,8 +1346,10 @@ def build_cognitive_state(
             "sensors": sensors,
         },
         "perception": perception,
+        "directional_edge": edge,
         "regime": regime,
         "hypotheses": hypotheses,
+        "scenarios": scenarios,
         "memory": memory_state,
         "adversarial": adversarial,
         "confidence": confidence,
