@@ -258,6 +258,23 @@ async def get_market_context(force: bool = False) -> dict[str, Any]:
             [row.timestamp for rows in (h1, h4, daily, futures_h1) for row in rows[-1:]],
             default=datetime.now(timezone.utc),
         ).isoformat()
+        bias = data.get("bias") or {}
+        flow = data.get("cash_flow") or {}
+        smart = data.get("smart_money") or {}
+        profile = data.get("volume_profile") or {}
+        logger.info(
+            "XAU context today=%s score=%.3f M=%s W=%s D=%s flow=%s/%.3f smart=%s/%.3f poc=%s",
+            bias.get("today_direction"),
+            float(bias.get("today_score") or 0.0),
+            (bias.get("monthly") or {}).get("direction"),
+            (bias.get("weekly") or {}).get("direction"),
+            (bias.get("daily") or {}).get("direction"),
+            flow.get("direction"),
+            float(flow.get("score") or 0.0),
+            smart.get("bias"),
+            float(smart.get("score") or 0.0),
+            profile.get("poc"),
+        )
         _market_context_cache = (time.monotonic(), data)
         return data
 
