@@ -11,6 +11,7 @@ from src.modules.strategy.validation import (
     TradeRecord,
     ValidationPolicy,
     ValidationVerdict,
+    WalkForwardFoldResult,
     validate_experiment,
 )
 from src.modules.strategy.validation.metrics import compute_performance
@@ -62,6 +63,7 @@ def _spec(**kwargs) -> ExperimentSpec:
         walk_forward_step=20,
         monte_carlo_iterations=500,
         monte_carlo_seed=123,
+        strategy_frozen_before_oos=True,
         policy=ValidationPolicy(
             min_oos_trades=30,
             min_oos_expectancy=0.0,
@@ -92,6 +94,40 @@ def _stable_surface() -> list[ParameterPoint]:
     ]
 
 
+def _wf_results(trades: list[TradeRecord]) -> list[WalkForwardFoldResult]:
+    folds = walk_forward_splits(trades, train_size=60, test_size=20, step=20)
+    results: list[WalkForwardFoldResult] = []
+    for fold in folds:
+        train = list(fold.train)
+        test = list(fold.test)
+        results.append(
+            WalkForwardFoldResult(
+                fold_index=fold.index,
+                train_start=train[0].opened_at,
+                train_end=train[-1].closed_at,
+                selected_at=train[-1].closed_at,
+                test_start=test[0].opened_at,
+                test_end=test[-1].closed_at,
+                selected_strategy_fingerprint=f"strategy:fold:{fold.index}",
+                selected_parameters={"fast": 9, "slow": 21},
+                test_trades=tuple(test),
+            )
+        )
+    return results
+
+
+def _validate(trades: list[TradeRecord], **kwargs):
+    defaults = dict(
+        spec=_spec(),
+        trades=trades,
+        parameter_surface=_stable_surface(),
+        parameter_surface_is_in_sample_only=True,
+        walk_forward_results=_wf_results(trades),
+    )
+    defaults.update(kwargs)
+    return validate_experiment(**defaults)
+
+
 def test_performance_includes_expectancy_drawdown_mae_mfe_and_holding_time():
     metrics = compute_performance([_trade(0, 2.0), _trade(1, -1.0), _trade(2, 1.0)])
     assert metrics.trade_count == 3
@@ -112,11 +148,27 @@ def test_chronological_split_never_randomizes_oos():
     assert max(t.closed_at for t in ins) < min(t.closed_at for t in oos)
 
 
-def test_walk_forward_uses_strict_train_then_future_test_windows():
+def test_walk_forward_planner_uses_strict_train_then_future_test_windows():
     folds = walk_forward_splits(_stable_trades(120), train_size=60, test_size=20, step=20)
     assert len(folds) == 3
     for fold in folds:
         assert max(t.closed_at for t in fold.train) < min(t.closed_at for t in fold.test)
+
+
+def test_walk_forward_evidence_rejects_bad_chronology():
+    trades = _stable_trades(80)
+    with pytest.raises(ValueError, match="train -> select -> future test"):
+        WalkForwardFoldResult(
+            fold_index=0,
+            train_start=trades[0].opened_at,
+            train_end=trades[59].closed_at,
+            selected_at=trades[70].opened_at,
+            test_start=trades[60].opened_at,
+            test_end=trades[79].closed_at,
+            selected_strategy_fingerprint="leaky",
+            selected_parameters={"x": 1},
+            test_trades=tuple(trades[60:80]),
+        )
 
 
 def test_monte_carlo_is_reproducible_with_fixed_seed():
@@ -150,16 +202,15 @@ def test_cost_stress_exposes_expectancy_sensitivity():
     assert stressed["expectancy_break_even_cost"] is not None
 
 
-def test_robust_fixture_passes_all_available_evidence_gates():
-    report = validate_experiment(
-        spec=_spec(),
-        trades=_stable_trades(),
-        parameter_surface=_stable_surface(),
+def test_robust_fixture_passes_all_evidence_gates():
+    report = _validate(
+        _stable_trades(),
         cost_per_trade_levels=(0.0, 0.10, 0.25, 0.50),
     )
     assert report.verdict is ValidationVerdict.PASS
     assert report.out_of_sample.trade_count == 80
     assert report.walk_forward["fold_count"] > 0
+    assert report.walk_forward["provenance"] == "train_select_future_test"
     assert report.walk_forward["positive_test_fraction"] == 1.0
     assert report.parameter_stability["stability_score"] > 0.5
     assert report.monte_carlo["loss_probability"] <= 0.10
@@ -172,11 +223,7 @@ def test_robust_fixture_passes_all_available_evidence_gates():
 def test_overfit_fixture_wins_in_sample_but_fails_out_of_sample():
     pnls = [1.0] * 120 + [-0.8] * 80
     trades = [_trade(i, pnl) for i, pnl in enumerate(pnls)]
-    report = validate_experiment(
-        spec=_spec(),
-        trades=trades,
-        parameter_surface=_stable_surface(),
-    )
+    report = _validate(trades)
     assert report.in_sample.expectancy > 0
     assert report.out_of_sample.expectancy < 0
     assert report.verdict is ValidationVerdict.FAIL
@@ -185,12 +232,61 @@ def test_overfit_fixture_wins_in_sample_but_fails_out_of_sample():
     assert "oos_profit_factor" in failed
 
 
+def test_missing_real_walk_forward_evidence_is_not_silently_inferred():
+    trades = _stable_trades()
+    report = validate_experiment(
+        spec=_spec(),
+        trades=trades,
+        parameter_surface=_stable_surface(),
+        parameter_surface_is_in_sample_only=True,
+        walk_forward_results=None,
+    )
+    assert report.verdict is ValidationVerdict.INSUFFICIENT_EVIDENCE
+    gate = next(g for g in report.gates if g.name == "walk_forward_positive_fraction")
+    assert gate.passed is None
+
+
 def test_missing_parameter_surface_is_not_silently_treated_as_stable():
-    report = validate_experiment(spec=_spec(), trades=_stable_trades(), parameter_surface=None)
+    trades = _stable_trades()
+    report = validate_experiment(
+        spec=_spec(),
+        trades=trades,
+        parameter_surface=None,
+        walk_forward_results=_wf_results(trades),
+    )
     assert report.verdict is ValidationVerdict.INSUFFICIENT_EVIDENCE
     stability_gate = next(g for g in report.gates if g.name == "parameter_stability")
     assert stability_gate.passed is None
     assert any("unproven" in item for item in report.limitations)
+
+
+def test_parameter_surface_that_touched_oos_is_rejected():
+    trades = _stable_trades()
+    report = validate_experiment(
+        spec=_spec(),
+        trades=trades,
+        parameter_surface=_stable_surface(),
+        parameter_surface_is_in_sample_only=False,
+        walk_forward_results=_wf_results(trades),
+    )
+    assert report.verdict is ValidationVerdict.FAIL
+    gate = next(g for g in report.gates if g.name == "parameter_stability")
+    assert gate.passed is False
+    assert "contaminated" in gate.detail
+
+
+def test_strategy_not_frozen_before_oos_is_rejected():
+    trades = _stable_trades()
+    report = validate_experiment(
+        spec=_spec(strategy_frozen_before_oos=False),
+        trades=trades,
+        parameter_surface=_stable_surface(),
+        parameter_surface_is_in_sample_only=True,
+        walk_forward_results=_wf_results(trades),
+    )
+    assert report.verdict is ValidationVerdict.FAIL
+    gate = next(g for g in report.gates if g.name == "strategy_frozen_before_oos")
+    assert gate.passed is False
 
 
 def test_trade_contract_rejects_invalid_mae_and_mfe_signs():
