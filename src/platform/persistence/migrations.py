@@ -2075,7 +2075,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(123, "assistant_approval_workflow", _m123_assistant_approval_workflow),
     Migration(124, "assistant_context_snapshots", _m124_assistant_context_snapshots),
     Migration(125, "assistant_task_protocol", _m125_assistant_task_protocol),
-    Migration(126, "assistant_task_events", _m126_assistant_task_events),\n    Migration(127, "research_evidence_foundation", _m127_research_evidence_foundation),
+    Migration(126, "assistant_task_events", _m126_assistant_task_events),
+    Migration(127, "research_evidence_foundation", _m127_research_evidence_foundation),
 )
 
 
