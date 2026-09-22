@@ -1,0 +1,81 @@
+name: XAU Native vs LEAN Parity
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/xau_engine_parity_v1/**"
+      - "src/modules/strategy/xau_intraday.py"
+      - "src/modules/strategy/xau_strategy_exporter.py"
+      - ".github/workflows/xau-engine-parity.yml"
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run PanWatch Native on frozen dataset
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          mkdir -p benchmarks/xau_engine_parity_v1/generated
+          python benchmarks/xau_engine_parity_v1/native_runner.py \
+            --dataset benchmarks/xau_engine_parity_v1/frozen_dataset.json \
+            --output benchmarks/xau_engine_parity_v1/generated/native.json \
+            --lean-package benchmarks/xau_engine_parity_v1/generated/lean-package.json
+
+      - name: Pull official LEAN runtime
+        run: docker pull quantconnect/lean:latest
+
+      - name: Prepare LEAN backtest-only config
+        run: |
+          docker run --rm --entrypoint cat quantconnect/lean:latest \
+            /Lean/Launcher/bin/Debug/config.json > "$RUNNER_TEMP/lean-config.json"
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "lean-config.json"
+          text = path.read_text(encoding="utf-8")
+          replacements = {
+              "algorithm-type-name": "PanWatchXAUParityAlgorithm",
+              "algorithm-language": "Python",
+              "algorithm-location": "/workspace/benchmarks/xau_engine_parity_v1/lean_algorithm.py",
+          }
+          for key, value in replacements.items():
+              pattern = rf'("{re.escape(key)}"\s*:\s*)"[^"]*"'
+              text, count = re.subn(pattern, rf'\1"{value}"', text, count=1)
+              if count != 1:
+                  raise SystemExit(f"could not patch LEAN config key: {key}")
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Run official LEAN runtime on same frozen dataset
+        run: |
+          set -o pipefail
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -v "$RUNNER_TEMP/lean-config.json:/Lean/Launcher/bin/Debug/config.json:ro" \
+            quantconnect/lean:latest 2>&1 \
+            | tee benchmarks/xau_engine_parity_v1/generated/lean.log
+
+      - name: Compare Native and LEAN outputs
+        run: |
+          python benchmarks/xau_engine_parity_v1/compare.py \
+            --native benchmarks/xau_engine_parity_v1/generated/native.json \
+            --lean-log benchmarks/xau_engine_parity_v1/generated/lean.log \
+            --lean-output benchmarks/xau_engine_parity_v1/generated/lean.json \
+            --report benchmarks/xau_engine_parity_v1/generated/parity-report.json
+
+      - name: Upload parity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xau-native-lean-parity-v1
+          path: benchmarks/xau_engine_parity_v1/generated/
