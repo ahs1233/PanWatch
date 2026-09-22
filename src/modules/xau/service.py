@@ -1061,6 +1061,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
 
         ai_event_gate = _validated_event_gate({}, now=macro_now)
 
+        answer = ""
         if raw and settings.ai_api_key:
             try:
                 ai = AIClient(
@@ -1179,9 +1180,10 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                 data["drivers"] = preview
                 data["synthesis_error"] = type(exc).__name__
                 logger.warning(
-                    "XAU macro synthesis degraded error=%s evidence_chars=%s",
+                    "XAU macro synthesis degraded error=%s evidence_chars=%s answer_preview=%r",
                     type(exc).__name__,
                     len(raw),
+                    answer[:800],
                 )
 
         data.update(_resolve_event_gate(ai_event_gate, calendar_event))
