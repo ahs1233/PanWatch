@@ -217,7 +217,16 @@ class ClaimGraph:
     def register_claim(self, claim: ClaimNode) -> ClaimNode:
         existing = self._claims.get(claim.claim_id)
         if existing is not None:
-            if existing != claim:
+            same_identity = (
+                existing.claim_key == claim.claim_key
+                and existing.statement == claim.statement
+                and existing.kind is claim.kind
+                and existing.prior_confidence == claim.prior_confidence
+                and existing.valid_from == claim.valid_from
+                and existing.valid_until == claim.valid_until
+                and existing.supersedes == claim.supersedes
+            )
+            if not same_identity:
                 raise ValueError(f"claim identity collision: {claim.claim_id}")
             return existing
         if claim.supersedes and claim.supersedes not in self._claims:
