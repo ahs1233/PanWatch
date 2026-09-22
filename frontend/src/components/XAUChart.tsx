@@ -53,15 +53,7 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
   const model = useMemo(() => {
     const rows = bars.slice(-120)
     if (!rows.length) return null
-    const levels = [
-      swingHigh,
-      swingLow,
-      triggerLevel,
-      volumeProfile?.poc,
-      volumeProfile?.vah,
-      volumeProfile?.val,
-      ...liquidityLevels.map(level => level.price),
-    ].filter((v): v is number => v != null && Number.isFinite(v))
+    const levels = [swingHigh, swingLow, triggerLevel].filter((v): v is number => v != null && Number.isFinite(v))
     const lows = rows.map(r => r.low)
     const highs = rows.map(r => r.high)
     const rawMin = Math.min(...lows, ...levels)
@@ -145,12 +137,16 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
         {renderLevel(volumeProfile?.vah, 'VAH', 'stroke-primary/30')}
         {renderLevel(volumeProfile?.poc, 'POC', 'stroke-primary/55')}
         {renderLevel(volumeProfile?.val, 'VAL', 'stroke-primary/30')}
-        {liquidityLevels.slice(0,6).map(level => (
-          <g key={level.name + level.price}>
-            <line x1={left} x2={left + plotW} y1={y(level.price)} y2={y(level.price)} className="stroke-fuchsia-500/35" strokeWidth="1" strokeDasharray="3 6"/>
-            <text x={left + 6} y={y(level.price)-4} className="fill-fuchsia-400/80 text-[9px]">{level.name} {level.price.toFixed(2)}</text>
-          </g>
-        ))}
+        {liquidityLevels.slice(0,6).map(level => {
+          const yy = y(level.price)
+          if (yy < top || yy > top + plotH) return null
+          return (
+            <g key={level.name + level.price}>
+              <line x1={left} x2={left + plotW} y1={yy} y2={yy} className="stroke-fuchsia-500/35" strokeWidth="1" strokeDasharray="3 6"/>
+              <text x={left + 6} y={yy-4} className="fill-fuchsia-400/80 text-[9px]">{level.name} {level.price.toFixed(2)}</text>
+            </g>
+          )
+        })}
 
         {rows.map((bar, i) => {
           const xx = x(i)
