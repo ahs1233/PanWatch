@@ -65,6 +65,8 @@ def test_external_research_store_provisions_all_tables(tmp_path):
             "research_belief_events",
             "research_loop_runs",
             "research_probe_attempts",
+            "research_acquisition_runs",
+            "research_claim_candidates",
         }.issubset(tables)
     finally:
         init_research_store(_settings(""))
