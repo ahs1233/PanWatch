@@ -720,6 +720,42 @@ class QuoteGroundedEvidenceExtractor:
         return findings
 
 
+def _context_fallback_finding(
+    document: ResearchDocument,
+    *,
+    probe: FalsificationProbe,
+    claim_statement: str,
+    max_chars: int = 700,
+) -> ExtractedFinding | None:
+    """Return a non-committal grounded quote when semantic classification fails.
+
+    This fallback NEVER marks support or contradiction. It preserves the source
+    in the Evidence Ledger as context so the document is not lost because an
+    external LLM timed out or was rate-limited.
+    """
+    excerpt = _relevant_excerpt(
+        document.text,
+        signals=(probe.instruction, claim_statement),
+        max_chars=max(250, int(max_chars)),
+    )
+    candidates = [
+        normalize_text(item)
+        for item in re.split(r"\n{2,}|(?<=[.!?])\s+(?=[A-Z0-9])", excerpt)
+        if normalize_text(item)
+    ]
+    quote = next((item for item in candidates if len(item) >= 40), "")
+    if not quote:
+        quote = normalize_text(excerpt)[:max_chars]
+    if len(quote) < 20:
+        return None
+    return ExtractedFinding(
+        quote=quote,
+        relation=EvidenceRelation.CONTEXT,
+        observation_kind=ObservationKind.ESTIMATE,
+        confidence=0.35,
+    )
+
+
 def _probe_key(probe: FalsificationProbe) -> str:
     return _hash(
         "probe",
@@ -1012,15 +1048,41 @@ class AutomaticResearchLoop:
 
                     probe_evidence = 0
                     for document in documents:
-                        findings = await self.extractor.extract(
-                            probe=probe,
-                            rule=rule,
-                            claim_statement=claim_statement,
-                            evidence_claim_key=evidence_key,
-                            desired_relation=desired,
-                            document=document,
-                            max_findings=self.max_findings_per_document,
-                        )
+                        classification_pending = False
+                        try:
+                            findings = await self.extractor.extract(
+                                probe=probe,
+                                rule=rule,
+                                claim_statement=claim_statement,
+                                evidence_claim_key=evidence_key,
+                                desired_relation=desired,
+                                document=document,
+                                max_findings=self.max_findings_per_document,
+                            )
+                        except Exception as exc:
+                            if type(exc).__name__ not in {
+                                "TimeoutError",
+                                "APITimeoutError",
+                                "RateLimitError",
+                                "APIConnectionError",
+                                "InternalServerError",
+                            }:
+                                raise
+                            fallback = _context_fallback_finding(
+                                document,
+                                probe=probe,
+                                claim_statement=claim_statement,
+                            )
+                            findings = [fallback] if fallback is not None else []
+                            classification_pending = bool(findings)
+                            logger.warning(
+                                "Automatic research classification degraded to "
+                                "quote-grounded context rule=%s url=%s error=%s",
+                                probe.rule_id,
+                                document.url,
+                                type(exc).__name__,
+                            )
+
                         for finding in findings:
                             source = build_source(
                                 url=document.url,
@@ -1063,6 +1125,12 @@ class AutomaticResearchLoop:
                                     "quote_grounded": True,
                                     "automatic_research_run_id": run_id,
                                     "probe_rule_id": probe.rule_id,
+                                    "classification_pending": classification_pending,
+                                    "classification_source": (
+                                        "deterministic_context_fallback"
+                                        if classification_pending
+                                        else "llm_quote_grounded"
+                                    ),
                                 },
                             )
                             inserted = self.ledger.append(record)

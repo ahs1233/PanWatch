@@ -214,6 +214,11 @@ class _StaticExtractor:
         return list(self.findings)
 
 
+class _TimeoutExtractor:
+    async def extract(self, **_kwargs):
+        raise TimeoutError("provider timed out")
+
+
 @pytest.mark.asyncio
 async def test_counter_research_adds_evidence_and_changes_belief():
     _engine, db = _db()
@@ -363,3 +368,52 @@ def test_migration_130_creates_loop_tables_and_indexes():
         for row in inspector.get_indexes("research_probe_attempts")
     }
     assert "ix_research_probe_key_attempted" in indexes
+
+
+
+@pytest.mark.asyncio
+async def test_ai_timeout_preserves_grounded_context_evidence():
+    _engine, db = _db()
+    try:
+        ledger, graph, falsification, _claim = _base_graph()
+        persist_ledger(db, ledger)
+        persist_claim_graph(db, graph)
+        persist_falsification_engine(db, falsification)
+
+        gateway = _FakeGateway(
+            [
+                ResearchDocument(
+                    url="https://independent.example.com/report",
+                    title="Independent report",
+                    text=(
+                        "Independent analysts report that gold remains range-bound "
+                        "while markets await fresh rate guidance and geopolitical developments."
+                    ),
+                    tool_name="reach_read_url",
+                    publisher="Independent",
+                )
+            ]
+        )
+        result = await AutomaticResearchLoop(
+            graph=graph,
+            ledger=ledger,
+            falsification=falsification,
+            gateway=gateway,
+            extractor=_TimeoutExtractor(),
+            max_probes=1,
+            max_sources_per_probe=1,
+        ).run(db=db, evaluated_at=T0 + timedelta(minutes=5))
+
+        assert result.evidence_added == 1
+        external = [
+            row
+            for row in ledger.records
+            if row.metadata.get("classification_pending")
+        ]
+        assert len(external) == 1
+        assert external[0].relation is EvidenceRelation.CONTEXT
+        assert external[0].metadata["classification_source"] == (
+            "deterministic_context_fallback"
+        )
+    finally:
+        db.close()
