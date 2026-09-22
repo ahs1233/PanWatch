@@ -239,12 +239,18 @@ async def _refresh_market_context() -> dict[str, Any]:
             except Exception:
                 daily = []
 
+        first_context_build = _market_context_cache is None
         data = build_market_context(
             h1,
             h4,
             daily,
             futures_hourly=futures_h1,
         )
+        if first_context_build and h1:
+            data["vectorbt_validation"] = await asyncio.to_thread(
+                vectorbt_validation,
+                h1,
+            )
         data["sources"] = {
             "1h": h1[-1].source if h1 else None,
             "4h": h4[-1].source if h4 else None,
@@ -260,8 +266,11 @@ async def _refresh_market_context() -> dict[str, Any]:
         flow = data.get("cash_flow") or {}
         smart = data.get("smart_money") or {}
         profile = data.get("volume_profile") or {}
+        libraries = data.get("library_intelligence") or {}
+        library_status = libraries.get("status") or {}
+        vectorbt_status = (data.get("vectorbt_validation") or {}).get("status")
         logger.info(
-            "XAU context today=%s score=%.3f M=%s W=%s D=%s flow=%s/%.3f smart=%s/%.3f poc=%s",
+            "XAU context today=%s score=%.3f M=%s W=%s D=%s flow=%s/%.3f smart=%s/%.3f poc=%s libraries=%s vectorbt=%s",
             bias.get("today_direction"),
             float(bias.get("today_score") or 0.0),
             (bias.get("monthly") or {}).get("direction"),
@@ -272,6 +281,8 @@ async def _refresh_market_context() -> dict[str, Any]:
             smart.get("bias"),
             float(smart.get("score") or 0.0),
             profile.get("poc"),
+            library_status,
+            vectorbt_status,
         )
         _market_context_cache = (time.monotonic(), data)
         return data
