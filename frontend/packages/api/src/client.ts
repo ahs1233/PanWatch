@@ -22,11 +22,9 @@ export function isAuthenticated(): boolean {
   const token = getToken()
   if (!token) return false
 
-  const expires = localStorage.getItem('token_expires')
-  if (expires && new Date(expires) < new Date()) {
-    logout()
-    return false
-  }
+  // Keep the device signed in until the server actually rejects the token.
+  // Local expiry metadata can become stale across deployments/restarts and was
+  // forcing users back through login even when the persisted token remained valid.
   return true
 }
 
