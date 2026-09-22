@@ -209,17 +209,28 @@ async def _refresh_market_context() -> dict[str, Any]:
             try:
                 return await asyncio.wait_for(
                     asyncio.to_thread(yahoo.bars, XAUTimeframe.H1),
-                    timeout=12.0,
+                    timeout=22.0,
                 )
             except Exception as exc:
-                logger.warning("GC futures hourly flow fetch failed error=%s", type(exc).__name__)
+                logger.warning("GC futures hourly flow/deep-history fetch failed error=%s", type(exc).__name__)
                 return []
 
-        h1, h4, daily, futures_h1 = await asyncio.gather(
+        async def fetch_deep_daily():
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(yahoo.bars, XAUTimeframe.D1),
+                    timeout=22.0,
+                )
+            except Exception as exc:
+                logger.warning("GC futures deep daily fetch failed error=%s", type(exc).__name__)
+                return []
+
+        h1, h4, daily, futures_h1, deep_daily = await asyncio.gather(
             fetch_primary(XAUTimeframe.H1),
             fetch_primary(XAUTimeframe.H4),
             fetch_primary(XAUTimeframe.D1),
             fetch_futures_hourly(),
+            fetch_deep_daily(),
         )
 
         if not h1:
@@ -245,6 +256,8 @@ async def _refresh_market_context() -> dict[str, Any]:
             h4,
             daily,
             futures_hourly=futures_h1,
+            deep_hourly=futures_h1,
+            deep_daily=deep_daily,
         )
         # Run the cross-library validation stack against the same completed
         # 1h sample. It is a reliability guard, not duplicated market evidence.
@@ -356,9 +369,11 @@ async def _refresh_market_context() -> dict[str, Any]:
             "4h": h4[-1].source if h4 else None,
             "1d": daily[-1].source if daily else None,
             "gc_futures_1h": futures_h1[-1].source if futures_h1 else None,
+            "deep_bias_1h": futures_h1[-1].source if futures_h1 else None,
+            "deep_bias_1d": deep_daily[-1].source if deep_daily else None,
         }
         data["observed_at"] = max(
-            [row.timestamp for rows in (h1, h4, daily, futures_h1) for row in rows[-1:]],
+            [row.timestamp for rows in (h1, h4, daily, futures_h1, deep_daily) for row in rows[-1:]],
             default=datetime.now(timezone.utc),
         ).isoformat()
         data["refresh_pending"] = False
