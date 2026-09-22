@@ -108,6 +108,8 @@ class AutomaticResearchResult:
     beliefs_changed: int
     before_cycle_id: str | None
     after_cycle_id: str | None
+    raw_evidence_added: int = 0
+    classified_evidence_added: int = 0
     errors: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -123,6 +125,8 @@ class AutomaticResearchResult:
             "beliefs_changed": self.beliefs_changed,
             "before_cycle_id": self.before_cycle_id,
             "after_cycle_id": self.after_cycle_id,
+            "raw_evidence_added": self.raw_evidence_added,
+            "classified_evidence_added": self.classified_evidence_added,
             "errors": list(self.errors),
         }
 
@@ -720,18 +724,17 @@ class QuoteGroundedEvidenceExtractor:
         return findings
 
 
-def _context_fallback_finding(
+def _raw_source_quote(
     document: ResearchDocument,
     *,
     probe: FalsificationProbe,
     claim_statement: str,
     max_chars: int = 700,
-) -> ExtractedFinding | None:
-    """Return a non-committal grounded quote when semantic classification fails.
+) -> str:
+    """Return one grounded raw excerpt without assigning semantic relation.
 
-    This fallback NEVER marks support or contradiction. It preserves the source
-    in the Evidence Ledger as context so the document is not lost because an
-    external LLM timed out or was rate-limited.
+    The returned text is stored under raw.<claim_id> as RAW_SOURCE and is never
+    linked into the Claim Graph until a semantic classifier succeeds later.
     """
     excerpt = _relevant_excerpt(
         document.text,
@@ -746,15 +749,7 @@ def _context_fallback_finding(
     quote = next((item for item in candidates if len(item) >= 40), "")
     if not quote:
         quote = normalize_text(excerpt)[:max_chars]
-    if len(quote) < 20:
-        return None
-    return ExtractedFinding(
-        quote=quote,
-        relation=EvidenceRelation.CONTEXT,
-        observation_kind=ObservationKind.ESTIMATE,
-        confidence=0.35,
-    )
-
+    return quote if len(quote) >= 20 else ""
 
 def _probe_key(probe: FalsificationProbe) -> str:
     return _hash(
@@ -899,7 +894,7 @@ class AutomaticResearchLoop:
                 ResearchProbeAttemptRecord.probe_key == key,
                 ResearchProbeAttemptRecord.attempted_at >= cutoff,
                 ResearchProbeAttemptRecord.status.in_(
-                    ("success", "no_evidence", "no_documents")
+                    ("success", "raw_only", "no_evidence", "no_documents")
                 ),
             )
             .order_by(ResearchProbeAttemptRecord.attempted_at.desc())
@@ -959,6 +954,8 @@ class AutomaticResearchLoop:
         skipped = 0
         docs_read = 0
         evidence_added = 0
+        raw_evidence_added = 0
+        classified_evidence_added = 0
 
         try:
             active_ids = _active_claim_ids(self.graph)
@@ -1047,8 +1044,35 @@ class AutomaticResearchLoop:
                         continue
 
                     probe_evidence = 0
+                    probe_raw = 0
+                    classification_errors: list[str] = []
                     for document in documents:
-                        classification_pending = False
+                        now = datetime.now(timezone.utc)
+                        source = build_source(
+                            url=document.url,
+                            content=document.text,
+                            publisher=(
+                                document.publisher
+                                or (urlsplit(document.url).hostname or "")
+                            ),
+                            title=document.title,
+                            source_tier=SourceTier.UNKNOWN,
+                            source_family=(
+                                urlsplit(document.url).hostname
+                                or document.tool_name
+                            ),
+                            published_at=document.published_at,
+                            retrieved_at=now,
+                            observed_at=now,
+                            tool_name=document.tool_name,
+                            metadata={
+                                **document.metadata,
+                                "automatic_research_run_id": run_id,
+                                "probe_rule_id": probe.rule_id,
+                            },
+                        )
+                        self.ledger.register_source(source)
+
                         try:
                             findings = await self.extractor.extract(
                                 probe=probe,
@@ -1060,7 +1084,8 @@ class AutomaticResearchLoop:
                                 max_findings=self.max_findings_per_document,
                             )
                         except Exception as exc:
-                            if type(exc).__name__ not in {
+                            error_name = type(exc).__name__
+                            if error_name not in {
                                 "TimeoutError",
                                 "APITimeoutError",
                                 "RateLimitError",
@@ -1068,46 +1093,47 @@ class AutomaticResearchLoop:
                                 "InternalServerError",
                             }:
                                 raise
-                            fallback = _context_fallback_finding(
+                            classification_errors.append(error_name)
+                            raw_quote = _raw_source_quote(
                                 document,
                                 probe=probe,
                                 claim_statement=claim_statement,
                             )
-                            findings = [fallback] if fallback is not None else []
-                            classification_pending = bool(findings)
+                            if raw_quote:
+                                raw_record = build_evidence(
+                                    claim_key=f"raw.{probe.claim_id}",
+                                    source=source,
+                                    statement=raw_quote,
+                                    relation=EvidenceRelation.CONTEXT,
+                                    observation_kind=ObservationKind.RAW_SOURCE,
+                                    event_time=document.published_at,
+                                    observed_at=now,
+                                    recorded_at=now,
+                                    confidence=0.0,
+                                    metadata={
+                                        "unclassified_raw": True,
+                                        "target_claim_id": probe.claim_id,
+                                        "target_claim_key": evidence_key,
+                                        "automatic_research_run_id": run_id,
+                                        "probe_rule_id": probe.rule_id,
+                                        "classification_pending": True,
+                                        "classification_error": error_name,
+                                    },
+                                )
+                                if self.ledger.append(raw_record):
+                                    probe_raw += 1
+                                    raw_evidence_added += 1
+                                    evidence_added += 1
+                            findings = []
                             logger.warning(
-                                "Automatic research classification degraded to "
-                                "quote-grounded context rule=%s url=%s error=%s",
+                                "Automatic research classification deferred to raw evidence "
+                                "rule=%s url=%s error=%s",
                                 probe.rule_id,
                                 document.url,
-                                type(exc).__name__,
+                                error_name,
                             )
 
                         for finding in findings:
-                            source = build_source(
-                                url=document.url,
-                                content=document.text,
-                                publisher=(
-                                    document.publisher
-                                    or (urlsplit(document.url).hostname or "")
-                                ),
-                                title=document.title,
-                                source_tier=SourceTier.UNKNOWN,
-                                source_family=(
-                                    urlsplit(document.url).hostname
-                                    or document.tool_name
-                                ),
-                                published_at=document.published_at,
-                                retrieved_at=datetime.now(timezone.utc),
-                                observed_at=datetime.now(timezone.utc),
-                                tool_name=document.tool_name,
-                                metadata={
-                                    **document.metadata,
-                                    "automatic_research_run_id": run_id,
-                                    "probe_rule_id": probe.rule_id,
-                                },
-                            )
-                            self.ledger.register_source(source)
                             record = build_evidence(
                                 claim_key=evidence_key,
                                 source=source,
@@ -1115,8 +1141,8 @@ class AutomaticResearchLoop:
                                 relation=finding.relation,
                                 observation_kind=finding.observation_kind,
                                 event_time=document.published_at,
-                                observed_at=datetime.now(timezone.utc),
-                                recorded_at=datetime.now(timezone.utc),
+                                observed_at=now,
+                                recorded_at=now,
                                 confidence=finding.confidence,
                                 numeric_value=finding.numeric_value,
                                 unit=finding.unit,
@@ -1125,18 +1151,15 @@ class AutomaticResearchLoop:
                                     "quote_grounded": True,
                                     "automatic_research_run_id": run_id,
                                     "probe_rule_id": probe.rule_id,
-                                    "classification_pending": classification_pending,
-                                    "classification_source": (
-                                        "deterministic_context_fallback"
-                                        if classification_pending
-                                        else "llm_quote_grounded"
-                                    ),
+                                    "classification_pending": False,
+                                    "classification_source": "llm_quote_grounded",
                                 },
                             )
                             inserted = self.ledger.append(record)
                             if not inserted:
                                 continue
                             probe_evidence += 1
+                            classified_evidence_added += 1
                             evidence_added += 1
                             self.graph.link_evidence(
                                 claim_id=probe.claim_id,
@@ -1150,13 +1173,31 @@ class AutomaticResearchLoop:
                                 },
                             )
 
-                    if probe_evidence:
+                    if probe_raw or probe_evidence:
                         persist_ledger(db, self.ledger)
+                    if probe_evidence:
                         persist_claim_graph(db, self.graph)
                         attempt.status = "success"
+                    elif probe_raw:
+                        attempt.status = "raw_only"
                     else:
                         attempt.status = "no_evidence"
-                    attempt.evidence_count = probe_evidence
+                    attempt.evidence_count = probe_evidence + probe_raw
+                    attempt.error_code = (
+                        ",".join(sorted(set(classification_errors)))[:255]
+                        if classification_errors
+                        else ""
+                    )
+                    attempt.meta = {
+                        "raw_evidence_count": probe_raw,
+                        "classified_evidence_count": probe_evidence,
+                        "classification_errors": sorted(set(classification_errors)),
+                    }
+                    if classification_errors:
+                        errors.extend(
+                            f"{probe.rule_id}:{name}"
+                            for name in sorted(set(classification_errors))
+                        )
                     db.commit()
                 except Exception as exc:
                     logger.warning(
@@ -1178,7 +1219,11 @@ class AutomaticResearchLoop:
                 evaluated_at=after_time,
                 metadata={"automatic_research_run_id": run_id, "phase": "after"},
             )
-            run_row.status = "success"
+            run_row.status = (
+                "success_degraded"
+                if errors and classified_evidence_added == 0
+                else "success"
+            )
             run_row.completed_at = after_time
             run_row.probes_executed = executed
             run_row.tool_calls = self.gateway.tool_calls
@@ -1186,10 +1231,15 @@ class AutomaticResearchLoop:
             run_row.evidence_added = evidence_added
             run_row.beliefs_changed = after_cycle.changed_count
             run_row.error = ";".join(errors)[:4000]
+            run_row.meta = {
+                "version": "automatic-research-v1",
+                "raw_evidence_added": raw_evidence_added,
+                "classified_evidence_added": classified_evidence_added,
+            }
             db.commit()
             return AutomaticResearchResult(
                 run_id=run_id,
-                status="success",
+                status=run_row.status,
                 probes_planned=len(probes),
                 probes_executed=executed,
                 probes_skipped_cooldown=skipped,
@@ -1199,6 +1249,8 @@ class AutomaticResearchLoop:
                 beliefs_changed=after_cycle.changed_count,
                 before_cycle_id=before_cycle.cycle_id,
                 after_cycle_id=after_cycle.cycle_id,
+                raw_evidence_added=raw_evidence_added,
+                classified_evidence_added=classified_evidence_added,
                 errors=tuple(errors),
             )
         except Exception as exc:
