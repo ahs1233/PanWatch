@@ -339,7 +339,11 @@ class EvidenceLedger:
             revisions = [
                 record
                 for record in rows
-                if record.observation_kind is ObservationKind.REVISION
+                if (
+                    record.observation_kind is ObservationKind.REVISION
+                    and record.revision_of
+                    and record.revision_of in self._evidence
+                )
             ]
             if revisions:
                 return revisions
