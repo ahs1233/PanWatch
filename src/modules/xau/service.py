@@ -537,6 +537,7 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     spot_task = asyncio.create_task(get_indicative_spot(force=force))
     micro_task = asyncio.create_task(get_micro_context(force=force))
     consensus_task = asyncio.create_task(get_spot_consensus(force=force))
+    market_context_task = asyncio.create_task(get_market_context(force=force))
 
     bars = await bars_task
     spot = None
@@ -559,6 +560,14 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         consensus = await consensus_task
     except Exception as exc:
         consensus_error = type(exc).__name__
+
+    market_context = None
+    market_context_error = None
+    try:
+        market_context = await market_context_task
+    except Exception as exc:
+        market_context_error = type(exc).__name__
+        logger.warning("XAU higher-timeframe context unavailable: %s", market_context_error)
 
     assessment = XAUIntradayEngine(require_execution_data=False).analyze(
         bars,
@@ -780,6 +789,8 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "spot_consensus_error": consensus_error,
         "micro": micro,
         "micro_error": micro_error,
+        "market_context": market_context,
+        "market_context_error": market_context_error,
         "technical_mode": technical_mode,
         "spot_minus_proxy": basis,
         "spot_minus_proxy_bps": basis_bps,
