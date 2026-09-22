@@ -51,6 +51,7 @@ _consensus_cache = None
 _micro_cache = None
 _series_cache = None
 _macro_cache = None
+_macro_last_good = None
 _macro_refresh_task = None
 _bars_lock = asyncio.Lock()
 _spot_lock = asyncio.Lock()
@@ -1053,7 +1054,7 @@ def _parse_json(value: str) -> dict[str, Any]:
 
 
 async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
-    global _macro_cache
+    global _macro_cache, _macro_last_good
     now = time.monotonic()
     if not force and _macro_cache and now - _macro_cache[0] < _MACRO_TTL:
         return _macro_cache[1]
@@ -1228,6 +1229,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     "summary": summary_value.strip() or data["summary"],
                     "drivers": [str(item).strip() for item in drivers[:3] if str(item).strip()],
                 })
+                _macro_last_good = dict(data)
                 logger.info(
                     "XAU macro synthesis ok bias=%s confidence=%.2f drivers=%s",
                     bias,
@@ -1255,6 +1257,30 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                 )
                 data["drivers"] = preview
                 data["synthesis_error"] = type(exc).__name__
+                if _macro_last_good:
+                    last_time = _event_timestamp(_macro_last_good.get("observed_at"))
+                    fallback_age = (
+                        max(0.0, (datetime.now(timezone.utc) - last_time).total_seconds())
+                        if last_time else None
+                    )
+                    decay = (
+                        max(0.20, 1.0 - fallback_age / 1800.0)
+                        if fallback_age is not None else 0.20
+                    )
+                    data["bias"] = int(_macro_last_good.get("bias", 0) or 0)
+                    data["bias_label"] = str(_macro_last_good.get("bias_label") or "neutral")
+                    data["confidence"] = round(
+                        float(_macro_last_good.get("confidence", 0.0) or 0.0) * decay,
+                        4,
+                    )
+                    data["summary"] = (
+                        "Last successful macro synthesis retained as decaying context: "
+                        + str(_macro_last_good.get("summary") or "")
+                    ).strip()
+                    data["drivers"] = list(_macro_last_good.get("drivers") or [])[:3]
+                    data["observed_at"] = _macro_last_good.get("observed_at") or data["observed_at"]
+                    data["fallback_used"] = True
+                    data["fallback_age_seconds"] = fallback_age
                 logger.warning(
                     "XAU macro synthesis degraded error=%s evidence_chars=%s answer_preview=%r",
                     type(exc).__name__,
