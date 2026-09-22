@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     auto_research_max_sources_per_probe: int = Field(default=2, ge=1, le=5)
     auto_research_max_findings_per_document: int = Field(default=2, ge=1, le=5)
     auto_research_max_tool_calls: int = Field(default=8, ge=2, le=30)
+    auto_research_tool_timeout_seconds: int = Field(default=25, ge=5, le=60)
     auto_research_extraction_timeout_seconds: int = Field(default=40, ge=15, le=120)
     auto_research_extraction_max_chars: int = Field(default=6000, ge=1500, le=12000)
     auto_research_probe_cooldown_minutes: int = Field(default=180, ge=15, le=10080)

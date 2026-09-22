@@ -274,9 +274,16 @@ def _documents_from_search_text(text: str, *, tool_name: str) -> list[ResearchDo
 class AhmedToolboxResearchGateway:
     """Dynamic read-only adapter over the already configured Ahmed ToolBox."""
 
-    def __init__(self, settings: Settings, *, max_tool_calls: int = 12) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        max_tool_calls: int = 12,
+        tool_timeout_seconds: int = 25,
+    ) -> None:
         self.settings = settings
         self.max_tool_calls = max(1, int(max_tool_calls))
+        self.tool_timeout_seconds = max(5, int(tool_timeout_seconds))
         self.tool_calls = 0
         self.client = AhmedToolboxClient(
             settings.ahmed_toolbox_url,
@@ -313,7 +320,7 @@ class AhmedToolboxResearchGateway:
         self._budget()
         result = await asyncio.wait_for(
             asyncio.to_thread(self.client.call_tool, name, arguments),
-            timeout=45,
+            timeout=self.tool_timeout_seconds,
         )
         if result.get("isError"):
             raise AhmedToolboxError(
@@ -943,6 +950,33 @@ class AutomaticResearchLoop:
     ) -> AutomaticResearchResult:
         started = utc(evaluated_at)
         run_id = _hash("rloop", started.isoformat())
+        stale_before = started - timedelta(minutes=10)
+        stale_runs = (
+            db.query(ResearchLoopRunRecord)
+            .filter(
+                ResearchLoopRunRecord.status == "running",
+                ResearchLoopRunRecord.started_at < stale_before,
+            )
+            .all()
+        )
+        stale_run_ids = [row.run_id for row in stale_runs]
+        for row in stale_runs:
+            row.status = "abandoned"
+            row.completed_at = started
+            row.error = "stale_run_recovered_on_next_cycle"
+        if stale_run_ids:
+            stale_attempts = (
+                db.query(ResearchProbeAttemptRecord)
+                .filter(
+                    ResearchProbeAttemptRecord.run_id.in_(stale_run_ids),
+                    ResearchProbeAttemptRecord.status == "running",
+                )
+                .all()
+            )
+            for attempt in stale_attempts:
+                attempt.status = "abandoned"
+                attempt.error_code = "stale_run_recovered"
+
         run_row = ResearchLoopRunRecord(
             run_id=run_id,
             started_at=started,
@@ -1233,6 +1267,7 @@ async def run_automatic_research_once(
         gateway = AhmedToolboxResearchGateway(
             settings,
             max_tool_calls=settings.auto_research_max_tool_calls,
+            tool_timeout_seconds=settings.auto_research_tool_timeout_seconds,
         )
         ai = build_failover_client(
             None,
