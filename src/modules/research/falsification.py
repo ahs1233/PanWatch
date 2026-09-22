@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from .claim_graph import ClaimGraph, ClaimStatus
+from .claim_graph import ClaimGraph, ClaimKind, ClaimStatus
 from .evidence import EvidenceRelation, ObservationKind, normalize_text, utc
 from .ledger import EvidenceLedger
 
@@ -233,6 +233,7 @@ class FalsificationEngine:
         as_of: datetime | None = None,
     ) -> FalsificationReport:
         assessment = graph.assess(claim_id, ledger, as_of=as_of)
+        claim = graph.get_claim(claim_id)
         rules = self.rules_for_claim(claim_id)
         results = tuple(
             self._evaluate_rule(
@@ -279,10 +280,27 @@ class FalsificationEngine:
             adjusted *= 1.0 - min(0.85, pressure * 0.75)
         adjusted = round(max(0.0, min(1.0, adjusted)), 4)
 
+        falsifiable_kinds = {
+            ClaimKind.HYPOTHESIS,
+            ClaimKind.FORECAST,
+            ClaimKind.MECHANISM,
+            ClaimKind.SCENARIO,
+            ClaimKind.CONCLUSION,
+        }
+        lacks_falsification = (
+            claim.kind in falsifiable_kinds
+            and (
+                not rules
+                or not testable
+            )
+        )
+
         if hard_trigger or adjusted <= 0.20:
             final_status = ClaimStatus.FALSIFIED
         elif triggered and adjusted < 0.55:
             final_status = ClaimStatus.CONTESTED
+        elif lacks_falsification:
+            final_status = ClaimStatus.OPEN
         elif assessment.status is ClaimStatus.SUPPORTED and adjusted >= 0.70:
             final_status = ClaimStatus.SUPPORTED
         elif assessment.status is ClaimStatus.INSUFFICIENT_EVIDENCE:
@@ -290,11 +308,25 @@ class FalsificationEngine:
         else:
             final_status = ClaimStatus.OPEN
 
-        probes = tuple(
+        probes_list = [
             self._probe_for(rule, result)
             for rule, result in zip(rules, results)
             if result.state is FalsificationState.UNTESTABLE
-        )
+        ]
+        if claim.kind in falsifiable_kinds and not rules:
+            probes_list.append(
+                FalsificationProbe(
+                    rule_id="missing_falsification_rule",
+                    claim_id=claim_id,
+                    priority=1.5,
+                    instruction=(
+                        "Define at least one explicit observation or condition "
+                        "that would make this claim weaker or false."
+                    ),
+                    missing_requirement="claim has no falsification rule",
+                )
+            )
+        probes = tuple(probes_list)
         return FalsificationReport(
             claim_id=claim_id,
             base_status=assessment.status,
