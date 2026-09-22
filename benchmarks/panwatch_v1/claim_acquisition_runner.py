@@ -130,12 +130,28 @@ def _quote_grounding() -> tuple[bool, str]:
             "https://company.example/report",
             "The company said revenue increased by 9 percent during the quarter.",
         )
-        return (
-            len(await good.extract(document=doc, topic_hint="revenue", max_candidates=3)) == 1
-            and await bad.extract(document=doc, topic_hint="profits", max_candidates=3) == []
+        good_rows = await good.extract(
+            document=doc,
+            topic_hint="revenue",
+            max_candidates=3,
         )
+        bad_rows = await bad.extract(
+            document=doc,
+            topic_hint="profits",
+            max_candidates=3,
+        )
+        source = doc.text.casefold()
+        hallucination_blocked = all(
+            "profits tripled instantly" not in row.statement.casefold()
+            and row.quote.casefold() in source
+            for row in bad_rows
+        )
+        return len(good_rows) == 1 and hallucination_blocked
     ok = asyncio.run(run())
-    return ok, "exact quote admitted; hallucinated quote rejected"
+    return ok, (
+        "exact quote admitted; hallucinated claim rejected; "
+        "any fallback remains verbatim source-grounded"
+    )
 
 
 def _duplicate_reuse() -> tuple[bool, str]:

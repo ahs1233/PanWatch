@@ -487,3 +487,28 @@ async def test_timeout_fallback_rejects_boilerplate_and_non_numeric_opinion():
         max_candidates=3,
     )
     assert rows == []
+
+
+
+@pytest.mark.asyncio
+async def test_empty_llm_output_uses_deterministic_grounded_fallback():
+    extractor = GroundedClaimExtractor(
+        _FakeAI('{"claims":[]}')
+    )
+    doc = _doc(
+        "https://energy.example/report",
+        (
+            "The report states data center electricity demand is expected to grow "
+            "26 percent in 2026. Total demand reached 500 terawatt-hours in 2025."
+        ),
+    )
+    rows = await extractor.extract(
+        document=doc,
+        topic_hint="data center electricity demand 2026",
+        max_candidates=3,
+    )
+    assert rows
+    assert rows[0].quote == rows[0].statement
+    assert rows[0].metadata["extractor"] == "deterministic_grounded_fallback_v1"
+    assert rows[0].metadata["fallback_reason"] == "empty_or_unusable_llm_output"
+    assert "2026" in rows[0].statement or "500" in rows[0].statement

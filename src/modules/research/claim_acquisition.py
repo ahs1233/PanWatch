@@ -450,7 +450,7 @@ class GroundedClaimExtractor:
         parsed = _json_value(raw)
         rows = parsed.get("claims") if isinstance(parsed, dict) else []
         if not isinstance(rows, list):
-            return []
+            rows = []
 
         normalized_source = normalize_text(source_text).casefold()
         candidates: list[ClaimCandidate] = []
@@ -511,7 +511,22 @@ class GroundedClaimExtractor:
                     metadata={"extractor": "grounded_claim_v1"},
                 )
             )
-        return candidates
+        if candidates:
+            return candidates
+
+        fallback = _deterministic_grounded_candidates(
+            source_text,
+            max_candidates=max_candidates,
+            fallback_reason="empty_or_unusable_llm_output",
+        )
+        if fallback:
+            logger.info(
+                "Claim extraction used deterministic grounded fallback "
+                "after empty/unusable LLM output url=%s candidates=%s",
+                document.url,
+                len(fallback),
+            )
+        return fallback
 
 
 class GeneralClaimAcquisition:
