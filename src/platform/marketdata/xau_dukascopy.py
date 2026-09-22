@@ -33,7 +33,7 @@ import httpx
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
 
 
-_RECORD = struct.Struct(">iiiff")
+_RECORD = struct.Struct(">IIIff")
 _POINT_DIVIDER = 1000.0
 _DEFAULT_BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 _SUPPORTED = {
