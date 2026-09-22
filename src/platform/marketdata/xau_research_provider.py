@@ -51,12 +51,23 @@ class YahooGoldResearchProvider:
         except Exception:
             pass
 
-        frame = yf.Ticker(self.symbol).history(
-            period=_PERIOD_BY_TIMEFRAME[timeframe],
-            interval=_INTERVAL_BY_TIMEFRAME[timeframe],
-            auto_adjust=False,
-            actions=False,
-        )
+        ticker = yf.Ticker(self.symbol)
+        if timeframe in {XAUTimeframe.D1, XAUTimeframe.W1, XAUTimeframe.MN1}:
+            # Explicit start is more reliable than period="max" for some Yahoo
+            # futures responses and gives enough history for daily/weekly EMA1000.
+            frame = ticker.history(
+                start="2000-01-01",
+                interval=_INTERVAL_BY_TIMEFRAME[timeframe],
+                auto_adjust=False,
+                actions=False,
+            )
+        else:
+            frame = ticker.history(
+                period=_PERIOD_BY_TIMEFRAME[timeframe],
+                interval=_INTERVAL_BY_TIMEFRAME[timeframe],
+                auto_adjust=False,
+                actions=False,
+            )
         if frame is None or frame.empty:
             return []
 
