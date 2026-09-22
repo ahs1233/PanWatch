@@ -1,6 +1,6 @@
 {
   "benchmark": "PanWatch Benchmark v1",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "purpose": "Measure current PanWatch decision integrity without confusing implemented core behavior with future research-engine capabilities.",
   "tracks": [
     {
@@ -43,6 +43,22 @@
       "scope_note": "Automated frozen-fixture checks for evidence semantics; not a live research superiority benchmark."
     },
     {
+      "id": "claim_graph_falsification",
+      "status": "automated",
+      "tasks": [
+        "multi_hop_support_propagation",
+        "required_dependency_collapse",
+        "hard_numeric_falsifier",
+        "counterclaim_falsifier",
+        "reasoning_cycle_rejected",
+        "untestable_rule_generates_probe",
+        "unfalsifiable_supported_claim_guard",
+        "numeric_conflict_blocks_false_falsification"
+      ],
+      "runner": "benchmarks.panwatch_v1.reasoning_runner",
+      "scope_note": "Deterministic graph/falsification integrity; probes are generated but live counter-research execution is not automated yet."
+    },
+    {
       "id": "company_sector_research",
       "status": "specified_not_automated",
       "tasks": [
@@ -76,8 +92,9 @@
   ],
   "notes": [
     "xau_decision_core is automated as a deterministic decision-core regression track.",
-    "economic_research now has an automated evidence-integrity foundation track using frozen fixtures.",
+    "economic_research is automated for evidence-integrity semantics using frozen fixtures.",
+    "claim_graph_falsification is automated for dependency propagation, falsifiability and adversarial failure conditions.",
     "company_sector_research remains specified but not automated.",
-    "External baseline comparison is intentionally not faked without configured model access, live/frozen source packets and human labels."
+    "External baseline comparison is intentionally not faked without configured model access, frozen/live source packets and human labels."
   ]
 }
