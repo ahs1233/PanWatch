@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from .paper import XAUPaperTradingEngine
-from .service import build_decision_fusion, get_chart_series, get_macro_context, get_xau_snapshot
+from .service import build_decision_fusion, get_chart_series, get_library_validation, get_macro_context, get_xau_snapshot
 
 router = APIRouter()
 
@@ -36,6 +36,17 @@ async def chart(
         raise HTTPException(
             status_code=503,
             detail=f"XAU chart data unavailable: {type(exc).__name__}",
+        ) from exc
+
+
+@router.get("/library-validation")
+async def library_validation(force: bool = Query(default=False)):
+    try:
+        return await get_library_validation(force=force)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"XAU library validation unavailable: {type(exc).__name__}",
         ) from exc
 
 
