@@ -15,7 +15,7 @@ _PERIOD_BY_TIMEFRAME = {
     XAUTimeframe.M1: "5d",
     XAUTimeframe.M5: "1mo",
     XAUTimeframe.M15: "1mo",
-    XAUTimeframe.H1: "2y",
+    XAUTimeframe.H1: "3mo",
     XAUTimeframe.D1: "5y",
     XAUTimeframe.W1: "10y",
     XAUTimeframe.MN1: "max",
