@@ -246,11 +246,13 @@ async def _refresh_market_context() -> dict[str, Any]:
             daily,
             futures_hourly=futures_h1,
         )
-        if first_context_build and h1:
-            data["vectorbt_validation"] = await asyncio.to_thread(
-                vectorbt_validation,
-                h1,
-            )
+        if first_context_build:
+            validation_rows = h1 if len(h1) >= 220 else daily
+            if validation_rows:
+                data["vectorbt_validation"] = await asyncio.to_thread(
+                    vectorbt_validation,
+                    validation_rows,
+                )
         data["sources"] = {
             "1h": h1[-1].source if h1 else None,
             "4h": h4[-1].source if h4 else None,
@@ -340,14 +342,28 @@ async def get_library_validation(force: bool = False) -> dict[str, Any]:
         library_consensus,
         rows[-500:] if len(rows) > 500 else rows,
     )
-    backtest = await asyncio.to_thread(vectorbt_validation, rows)
+    validation_rows = rows
+    validation_timeframe = "1h"
+    if len(validation_rows) < 220:
+        try:
+            validation_rows = await asyncio.to_thread(
+                provider.bars,
+                XAUTimeframe.D1,
+                limit=1000,
+                timeout_seconds=14.0,
+            )
+            validation_rows = sorted(validation_rows, key=lambda row: row.timestamp)
+            validation_timeframe = "1d"
+        except Exception:
+            validation_rows = rows
+    backtest = await asyncio.to_thread(vectorbt_validation, validation_rows)
     return {
         "instrument": "XAUUSD",
         "timeframe": "1h",
         "bar_count": len(rows),
         "observed_at": rows[-1].timestamp.isoformat() if rows else None,
         "library_consensus": consensus,
-        "vectorbt_validation": backtest,
+        "vectorbt_validation": {**backtest, "timeframe": validation_timeframe},
         "structure_scope_reference": {
             "mode": "reference_architecture",
             "runtime_dependency": False,
