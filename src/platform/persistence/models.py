@@ -1909,3 +1909,38 @@ class ResearchClaimCandidateRecord(Base):
     )
     meta = Column(JSON, default={})
     created_at = Column(DateTime, server_default=func.now())
+
+
+
+class ResearchClaimResolutionRecord(Base):
+    """Audit trail for semantic resolution of an acquired claim candidate."""
+
+    __tablename__ = "research_claim_resolutions"
+    __table_args__ = (
+        Index("ix_research_resolution_candidate", "candidate_id"),
+        Index("ix_research_resolution_matched_claim", "matched_claim_id"),
+        Index("ix_research_resolution_relation", "relation"),
+        Index("ix_research_resolution_created", "created_at"),
+    )
+
+    resolution_id = Column(String, primary_key=True)
+    candidate_id = Column(
+        String,
+        ForeignKey("research_claim_candidates.candidate_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    matched_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    relation = Column(String, nullable=False)
+    score = Column(Float, nullable=False, default=0.0)
+    lexical_score = Column(Float, nullable=False, default=0.0)
+    key_match = Column(Boolean, nullable=False, default=False)
+    numeric_match = Column(Boolean, nullable=False, default=False)
+    period_match = Column(Boolean, nullable=False, default=False)
+    polarity_match = Column(Boolean, nullable=False, default=False)
+    reason = Column(Text, nullable=False, default="")
+    signals = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
