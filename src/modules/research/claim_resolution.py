@@ -265,6 +265,13 @@ class ConservativeClaimResolver:
                 relation = SemanticClaimRelation.EXACT
                 reason = "normalized_statement_exact_match"
                 score = 1.0
+            elif not period_match:
+                # Explicit period mismatch is a hard scope boundary. A shared
+                # semantic key must never collapse 2024 and 2025 into one
+                # claim or turn them into an ambiguous same-period match.
+                relation = SemanticClaimRelation.DISTINCT
+                reason = "different_explicit_period"
+                score = lexical
             elif (
                 supersedes_previous
                 and revision_explicit
@@ -314,10 +321,6 @@ class ConservativeClaimResolver:
             elif lexical >= 0.58:
                 relation = SemanticClaimRelation.AMBIGUOUS
                 reason = "moderate_overlap_requires_separate_claim"
-                score = lexical
-            elif not period_match:
-                relation = SemanticClaimRelation.DISTINCT
-                reason = "different_explicit_period"
                 score = lexical
 
             relation_priority = {
