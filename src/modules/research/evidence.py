@@ -34,6 +34,7 @@ class SourceTier(StrEnum):
 
 
 class ObservationKind(StrEnum):
+    RAW_SOURCE = "raw_source"
     ACTUAL = "actual"
     FORECAST = "forecast"
     REVISION = "revision"
