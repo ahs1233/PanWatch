@@ -20,5 +20,5 @@ def test_reasoning_track_regression_gate():
 def test_reasoning_track_is_explicit_about_remaining_limitations():
     report = run_reasoning_benchmark()
     limitations = " ".join(report["limitations"]).lower()
-    assert "not yet automatically executed" in limitations
-    assert "belief-state" in limitations
+    assert "automatic research loop" in limitations
+    assert "persistent belief state" in limitations

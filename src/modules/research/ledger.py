@@ -199,7 +199,11 @@ class EvidenceLedger:
         kinds: Iterable[ObservationKind] | None = None,
     ) -> GuardResult:
         now = utc(as_of)
-        rows = self.for_claim(claim_key, kinds=kinds)
+        rows = self.for_claim(
+            claim_key,
+            kinds=kinds,
+            as_of=as_of,
+        )
         if not rows:
             return GuardResult(False, "evidence_missing", "no evidence available")
         freshest = max(rows, key=lambda item: item.event_time or item.observed_at)

@@ -2271,6 +2271,72 @@ def _m129_persistent_belief_state(conn: Connection) -> None:
     )
 
 
+
+def _m130_automatic_research_loop(conn: Connection) -> None:
+    """Persist bounded automatic-research runs and probe cooldown attempts."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_loop_runs (
+            run_id TEXT PRIMARY KEY,
+            started_at DATETIME NOT NULL,
+            completed_at DATETIME,
+            status TEXT NOT NULL DEFAULT 'running',
+            probes_planned INTEGER NOT NULL DEFAULT 0,
+            probes_executed INTEGER NOT NULL DEFAULT 0,
+            tool_calls INTEGER NOT NULL DEFAULT 0,
+            documents_read INTEGER NOT NULL DEFAULT 0,
+            evidence_added INTEGER NOT NULL DEFAULT 0,
+            beliefs_changed INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_probe_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES research_loop_runs(run_id) ON DELETE RESTRICT,
+            probe_key TEXT NOT NULL,
+            rule_id TEXT NOT NULL,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            attempted_at DATETIME NOT NULL,
+            status TEXT NOT NULL,
+            query TEXT NOT NULL DEFAULT '',
+            tool_name TEXT NOT NULL DEFAULT '',
+            source_count INTEGER NOT NULL DEFAULT 0,
+            evidence_count INTEGER NOT NULL DEFAULT 0,
+            error_code TEXT NOT NULL DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_loop_run_started",
+        "CREATE INDEX ix_research_loop_run_started ON research_loop_runs(started_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_loop_run_status",
+        "CREATE INDEX ix_research_loop_run_status ON research_loop_runs(status)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_probe_key_attempted",
+        "CREATE INDEX ix_research_probe_key_attempted "
+        "ON research_probe_attempts(probe_key, attempted_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_probe_run",
+        "CREATE INDEX ix_research_probe_run ON research_probe_attempts(run_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_probe_status",
+        "CREATE INDEX ix_research_probe_status ON research_probe_attempts(status)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2301,6 +2367,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(127, "research_evidence_foundation", _m127_research_evidence_foundation),
     Migration(128, "claim_graph_and_falsification", _m128_claim_graph_and_falsification),
     Migration(129, "persistent_belief_state", _m129_persistent_belief_state),
+    Migration(130, "automatic_research_loop", _m130_automatic_research_loop),
 )
 
 

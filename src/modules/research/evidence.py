@@ -283,7 +283,13 @@ def build_evidence(
         observation_kind=ObservationKind(observation_kind),
         event_time=utc(event_time) if event_time else None,
         observed_at=utc(observed_at or source.observed_at),
-        recorded_at=utc(recorded_at),
+        recorded_at=utc(
+            recorded_at
+            if recorded_at is not None
+            else observed_at
+            if observed_at is not None
+            else source.observed_at
+        ),
         confidence=confidence,
         content_hash=digest,
         numeric_value=float(numeric_value) if numeric_value is not None else None,

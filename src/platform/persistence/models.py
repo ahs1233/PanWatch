@@ -1777,3 +1777,65 @@ class ResearchBeliefEventRecord(Base):
     detail = Column(Text, nullable=False, default="")
     meta = Column(JSON, default={})
     created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchLoopRunRecord(Base):
+    """One bounded automatic research-loop execution."""
+
+    __tablename__ = "research_loop_runs"
+    __table_args__ = (
+        Index("ix_research_loop_run_started", "started_at"),
+        Index("ix_research_loop_run_status", "status"),
+    )
+
+    run_id = Column(String, primary_key=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    status = Column(String, nullable=False, default="running")
+    probes_planned = Column(Integer, nullable=False, default=0)
+    probes_executed = Column(Integer, nullable=False, default=0)
+    tool_calls = Column(Integer, nullable=False, default=0)
+    documents_read = Column(Integer, nullable=False, default=0)
+    evidence_added = Column(Integer, nullable=False, default=0)
+    beliefs_changed = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=False, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchProbeAttemptRecord(Base):
+    """Persisted anti-loop/cooldown record for one falsification research probe."""
+
+    __tablename__ = "research_probe_attempts"
+    __table_args__ = (
+        Index(
+            "ix_research_probe_key_attempted",
+            "probe_key",
+            "attempted_at",
+        ),
+        Index("ix_research_probe_run", "run_id"),
+        Index("ix_research_probe_status", "status"),
+    )
+
+    attempt_id = Column(String, primary_key=True)
+    run_id = Column(
+        String,
+        ForeignKey("research_loop_runs.run_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    probe_key = Column(String, nullable=False)
+    rule_id = Column(String, nullable=False)
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    attempted_at = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False)
+    query = Column(Text, nullable=False, default="")
+    tool_name = Column(String, nullable=False, default="")
+    source_count = Column(Integer, nullable=False, default=0)
+    evidence_count = Column(Integer, nullable=False, default=0)
+    error_code = Column(String, nullable=False, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())

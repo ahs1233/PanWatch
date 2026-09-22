@@ -407,7 +407,7 @@ def run_reasoning_benchmark() -> dict:
     score = round(earned / total * 100.0, 2) if total else 0.0
     return {
         "benchmark": "PanWatch Benchmark v1",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "track": "claim_graph_falsification",
         "score_percent": score,
         "passed_cases": sum(1 for item in results if item.passed),
@@ -418,8 +418,8 @@ def run_reasoning_benchmark() -> dict:
         "regression_gate_passed": score >= 90.0,
         "limitations": [
             "This track measures deterministic reasoning integrity, not open-ended intelligence.",
-            "Falsification probes are generated but not yet automatically executed against live research tools.",
-            "Persistent belief-state updates remain outside this sprint.",
+            "Probe execution is scored separately in the Automatic Research Loop track.",
+            "Persistent belief-state history is scored separately in the Persistent Belief State track.",
         ],
         "cases": [asdict(item) for item in results],
     }
