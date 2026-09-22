@@ -1,4 +1,4 @@
-# PanWatch Benchmark v1.5
+# PanWatch Benchmark v1.6
 
 PanWatch Benchmark is the reproducible measurement layer for the project. It separates implemented research integrity from future capabilities and prevents architectural progress from being judged by intuition alone.
 
@@ -89,17 +89,44 @@ Admission rules:
 
 Regression gate: **90%**.
 
+## Automated track 7 — Semantic Claim Resolution
+
+v1.6 resolves claims across documents before the graph proliferates duplicates:
+
+```
+New Claim Candidate
+  → semantic key + lexical overlap
+  → numeric / period consistency
+  → polarity / negation check
+  → exact | paraphrase | contradiction | revision | distinct | ambiguous
+  → audited resolution decision
+```
+
+Resolution rules are deliberately conservative:
+
+- compatible paraphrases reuse the existing Claim and add independent Evidence;
+- conflicting values for the same semantic key and period remain separate Claims;
+- conflicting claims are linked without creating reasoning cycles;
+- a contradiction's new Evidence also directly contradicts the older Claim;
+- explicit periods prevent accidental merging across years;
+- revision requires an explicit revision/update cue;
+- ambiguous matches remain separate instead of being silently collapsed.
+
+Persistence adds `research_claim_resolutions`, including match score and all signals used by the resolver.
+
+Regression gate: **90%**.
+
 ## Specified track — Company / sector research
 
 The company/sector research benchmark remains specified but not automated. The generic engine can accept such claims, but the frozen company/sector corpus and comparative scoring harness still need implementation.
 
-## What v1.4 does not claim
+## What v1.6 does not claim
 
 A deterministic 100% score does not prove general research superiority over ChatGPT, Claude, or a professional researcher.
 
 Current boundaries:
 
-- claim extraction is now generalized, but recall/semantic clustering over arbitrary long-form corpora is not yet proven;
+- claim extraction and conservative cross-document resolution are generalized, but entity linking and embedding-scale clustering over very large corpora are not yet proven;
 - external live search quality is provider-dependent and verified separately from deterministic CI;
 - blind human-scored external comparative benchmarks are not yet implemented.
 
@@ -112,6 +139,7 @@ PYTHONPATH=. python -m benchmarks.panwatch_v1.reasoning_runner
 PYTHONPATH=. python -m benchmarks.panwatch_v1.belief_runner
 PYTHONPATH=. python -m benchmarks.panwatch_v1.automatic_research_runner
 PYTHONPATH=. python -m benchmarks.panwatch_v1.claim_acquisition_runner
+PYTHONPATH=. python -m benchmarks.panwatch_v1.semantic_resolution_runner
 
 python -m pytest -q \
   ci_tests/test_panwatch_benchmark_v1.py \
@@ -125,5 +153,6 @@ python -m pytest -q \
   ci_tests/test_panwatch_reasoning_benchmark_v1.py \
   ci_tests/test_panwatch_belief_benchmark_v1.py \
   ci_tests/test_panwatch_automatic_research_benchmark_v1.py \
-  ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py
+  ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py \
+  ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py
 ```

@@ -12,7 +12,7 @@ def test_claim_acquisition_track_has_frozen_coverage():
 
 def test_claim_acquisition_track_regression_gate():
     report=run_claim_acquisition_benchmark()
-    assert report["version"]=="1.5.0"
+    assert report["version"]=="1.6.0"
     assert report["track"]=="general_claim_acquisition"
     assert report["regression_gate_percent"]==90.0
     assert report["regression_gate_passed"] is True, report

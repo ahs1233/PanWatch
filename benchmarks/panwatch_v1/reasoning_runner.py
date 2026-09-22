@@ -407,7 +407,7 @@ def run_reasoning_benchmark() -> dict:
     score = round(earned / total * 100.0, 2) if total else 0.0
     return {
         "benchmark": "PanWatch Benchmark v1",
-        "version": "1.5.0",
+        "version": "1.6.0",
         "track": "claim_graph_falsification",
         "score_percent": score,
         "passed_cases": sum(1 for item in results if item.passed),
