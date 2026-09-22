@@ -32,6 +32,7 @@ from src.modules.market.price_alert_scheduler import PriceAlertScheduler
 from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
 from src.modules.research.automatic_research_scheduler import AutomaticResearchScheduler
+from src.modules.research.claim_acquisition_scheduler import ClaimAcquisitionScheduler
 from src.modules.research.research_store import init_research_store
 from src.modules.xau.scheduler import XAUResearchScheduler
 from src.modules.xau.paper import XAUPaperTradingScheduler
@@ -64,6 +65,7 @@ xau_research_scheduler: XAUResearchScheduler | None = None
 xau_paper_scheduler: XAUPaperTradingScheduler | None = None
 xau_replay_scheduler: XAUReplayScheduler | None = None
 automatic_research_scheduler: AutomaticResearchScheduler | None = None
+claim_acquisition_scheduler: ClaimAcquisitionScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -1693,7 +1695,7 @@ async def lifespan(app):
 
     seed_agents()
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler, automatic_research_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler, automatic_research_scheduler, claim_acquisition_scheduler
 
     if xau_mode:
         # Keep the process focused on XAU/USD. The original stock catalogue,
@@ -1806,6 +1808,27 @@ async def lifespan(app):
     else:
         logger.info("Automatic Research scheduler disabled by configuration")
 
+    if settings.claim_acquisition_enabled:
+        if not settings.ahmed_toolbox_url:
+            logger.warning(
+                "Claim Acquisition requested but Ahmed ToolBox URL is not configured"
+            )
+        elif not settings.ai_api_key:
+            logger.warning(
+                "Claim Acquisition requested but AI API key is not configured"
+            )
+        else:
+            try:
+                claim_acquisition_scheduler = ClaimAcquisitionScheduler(settings)
+                claim_acquisition_scheduler.start()
+            except Exception as exc:
+                logger.error(
+                    "Claim Acquisition scheduler failed to start: %s",
+                    type(exc).__name__,
+                )
+    else:
+        logger.info("Claim Acquisition scheduler disabled by configuration")
+
     yield
     if scheduler:
         scheduler.shutdown()
@@ -1829,6 +1852,8 @@ async def lifespan(app):
         logger.info("XAU paper scheduler stopped")
     if automatic_research_scheduler:
         automatic_research_scheduler.shutdown()
+    if claim_acquisition_scheduler:
+        claim_acquisition_scheduler.shutdown()
     if runtime_smoke_task and not runtime_smoke_task.done():
         runtime_smoke_task.cancel()
         await asyncio.gather(runtime_smoke_task, return_exceptions=True)

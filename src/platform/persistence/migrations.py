@@ -2337,6 +2337,80 @@ def _m130_automatic_research_loop(conn: Connection) -> None:
     )
 
 
+
+def _m131_general_claim_acquisition(conn: Connection) -> None:
+    """Persist bounded claim acquisition runs and candidate admission decisions."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_acquisition_runs (
+            run_id TEXT PRIMARY KEY,
+            started_at DATETIME NOT NULL,
+            completed_at DATETIME,
+            status TEXT NOT NULL DEFAULT 'running',
+            seed_topic TEXT NOT NULL DEFAULT '',
+            documents_seen INTEGER NOT NULL DEFAULT 0,
+            candidates_extracted INTEGER NOT NULL DEFAULT 0,
+            claims_accepted INTEGER NOT NULL DEFAULT 0,
+            duplicates INTEGER NOT NULL DEFAULT 0,
+            rejected INTEGER NOT NULL DEFAULT 0,
+            superseded INTEGER NOT NULL DEFAULT 0,
+            tool_calls INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claim_candidates (
+            candidate_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES research_acquisition_runs(run_id) ON DELETE RESTRICT,
+            source_id TEXT NOT NULL REFERENCES research_sources(source_id) ON DELETE RESTRICT,
+            fingerprint TEXT NOT NULL,
+            quote TEXT NOT NULL,
+            statement TEXT NOT NULL,
+            proposed_claim_key TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            observation_kind TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0.5,
+            valid_from DATETIME,
+            valid_until DATETIME,
+            supersedes_previous INTEGER NOT NULL DEFAULT 0,
+            decision TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            accepted_claim_id TEXT REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn, "ix_research_acquisition_started",
+        "CREATE INDEX ix_research_acquisition_started ON research_acquisition_runs(started_at)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_acquisition_status",
+        "CREATE INDEX ix_research_acquisition_status ON research_acquisition_runs(status)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_run",
+        "CREATE INDEX ix_research_candidate_run ON research_claim_candidates(run_id)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_source",
+        "CREATE INDEX ix_research_candidate_source ON research_claim_candidates(source_id)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_decision",
+        "CREATE INDEX ix_research_candidate_decision ON research_claim_candidates(decision)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_key",
+        "CREATE INDEX ix_research_candidate_key ON research_claim_candidates(proposed_claim_key)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_fingerprint",
+        "CREATE INDEX ix_research_candidate_fingerprint ON research_claim_candidates(fingerprint)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2368,6 +2442,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(128, "claim_graph_and_falsification", _m128_claim_graph_and_falsification),
     Migration(129, "persistent_belief_state", _m129_persistent_belief_state),
     Migration(130, "automatic_research_loop", _m130_automatic_research_loop),
+    Migration(131, "general_claim_acquisition", _m131_general_claim_acquisition),
 )
 
 
