@@ -270,7 +270,36 @@ async def _refresh_market_context() -> dict[str, Any]:
             }
         data["library_intelligence"] = libraries
 
+        primary_smc = libraries.get("primary") or {}
+        primary_liquidity = primary_smc.get("liquidity") or {}
+        primary_count = min(len(h1), 500)
+        recent_floor = max(0, primary_count - 8)
+        buy_sweep_index = primary_liquidity.get("buy_side_sweep_index")
+        sell_sweep_index = primary_liquidity.get("sell_side_sweep_index")
+        validated_sweep = "none"
+        latest_sweep_index = -1
+        if isinstance(buy_sweep_index, int) and buy_sweep_index >= recent_floor:
+            validated_sweep = "buy_side_sweep"
+            latest_sweep_index = buy_sweep_index
+        if isinstance(sell_sweep_index, int) and sell_sweep_index >= recent_floor and sell_sweep_index > latest_sweep_index:
+            validated_sweep = "sell_side_sweep"
+            latest_sweep_index = sell_sweep_index
+
         smart = data.get("smart_money") or {}
+        smart["library_primary"] = {
+            "library": "pyvsmc",
+            "status": primary_smc.get("status"),
+            "direction": primary_smc.get("direction"),
+            "recent_liquidity_sweep": validated_sweep,
+            "latest_sweep_level": primary_liquidity.get("latest_sweep_level"),
+            "fvg": primary_smc.get("fvg"),
+            "order_blocks": primary_smc.get("order_blocks"),
+            "zones": primary_smc.get("zones"),
+        }
+        smart["validated_structure_direction"] = primary_smc.get("direction") or "neutral"
+        smart["validated_liquidity_sweep"] = validated_sweep
+        data["smart_money"] = smart
+
         custom_direction = str(smart.get("bias") or "neutral")
         library_direction = str(libraries.get("direction") or "neutral")
         agreement = float(libraries.get("agreement") or 0.0)
