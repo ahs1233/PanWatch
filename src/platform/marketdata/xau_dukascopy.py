@@ -15,6 +15,9 @@ For XAUUSD, raw prices use a 1000 divider.  Bars emitted here use MID price
 sizes observed in the source ticks; it is an activity/liquidity proxy, not
 centralized traded gold volume or global order flow.
 
+Transient 429/5xx responses use bounded exponential backoff; missing 404 hours
+are treated as no-data and are not retried.
+
 No live trading, broker orders, or execution eligibility is provided.
 """
 
