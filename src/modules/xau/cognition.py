@@ -682,9 +682,17 @@ def _hypotheses(
     macro: dict[str, Any],
     perception: dict[str, Any],
     regime: dict[str, Any],
+    edge: dict[str, Any],
 ) -> list[dict[str, Any]]:
     candidate = str(technical.get("candidate") or "none")
     setup_dir = 1 if candidate == "long_setup" else -1 if candidate == "short_setup" else 0
+    if setup_dir == 0:
+        edge_direction = str(edge.get("direction") or "neutral")
+        if edge_direction == "bullish":
+            setup_dir = 1
+        elif edge_direction == "bearish":
+            setup_dir = -1
+    edge_strength = _number(edge.get("strength"), 0.0)
     macro_bias = int(max(-1, min(1, _number(macro.get("bias"), 0.0))))
     macro_conf = _clip(_number(macro.get("confidence"), 0.0))
     pressure = _number(perception.get("directional_pressure"))
@@ -696,7 +704,8 @@ def _hypotheses(
 
     continuation = (
         0.25
-        + (1.0 if setup_dir else -0.30)
+        + (0.55 if setup_dir else -0.30)
+        + 0.85 * edge_strength
         + 0.80 * abs(pressure)
         + 1.20 * _number(probs.get("trend_bull" if setup_dir > 0 else "trend_bear"))
         + 0.70 * _number(probs.get("breakout_expansion"))
