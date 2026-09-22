@@ -7,8 +7,11 @@ export interface XAUChartBar {
   low: number
   close: number
   volume: number
-  ema9: number
-  ema21: number
+  ema9: number | null
+  ema21: number | null
+  ema50: number | null
+  ema200: number | null
+  ema1000: number | null
   source: string
 }
 
@@ -56,8 +59,11 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
     const y = (v: number) => top + (max - v) / Math.max(1e-9, max - min) * plotH
     const ema9 = pathFor(rows.map(r => r.ema9), x, y)
     const ema21 = pathFor(rows.map(r => r.ema21), x, y)
+    const ema50 = pathFor(rows.map(r => r.ema50), x, y)
+    const ema200 = pathFor(rows.map(r => r.ema200), x, y)
+    const ema1000 = pathFor(rows.map(r => r.ema1000), x, y)
     const ticks = Array.from({ length: 6 }, (_, i) => max - (max - min) * i / 5)
-    return { rows, width, height, left, right, top, bottom, plotW, plotH, candleW, x, y, ema9, ema21, ticks, min, max }
+    return { rows, width, height, left, right, top, bottom, plotW, plotH, candleW, x, y, ema9, ema21, ema50, ema200, ema1000, ticks, min, max }
   }, [bars, swingHigh, swingLow, triggerLevel])
 
   if (loading && !bars.length) {
@@ -67,7 +73,7 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
     return <div className="flex h-[360px] items-center justify-center text-xs text-muted-foreground">Chart data unavailable.</div>
   }
 
-  const { rows, width, height, left, top, plotW, plotH, candleW, x, y, ema9, ema21, ticks } = model
+  const { rows, width, height, left, top, plotW, plotH, candleW, x, y, ema9, ema21, ema50, ema200, ema1000, ticks } = model
   const latest = rows[rows.length - 1]
 
   const renderLevel = (value: number | null | undefined, label: string, className: string) => {
@@ -115,8 +121,11 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
           )
         })}
 
-        <path d={ema21} fill="none" className="stroke-violet-500" strokeWidth="1.4" />
-        <path d={ema9} fill="none" className="stroke-blue-500" strokeWidth="1.5" />
+        <path d={ema1000} fill="none" className="stroke-muted-foreground/45" strokeWidth="1.1" strokeDasharray="7 6" />
+        <path d={ema200} fill="none" className="stroke-amber-500/70" strokeWidth="1.15" />
+        <path d={ema50} fill="none" className="stroke-cyan-500/70" strokeWidth="1.2" />
+        <path d={ema21} fill="none" className="stroke-violet-500" strokeWidth="1.35" />
+        <path d={ema9} fill="none" className="stroke-blue-500" strokeWidth="1.45" />
 
         {rows.filter((_, i) => i % Math.max(1, Math.floor(rows.length / 6)) === 0).map((bar) => {
           const sourceIndex = rows.indexOf(bar)
@@ -129,9 +138,12 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
           <text x={left + plotW - 38} y={Math.max(top + 19, y(latest.close) + 4)} textAnchor="middle" className="fill-white text-[11px] font-semibold">{latest.close.toFixed(2)}</text>
         </g>
       </svg>
-      <div className="absolute left-3 top-3 flex items-center gap-3 rounded-lg bg-background/75 px-2.5 py-1.5 text-[10px] backdrop-blur">
-        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-500"/>EMA 9</span>
-        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-violet-500"/>EMA 21</span>
+      <div className="absolute left-3 top-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-background/75 px-2.5 py-1.5 text-[10px] backdrop-blur">
+        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-500"/>9</span>
+        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-violet-500"/>21</span>
+        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-cyan-500"/>50</span>
+        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-amber-500"/>200</span>
+        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-muted-foreground"/>1000</span>
       </div>
     </div>
   )
