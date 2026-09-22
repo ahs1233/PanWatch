@@ -418,8 +418,8 @@ def run_reasoning_benchmark() -> dict:
         "regression_gate_passed": score >= 90.0,
         "limitations": [
             "This track measures deterministic reasoning integrity, not open-ended intelligence.",
-            "Falsification probes are generated but not yet automatically executed against live research tools.",
-            "Persistent belief-state updates remain outside this sprint.",
+            "Probe execution is scored separately in the Automatic Research Loop track.",
+            "Persistent belief-state history is scored separately in the Persistent Belief State track.",
         ],
         "cases": [asdict(item) for item in results],
     }
