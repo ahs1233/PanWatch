@@ -1077,9 +1077,9 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     "event_kind is breaking or none. Scheduled-event gating is handled separately. "
                     "Only set event_risk=true for an explicitly supported market-moving breaking shock "
                     "from the last 30 minutes. Never invent facts, prices, dates, or times. "
-                    "If evidence conflicts or is insufficient, bias=0. Keep summary under 90 words and "
-                    "drivers to at most four short factual bullets.\n\n"
-                    + raw[:5000]
+                    "If evidence conflicts or is insufficient, bias=0. Keep summary under 50 words and "
+                    "drivers to at most three short factual bullets.\n\n"
+                    + raw[:3000]
                 )
                 answer = await asyncio.wait_for(
                     ai.chat_multi(
@@ -1091,7 +1091,6 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                             {"role": "user", "content": prompt},
                         ],
                         temperature=0.1,
-                        max_tokens=260,
                     ),
                     timeout=60,
                 )
@@ -1150,7 +1149,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     "bias_label": "bullish" if bias > 0 else "bearish" if bias < 0 else "neutral",
                     "confidence": confidence,
                     "summary": summary_value.strip() or data["summary"],
-                    "drivers": [str(item).strip() for item in drivers[:4] if str(item).strip()],
+                    "drivers": [str(item).strip() for item in drivers[:3] if str(item).strip()],
                 })
                 logger.info(
                     "XAU macro synthesis ok bias=%s confidence=%.2f drivers=%s",
