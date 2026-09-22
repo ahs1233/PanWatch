@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
+from .gen1_pipeline import run_gen1_trade_gold_pipeline
 from .paper import XAUPaperTradingEngine
 from .service import build_decision_fusion, get_chart_series, get_library_validation, get_macro_context, get_xau_snapshot
 
@@ -47,6 +48,18 @@ async def library_validation(force: bool = Query(default=False)):
         raise HTTPException(
             status_code=503,
             detail=f"XAU library validation unavailable: {type(exc).__name__}",
+        ) from exc
+
+
+@router.get("/gen1-gold")
+async def gen1_gold():
+    """PanWatch UI surface for the same core used by 'Gen1 trade gold'."""
+    try:
+        return await run_gen1_trade_gold_pipeline()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"GEN1 GOLD pipeline unavailable: {type(exc).__name__}",
         ) from exc
 
 

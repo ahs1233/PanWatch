@@ -7,6 +7,8 @@ import runpy
 from pan_agent import ModelMessage, RunRequest, ToolExposure, ToolRegistry
 
 from src.modules.assistant import xau_tools
+from src.modules.xau import api as xau_api
+from src.modules.xau import gen1_pipeline
 from src.modules.assistant.prompt import (
     GEN1_TRADE_GOLD_TOOL,
     build_assistant_messages,
@@ -218,34 +220,23 @@ def test_gen1_trade_gold_exact_trigger_freezes_allowed_tool():
     )
 
 
-def test_gen1_trade_gold_orchestrator_runs_toolbox_panwatch_gen1_in_order(monkeypatch):
+def test_gen1_trade_gold_shared_core_runs_toolbox_panwatch_gen1_in_order(monkeypatch):
     calls = []
 
     async def fake_macro(force=False):
         calls.append(("ahmed_toolbox", force))
         return {
-            "bias": 1,
-            "bias_label": "bullish",
-            "confidence": 0.8,
-            "event_risk": False,
-            "search_ok": True,
-            "search_source": "ahmed_toolbox",
-            "synthesis_ok": True,
-            "summary": "macro ok",
-            "drivers": ["driver"],
+            "bias": 1, "bias_label": "bullish", "confidence": 0.8,
+            "event_risk": False, "search_ok": True, "search_source": "ahmed_toolbox",
+            "synthesis_ok": True, "summary": "macro ok", "drivers": ["driver"],
         }
 
     async def fake_snapshot(force=False):
         calls.append(("panwatch", force))
         return {
-            "status": "ready",
-            "candidate": "long_setup",
-            "technical_mode": "test",
-            "alignment": "bullish",
-            "blocked": False,
-            "frames": {"1m": {"direction": "bullish"}},
-            "market_context": {"status": "ready"},
-            "market_context_error": None,
+            "status": "ready", "candidate": "long_setup", "technical_mode": "test",
+            "alignment": "bullish", "blocked": False, "frames": {"1m": {"direction": "bullish"}},
+            "market_context": {"status": "ready"}, "market_context_error": None,
             "xaut_order_flow_error": None,
             "xaut_order_flow": {
                 "footprint": {"available": True},
@@ -259,36 +250,56 @@ def test_gen1_trade_gold_orchestrator_runs_toolbox_panwatch_gen1_in_order(monkey
     def fake_fusion(technical, macro):
         calls.append(("gen1", technical["candidate"], macro["bias"]))
         return {
-            "state": "setup_macro_support",
-            "technical_candidate": "long_setup",
-            "regime": "trend",
-            "cognitive_confidence": 0.77,
-            "meta_decision": "eligible",
-            "research_ready": True,
-            "execution_allowed": False,
+            "state": "setup_macro_support", "technical_candidate": "long_setup",
+            "regime": "trend", "cognitive_confidence": 0.77, "meta_decision": "eligible",
+            "research_ready": True, "paper_entry_allowed": True, "execution_allowed": False,
         }
 
-    monkeypatch.setattr(xau_tools, "get_macro_context", fake_macro)
-    monkeypatch.setattr(xau_tools, "get_xau_snapshot", fake_snapshot)
-    monkeypatch.setattr(xau_tools, "build_decision_fusion", fake_fusion)
+    monkeypatch.setattr(gen1_pipeline, "get_macro_context", fake_macro)
+    monkeypatch.setattr(gen1_pipeline, "get_xau_snapshot", fake_snapshot)
+    monkeypatch.setattr(gen1_pipeline, "build_decision_fusion", fake_fusion)
 
-    registry = ToolRegistry()
-    register_xau_research_tools(registry)
-    request = RunRequest(
-        run_id="gen1-test",
-        messages=[ModelMessage(role="user", content="Gen1 trade gold")],
-    )
-    result = __import__("asyncio").run(
-        registry.execute("run_gen1_trade_gold", request, {})
-    )
-
-    assert result.ok is True
+    result = __import__("asyncio").run(gen1_pipeline.run_gen1_trade_gold_pipeline())
     assert calls == [
         ("ahmed_toolbox", True),
         ("panwatch", False),
         ("gen1", "long_setup", 1),
     ]
-    assert result.data["pipeline_order"] == ["ahmed_toolbox", "panwatch", "gen1"]
-    assert result.data["pipeline_status"] == "ready"
-    assert result.data["missing_layers"] == []
-    assert result.data["answer_contract"]["never_hide_missing_layer"] is True
+    assert result["pipeline_order"] == ["ahmed_toolbox", "panwatch", "gen1"]
+    assert result["pipeline_status"] == "ready"
+    assert result["decision"] == "LONG"
+    assert result["missing_layers"] == []
+    assert result["answer_contract"]["never_hide_missing_layer"] is True
+
+
+def test_gen1_trade_gold_chat_and_ui_call_same_shared_core(monkeypatch):
+    payload = {
+        "contract": "gen1-trade-gold-v1", "pipeline_status": "ready", "decision": "WAIT",
+        "stages": {"ahmed_toolbox": {}, "panwatch": {}, "gen1": {}},
+        "missing_layers": [], "stage_errors": {}, "macro": {}, "technical": {},
+        "fusion": {}, "forward_range_map": {},
+        "answer_contract": {"never_hide_missing_layer": True},
+    }
+    calls = []
+
+    async def fake_core():
+        calls.append("core")
+        return payload
+
+    monkeypatch.setattr(xau_tools, "run_gen1_trade_gold_pipeline", fake_core)
+    monkeypatch.setattr(xau_api, "run_gen1_trade_gold_pipeline", fake_core)
+
+    registry = ToolRegistry()
+    register_xau_research_tools(registry)
+    request = RunRequest(
+        run_id="gen1-shared",
+        messages=[ModelMessage(role="user", content="Gen1 trade gold")],
+    )
+    tool_result = __import__("asyncio").run(
+        registry.execute("run_gen1_trade_gold", request, {})
+    )
+    ui_result = __import__("asyncio").run(xau_api.gen1_gold())
+
+    assert tool_result.data == payload
+    assert ui_result == payload
+    assert calls == ["core", "core"]

@@ -1,6 +1,6 @@
 import { Suspense, useState, useEffect, useRef } from 'react'
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, Database, Clock, LayoutDashboard, Github, MessageCircle, Activity } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, Database, Clock, LayoutDashboard, Github, MessageCircle, Activity, Crosshair } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { appApi } from '@panwatch/api/app'
 import { fetchAPI, isAuthenticated } from '@panwatch/api/client'
@@ -28,10 +28,12 @@ const {
   PaperTradingPage,
   EvaluationsPage,
   AssistantPage,
+  Gen1GoldPage,
 } = routePages
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Gold' },
+  { to: '/gen1-gold', icon: Crosshair, label: 'GEN1 Gold' },
   { to: '/paper-trading', icon: Activity, label: 'Paper $10k' },
   { to: '/assistant', icon: MessageCircle, label: 'AI Research' },
   { to: '/history', icon: Clock, label: 'History' },
@@ -279,6 +281,7 @@ function App() {
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route path="/" element={<DashboardPage />} />
+              <Route path="/gen1-gold" element={<Gen1GoldPage />} />
               <Route path="/opportunities" element={<OpportunitiesPage />} />
               <Route path="/portfolio" element={<StocksPage />} />
               <Route path="/agents" element={<AgentsPage />} />

@@ -18,6 +18,7 @@ from pan_agent_tool_research import (
     ToolDescriptor,
 )
 
+from src.modules.xau.gen1_pipeline import run_gen1_trade_gold_pipeline
 from src.modules.xau.paper import XAUPaperTradingEngine
 from src.modules.xau.service import (
     build_decision_fusion,
@@ -170,168 +171,28 @@ def register_xau_research_tools(registry: ToolRegistry) -> list[ToolDescriptor]:
         _request: RunRequest,
         _arguments: dict,
     ) -> ToolResult:
-        """Run the frozen Ahmed ToolBox -> PanWatch -> Gen1 gold pipeline."""
-        stage_errors: dict[str, str] = {}
-
-        # Stage 1: force the macro refresh first. The macro service uses Ahmed
-        # ToolBox reach_web_search as its primary discovery path and records the
-        # actual search_source so fallback can never be hidden from the caller.
-        try:
-            macro = await asyncio.wait_for(
-                get_macro_context(force=True),
-                timeout=75.0,
-            )
-        except Exception as exc:  # noqa: BLE001 - fail visible, continue degraded
-            stage_errors["ahmed_toolbox_macro"] = type(exc).__name__
-            try:
-                macro = await get_macro_context(force=False)
-            except Exception as fallback_exc:  # noqa: BLE001
-                stage_errors["macro_fallback"] = type(fallback_exc).__name__
-                macro = {
-                    "bias": 0,
-                    "bias_label": "neutral",
-                    "confidence": 0.0,
-                    "event_risk": False,
-                    "search_ok": False,
-                    "search_source": None,
-                    "synthesis_ok": False,
-                    "summary": "Macro layer unavailable.",
-                    "drivers": [],
-                }
-
-        # Stage 2: PanWatch builds the current technical/market state including
-        # HTF context, SMC/liquidity and XAUT microstructure.
-        try:
-            technical = await get_xau_snapshot(force=False)
-        except Exception as exc:  # noqa: BLE001
-            stage_errors["panwatch"] = type(exc).__name__
-            technical = {
-                "instrument": "XAUUSD",
-                "status": "unavailable",
-                "candidate": "none",
-                "blocked": True,
-                "block_reasons": [f"panwatch_unavailable:{type(exc).__name__}"],
-                "warnings": [],
-                "frames": {},
-                "execution_allowed": False,
-                "execution_status": "LOCKED_NO_TRADABLE_SPOT_FEED",
-            }
-
-        # Stage 3: Gen1 consumes the PanWatch state plus the macro state. This
-        # stage is deliberately last; it never performs a second independent
-        # market-data search that could drift from the state above.
-        try:
-            fusion = build_decision_fusion(technical, macro)
-        except Exception as exc:  # noqa: BLE001
-            stage_errors["gen1"] = type(exc).__name__
-            fusion = {
-                "state": "unavailable",
-                "technical_candidate": technical.get("candidate", "none"),
-                "research_ready": False,
-                "execution_allowed": False,
-                "reasons": [f"gen1_fusion_unavailable:{type(exc).__name__}"],
-            }
-
-        xaut = technical.get("xaut_order_flow") or {}
-        footprint = xaut.get("footprint") or {}
-        profile = xaut.get("volume_profile") or {}
-        raw_book = xaut.get("raw_book") or {}
-        market_context = technical.get("market_context") or {}
-
-        missing_layers: list[str] = []
-        search_source = str(macro.get("search_source") or "")
-        if search_source != "ahmed_toolbox":
-            missing_layers.append("ahmed_toolbox_primary_search")
-        if not market_context or technical.get("market_context_error"):
-            missing_layers.append("higher_timeframe_market_context")
-        if not xaut or technical.get("xaut_order_flow_error"):
-            missing_layers.append("xaut_order_flow")
-        if not footprint.get("available"):
-            missing_layers.append("xaut_footprint")
-        if profile.get("status") != "ready":
-            missing_layers.append("xaut_volume_profile")
-        if not raw_book:
-            missing_layers.append("xaut_raw_book")
-
-        toolbox_stage = {
-            "status": (
-                "ready"
-                if macro.get("search_ok") and search_source == "ahmed_toolbox"
-                else "degraded"
-            ),
-            "search_source": macro.get("search_source"),
-            "search_ok": bool(macro.get("search_ok")),
-            "synthesis_ok": bool(macro.get("synthesis_ok")),
-            "summary": macro.get("summary"),
-            "drivers": list(macro.get("drivers") or [])[:3],
-        }
-        panwatch_stage = {
-            "status": technical.get("status"),
-            "candidate": technical.get("candidate"),
-            "technical_mode": technical.get("technical_mode"),
-            "alignment": technical.get("alignment"),
-            "market_context_ready": bool(market_context),
-            "xaut_ready": bool(xaut) and not technical.get("xaut_order_flow_error"),
-            "footprint_ready": bool(footprint.get("available")),
-            "volume_profile_ready": profile.get("status") == "ready",
-            "raw_book_ready": bool(raw_book),
-        }
-        gen1_stage = {
-            "status": fusion.get("state"),
-            "candidate": fusion.get("technical_candidate"),
-            "regime": fusion.get("regime"),
-            "confidence": fusion.get("cognitive_confidence"),
-            "meta_decision": fusion.get("meta_decision"),
-            "research_ready": bool(fusion.get("research_ready")),
-            "execution_allowed": False,
-        }
-        pipeline_status = "ready" if not missing_layers and not stage_errors else "degraded"
-
+        """Assistant surface over the shared GEN1 GOLD core."""
+        data = await run_gen1_trade_gold_pipeline()
+        stages = data.get("stages") or {}
+        toolbox = stages.get("ahmed_toolbox") or {}
+        panwatch = stages.get("panwatch") or {}
+        gen1 = stages.get("gen1") or {}
+        missing = list(data.get("missing_layers") or [])
         summary = (
             "GEN1 TRADE GOLD pipeline: "
-            f"status={pipeline_status}; "
-            f"toolbox={toolbox_stage['status']}; "
-            f"panwatch={panwatch_stage['status']}; "
-            f"gen1={gen1_stage['status']}; "
-            f"candidate={gen1_stage['candidate']}; "
-            f"confidence={gen1_stage['confidence']}; "
-            f"missing={','.join(missing_layers) if missing_layers else 'none'}. "
+            f"status={data.get('pipeline_status')}; "
+            f"decision={data.get('decision')}; "
+            f"toolbox={toolbox.get('status')}; "
+            f"panwatch={panwatch.get('status')}; "
+            f"gen1={gen1.get('status')}; "
+            f"candidate={gen1.get('candidate')}; "
+            f"confidence={gen1.get('confidence')}; "
+            f"missing={','.join(missing) if missing else 'none'}. "
             "Research only; no live execution is enabled."
         )
         return ToolResult.success(
             summary=summary,
-            data={
-                "contract": "gen1-trade-gold-v1",
-                "trigger": "Gen1 trade gold",
-                "pipeline_order": ["ahmed_toolbox", "panwatch", "gen1"],
-                "pipeline_status": pipeline_status,
-                "stages": {
-                    "ahmed_toolbox": toolbox_stage,
-                    "panwatch": panwatch_stage,
-                    "gen1": gen1_stage,
-                },
-                "missing_layers": missing_layers,
-                "stage_errors": stage_errors,
-                "macro": macro,
-                "technical": technical,
-                "fusion": fusion,
-                "forward_range_map": xaut.get("forward_range_map"),
-                "answer_contract": {
-                    "required": [
-                        "LONG_SHORT_WAIT",
-                        "confidence",
-                        "primary_scenario",
-                        "alternative_scenario",
-                        "invalidation",
-                        "plus_minus_10_20_30",
-                        "confirmations",
-                        "missing_layers",
-                    ],
-                    "never_hide_missing_layer": True,
-                    "never_treat_xaut_as_global_xauusd_order_flow": True,
-                    "execution_allowed": False,
-                },
-            },
+            data=data,
             sources=[
                 {"name": "Ahmed ToolBox / macro research"},
                 {"name": "PanWatch XAU market intelligence"},
