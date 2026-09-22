@@ -367,6 +367,7 @@ class FalsificationEngine:
             return self._numeric_threshold(
                 rule,
                 ledger=ledger,
+                as_of=as_of,
             )
         if rule.rule_type is FalsificationRuleType.DEPENDENCY_FAILURE:
             assessment = graph.assess(
@@ -574,6 +575,7 @@ class FalsificationEngine:
         rule: FalsificationRule,
         *,
         ledger: EvidenceLedger,
+        as_of: datetime | None,
     ) -> FalsificationResult:
         preferred = (
             rule.required_kinds[0]
@@ -583,6 +585,7 @@ class FalsificationEngine:
         resolved = ledger.resolve_numeric(
             rule.evidence_claim_key,
             preferred_kind=preferred,
+            as_of=as_of,
         )
         if resolved.value is None:
             return FalsificationResult(
