@@ -14,7 +14,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from .claim_graph import ClaimGraph, ClaimStatus
+from .claim_graph import ClaimGraph, ClaimRelation, ClaimStatus
 from .evidence import utc
 from .falsification import FalsificationEngine
 from .ledger import EvidenceLedger
@@ -169,9 +169,34 @@ class BeliefStateEngine:
         untestable_rules = tuple(
             sorted(falsification_report.untestable_rules)
         )
+
+        dependency_failures_set = set(assessment.dependency_failures)
+        falsified_required_dependencies: set[str] = set()
+        for edge in graph.incoming(claim_id):
+            if (
+                edge.relation is not ClaimRelation.DEPENDS_ON
+                or not edge.required
+            ):
+                continue
+            dependency_report = falsification.evaluate(
+                edge.source_claim_id,
+                graph=graph,
+                ledger=ledger,
+                as_of=when,
+            )
+            if dependency_report.final_status is ClaimStatus.FALSIFIED:
+                dependency_failures_set.add(edge.source_claim_id)
+                falsified_required_dependencies.add(edge.source_claim_id)
+
         dependency_failures = tuple(
-            sorted(assessment.dependency_failures)
+            sorted(dependency_failures_set)
         )
+        final_status = falsification_report.final_status
+        final_confidence = falsification_report.adjusted_confidence
+        if falsified_required_dependencies:
+            final_status = ClaimStatus.FALSIFIED
+            final_confidence = min(final_confidence * 0.35, 0.15)
+
         reasons = tuple(
             sorted(
                 set(assessment.reasons)
@@ -179,6 +204,10 @@ class BeliefStateEngine:
                     f"falsification:{item.detail}"
                     for item in falsification_report.results
                     if item.rule_id in triggered_rules
+                }
+                | {
+                    f"required_dependency_falsified:{claim_id}"
+                    for claim_id in falsified_required_dependencies
                 }
             )
         )
@@ -190,9 +219,9 @@ class BeliefStateEngine:
                 "untestable_rules": untestable_rules,
                 "dependency_failures": dependency_failures,
                 "base_status": assessment.status.value,
-                "final_status": falsification_report.final_status.value,
+                "final_status": final_status.value,
                 "base_confidence": assessment.confidence,
-                "final_confidence": falsification_report.adjusted_confidence,
+                "final_confidence": final_confidence,
             }
         )
         snapshot_id = _stable_id(
@@ -209,10 +238,10 @@ class BeliefStateEngine:
             claim_key=claim.claim_key,
             evaluated_at=when,
             base_status=assessment.status,
-            final_status=falsification_report.final_status,
+            final_status=final_status,
             base_confidence=round(assessment.confidence, 4),
             final_confidence=round(
-                falsification_report.adjusted_confidence,
+                final_confidence,
                 4,
             ),
             support_score=round(assessment.support_score, 4),
