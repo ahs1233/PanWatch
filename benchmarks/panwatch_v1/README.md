@@ -1,4 +1,4 @@
-# PanWatch Benchmark v1.2
+# PanWatch Benchmark v1.3
 
 PanWatch Benchmark is the reproducible measurement layer for the project. It separates implemented research integrity from future capabilities and prevents architectural progress from being judged by intuition alone.
 
@@ -16,43 +16,50 @@ Regression gate: **90%**.
 
 ## Automated track 3 — Claim Graph + Falsification
 
-v1.2 adds a domain-neutral reasoning layer:
+Domain-neutral reasoning integrity across multi-hop support, required dependencies, cycle rejection, hard/soft falsifiers, counterclaims, numeric conflicts, and research probes for untestable falsification rules.
 
-- explicit claim nodes;
-- logical and causal claim edges;
-- explicit evidence-to-claim links;
-- multi-hop confidence propagation;
-- required dependency failures;
-- downstream impact sets;
-- cycle rejection for reasoning dependencies;
-- explicit falsification rules;
-- hard and soft failure conditions;
-- numeric-threshold falsifiers;
-- counterclaim-confidence falsifiers;
-- freshness and source-independence falsifiers;
-- generated research probes when a falsification test cannot yet be executed;
-- guardrail preventing hypotheses/conclusions from finishing as supported when no falsification condition exists.
+Regression gate: **90%**.
 
-The graph and rules persist through:
+## Automated track 4 — Persistent Belief State
 
-- research_claims
-- research_claim_edges
-- research_claim_evidence_links
-- research_falsification_rules
+v1.3 makes PanWatch remember what it believed across runs instead of reconstructing every conclusion from scratch.
+
+The layer adds:
+
+- immutable belief snapshots for every evaluated claim;
+- append-only belief change events;
+- explicit status transitions;
+- confidence increase/decrease events;
+- evidence-change events;
+- falsification-state change events;
+- dependency-failure events;
+- falsified → recovered history;
+- no-noise behavior when nothing material changed;
+- historical as-of evaluation that blocks future revisions from rewriting past beliefs;
+- propagation of required-dependency falsification into downstream beliefs;
+- durable PanWatch evaluation cycles with summary counts and research probes.
+
+Persistent tables:
+
+- research_belief_cycles
+- research_belief_snapshots
+- research_belief_events
 
 Regression gate: **90%**.
 
 ## Specified track — Company / sector research
 
-The company/sector track remains specified but not automated.
+The company/sector research track remains specified but not automated.
 
-## What v1.2 does not claim
+## What v1.3 does not claim
 
-A 100% deterministic score does not prove that PanWatch is generally more intelligent than ChatGPT, Claude, or a professional researcher.
+A deterministic 100% score does not prove that PanWatch is generally more intelligent than ChatGPT, Claude, or a professional researcher.
 
-The current falsification layer can **generate explicit counter-research probes**, but it does not yet automatically dispatch those probes to live web/research tools. Persistent cross-session belief-state evolution is also not part of v1.2.
+Current remaining boundaries include:
 
-Those are the next integration steps.
+- automatic claim extraction from arbitrary documents;
+- automatic dispatch of falsification probes to live research tools;
+- external comparative benchmarks with blind human labels.
 
 ## Run locally
 
@@ -60,11 +67,14 @@ Those are the next integration steps.
 PYTHONPATH=. python -m benchmarks.panwatch_v1.runner
 PYTHONPATH=. python -m benchmarks.panwatch_v1.economic_runner
 PYTHONPATH=. python -m benchmarks.panwatch_v1.reasoning_runner
+PYTHONPATH=. python -m benchmarks.panwatch_v1.belief_runner
 
 python -m pytest -q \
   ci_tests/test_panwatch_benchmark_v1.py \
   ci_tests/test_research_evidence_foundation.py \
   ci_tests/test_research_claim_graph_falsification.py \
+  ci_tests/test_research_persistent_belief_state.py \
   ci_tests/test_panwatch_economic_benchmark_v1.py \
-  ci_tests/test_panwatch_reasoning_benchmark_v1.py
+  ci_tests/test_panwatch_reasoning_benchmark_v1.py \
+  ci_tests/test_panwatch_belief_benchmark_v1.py
 ```
