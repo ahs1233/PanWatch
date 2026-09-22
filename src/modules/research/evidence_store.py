@@ -187,3 +187,83 @@ def load_claim_ledger(db: Session, claim_key: str) -> EvidenceLedger:
             )
         )
     return ledger
+
+
+
+def load_all_evidence_ledger(db: Session) -> EvidenceLedger:
+    """Load the complete append-only evidence ledger for runtime reasoning."""
+    rows = (
+        db.query(ResearchEvidenceRecord)
+        .order_by(
+            ResearchEvidenceRecord.recorded_at.asc(),
+            ResearchEvidenceRecord.evidence_id.asc(),
+        )
+        .all()
+    )
+    ledger = EvidenceLedger()
+    if not rows:
+        return ledger
+
+    source_ids = {row.source_id for row in rows}
+    sources = (
+        db.query(ResearchSourceRecord)
+        .filter(ResearchSourceRecord.source_id.in_(source_ids))
+        .all()
+    )
+    for row in sources:
+        ledger.register_source(
+            SourceProvenance(
+                source_id=row.source_id,
+                url=row.url or "",
+                canonical_url=row.canonical_url or "",
+                domain=row.domain or "",
+                publisher=row.publisher or "",
+                title=row.title or "",
+                source_tier=SourceTier(row.source_tier or "unknown"),
+                source_family=row.source_family or "",
+                independence_key=row.independence_key or "",
+                published_at=(
+                    utc(row.published_at)
+                    if row.published_at is not None
+                    else None
+                ),
+                retrieved_at=utc(row.retrieved_at),
+                observed_at=utc(row.observed_at),
+                content_hash=row.content_hash or "",
+                parent_source_id=row.parent_source_id,
+                tool_name=row.tool_name or "",
+                metadata=dict(row.meta or {}),
+            )
+        )
+
+    for row in rows:
+        ledger.append(
+            EvidenceRecord(
+                evidence_id=row.evidence_id,
+                claim_key=row.claim_key,
+                source_id=row.source_id,
+                statement=row.statement,
+                relation=EvidenceRelation(row.relation),
+                observation_kind=ObservationKind(row.observation_kind),
+                event_time=(
+                    utc(row.event_time)
+                    if row.event_time is not None
+                    else None
+                ),
+                observed_at=utc(row.observed_at),
+                recorded_at=utc(row.recorded_at),
+                confidence=float(row.confidence),
+                content_hash=row.content_hash,
+                numeric_value=(
+                    float(row.numeric_value)
+                    if row.numeric_value is not None
+                    else None
+                ),
+                unit=row.unit or "",
+                period=row.period or "",
+                revision_of=row.revision_of,
+                supersedes=row.supersedes,
+                metadata=dict(row.meta or {}),
+            )
+        )
+    return ledger
