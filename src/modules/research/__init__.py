@@ -22,6 +22,13 @@ from .claim_graph import (
     ClaimStatus,
     build_claim,
 )
+from .entity_identity import (
+    EntityComparison,
+    EntityIdentity,
+    EntityIdentityLayer,
+    EntityType,
+    normalize_entity_name,
+)
 from .evidence import (
     EvidenceRecord,
     EvidenceRelation,
@@ -59,6 +66,10 @@ __all__ = [
     "ClaimNode",
     "ClaimRelation",
     "ClaimStatus",
+    "EntityComparison",
+    "EntityIdentity",
+    "EntityIdentityLayer",
+    "EntityType",
     "EvidenceLedger",
     "EvidenceRecord",
     "EvidenceRelation",
@@ -81,4 +92,5 @@ __all__ = [
     "build_falsification_rule",
     "build_source",
     "canonicalize_url",
+    "normalize_entity_name",
 ]
