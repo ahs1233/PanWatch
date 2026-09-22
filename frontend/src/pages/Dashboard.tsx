@@ -9,8 +9,10 @@ type Frame = { timeframe:string; close:number; ema_fast:number; ema_slow:number;
 type BiasState = { direction:string; score:number; close?:number; ema?:Record<string,number|null>; available?:boolean }
 type MarketContext = {
  bias:{monthly:BiasState;weekly:BiasState;daily:BiasState;h4:BiasState;h1:BiasState;composite_score:number;composite_direction:string;today_score:number;today_direction:string}
- volume_profile:{available:boolean;poc?:number;vah?:number;val?:number;hvn?:number[];lvn?:number[];source_type?:string;centralized_volume?:boolean}
- cash_flow:{available:boolean;direction?:string;score?:number;cmf20?:number;signed_tick_volume_imbalance?:number}
+ volume_profile:{available:boolean;poc?:number;vah?:number;val?:number;location?:string;hvn?:number[];lvn?:number[];bins?:Array<{price:number;volume:number;share:number}>;source_type?:string;centralized_volume?:boolean}
+ cash_flow:{available:boolean;direction?:string;score?:number;agreement?:string;spot_tick?:{available?:boolean;cmf20?:number;signed_tick_volume_imbalance?:number;score?:number;direction?:string};gc_futures?:{available?:boolean;cmf20?:number;signed_tick_volume_imbalance?:number;score?:number;direction?:string}}
+ spot_tick_flow?:{available?:boolean;cmf20?:number;signed_tick_volume_imbalance?:number;score?:number;direction?:string}
+ futures_flow?:{available?:boolean;cmf20?:number;signed_tick_volume_imbalance?:number;score?:number;direction?:string}
  liquidity:{available:boolean;levels?:Array<{name:string;price:number;side:string;distance:number}>;equal_highs?:number[];equal_lows?:number[]}
  smart_money:{available:boolean;bias?:string;score?:number;break_of_structure?:string;liquidity_sweep?:string;displacement?:string;dealing_range?:{high:number;low:number;midpoint:number;zone:string};fair_value_gaps?:Array<{direction:string;low:number;high:number;time:string}>}
  volume_note?:string
@@ -18,7 +20,7 @@ type MarketContext = {
 type Snapshot = { indicative_spot?:{price:number;bid:number|null;ask:number|null;spread_bps:number|null;source:string;is_stale:boolean}|null; micro?:{direction:string;return_10m_pct:number|null;return_30m_pct:number|null;source:string}|null; candidate:string; alignment:string; blocked:boolean; block_reasons:string[]; warnings:string[]; atr_reference:number|null; swing_high_reference:number|null; swing_low_reference:number|null; frames:Record<string,Frame>; market_context?:MarketContext|null; market_context_error?:string|null; disclaimer:string }
 type Macro = { bias:number; bias_label:string; confidence:number; event_risk:boolean; summary:string; drivers:string[]; search_ok:boolean; synthesis_ok?:boolean; synthesis_error?:string|null; refresh_pending?:boolean }
 type Hypothesis = { name:string; weight:number; direction:string }
-type Scenario = { name:string; direction:string; weight:number; target:number|null; trigger:number|string|null; trigger_kind?:string; invalidation:number|null }
+type Scenario = { name:string; direction:string; weight:number; target:number|null; trigger:number|string|null; trigger_kind?:string; direction_basis?:string; weight_type?:string; invalidation:number|null }
 type Edge = { score:number; direction:string; strength:number; band:string; macro_freshness:number; higher_timeframe_score?:number; higher_timeframe_direction?:string; higher_timeframe_conflict?:boolean; smart_money_score?:number; cash_flow_score?:number; components:Record<string,number> }
 type ActivationCondition = { key:string; label:string; status:'satisfied'|'pending'|'failed'; current:number|string|null; threshold:number|string|null }
 type ActivationState = { state:string; conditions:ActivationCondition[]; satisfied:number; pending:number; failed:number; total:number }
@@ -36,11 +38,11 @@ const conditionTone=(v?:string)=>v==='satisfied'?'text-emerald-500':v==='failed'
 const conditionDot=(v?:string)=>v==='satisfied'?'bg-emerald-500':v==='failed'?'bg-rose-500':'bg-amber-500'
 
 export default function DashboardPage(){
- const nav=useNavigate(); const [snapshot,setSnapshot]=useState<Snapshot|null>(null); const [macro,setMacro]=useState<Macro|null>(null); const [fusion,setFusion]=useState<Fusion|null>(null); const [ready,setReady]=useState<Readiness|null>(null); const [chart,setChart]=useState<ChartSeries|null>(null); const [timeframe,setTimeframe]=useState<'1m'|'5m'|'15m'>('5m'); const [chartLoading,setChartLoading]=useState(true); const [loading,setLoading]=useState(true); const [error,setError]=useState('')
+ const nav=useNavigate(); const [snapshot,setSnapshot]=useState<Snapshot|null>(null); const [macro,setMacro]=useState<Macro|null>(null); const [fusion,setFusion]=useState<Fusion|null>(null); const [ready,setReady]=useState<Readiness|null>(null); const [chart,setChart]=useState<ChartSeries|null>(null); const [timeframe,setTimeframe]=useState<'1m'|'5m'|'15m'|'1h'|'4h'|'1d'|'1w'|'1mo'>('5m'); const [chartLoading,setChartLoading]=useState(true); const [loading,setLoading]=useState(true); const [error,setError]=useState('')
  const applyTerminal=useCallback((d:Terminal)=>{setSnapshot(d.technical);setMacro(d.macro);setFusion(d.fusion)},[])
  const load=useCallback(async(force=false)=>{setLoading(true);setError('');try{const d=await fetchAPI<Terminal>(`/xau/terminal${force?'?force=true':''}`,{timeoutMs:95000});applyTerminal(d)}catch(e){setError(e instanceof Error?e.message:'Research unavailable')}finally{setLoading(false)}},[applyTerminal])
  const refreshQuiet=useCallback(async()=>{try{const d=await fetchAPI<Terminal>('/xau/terminal',{timeoutMs:20000});applyTerminal(d)}catch{}},[applyTerminal])
- const loadChart=useCallback(async(tf:'1m'|'5m'|'15m',force=false,silent=false)=>{if(!silent)setChartLoading(true);try{const d=await fetchAPI<ChartSeries>(`/xau/chart?timeframe=${tf}&limit=160${force?'&force=true':''}`,{timeoutMs:45000});setChart(d)}catch{if(!silent)setChart(null)}finally{if(!silent)setChartLoading(false)}},[])
+ const loadChart=useCallback(async(tf:'1m'|'5m'|'15m'|'1h'|'4h'|'1d'|'1w'|'1mo',force=false,silent=false)=>{if(!silent)setChartLoading(true);try{const d=await fetchAPI<ChartSeries>(`/xau/chart?timeframe=${tf}&limit=160${force?'&force=true':''}`,{timeoutMs:45000});setChart(d)}catch{if(!silent)setChart(null)}finally{if(!silent)setChartLoading(false)}},[])
  useEffect(()=>{void load();fetch('/api/runtime-readiness').then(r=>r.json()).then(b=>setReady(b?.data||b)).catch(()=>{});const id=window.setInterval(()=>void refreshQuiet(),20000);return()=>window.clearInterval(id)},[load,refreshQuiet])
  useEffect(()=>{void loadChart(timeframe);const id=window.setInterval(()=>void loadChart(timeframe,false,true),20000);return()=>window.clearInterval(id)},[timeframe,loadChart])
  const cog=fusion?.cognition; const edge=cog?.directional_edge; const plan=cog?.execution_plan; const scenarios=cog?.scenarios||[]; const score=Math.round((cog?.confidence.calibrated_confidence||0)*100); const quality=Math.round((cog?.data_quality.score||0)*100)
@@ -69,11 +71,11 @@ export default function DashboardPage(){
       <div className="text-[10px] text-muted-foreground">{chart?.source||'research bars'} · {chart?.count||0} bars</div>
      </div>
      <div className="flex rounded-xl bg-accent/40 p-1">
-      {(['1m','5m','15m'] as const).map(tf=><button key={tf} onClick={()=>setTimeframe(tf)} className={timeframe===tf?'rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground shadow-sm':'rounded-lg px-3 py-1.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground'}>{tf}</button>)}
+      {(['1m','5m','15m','1h','4h','1d','1w','1mo'] as const).map(tf=><button key={tf} onClick={()=>setTimeframe(tf)} className={timeframe===tf?'rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground shadow-sm':'rounded-lg px-3 py-1.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground'}>{tf}</button>)}
      </div>
     </div>
     <div className="overflow-x-auto">
-     <XAUChart bars={chart?.bars||[]} loading={chartLoading} swingHigh={snapshot?.swing_high_reference} swingLow={snapshot?.swing_low_reference} triggerLevel={plan?.trigger_level}/>
+     <XAUChart bars={chart?.bars||[]} loading={chartLoading} swingHigh={snapshot?.swing_high_reference} swingLow={snapshot?.swing_low_reference} triggerLevel={plan?.trigger_level} volumeProfile={context?.volume_profile} liquidityLevels={context?.liquidity.levels||[]}/>
     </div>
    </div>
 
@@ -115,8 +117,10 @@ export default function DashboardPage(){
        ['1H',context?.bias.h1],
      ].map(([label,state])=>{const s=state as BiasState|undefined;return <div key={String(label)} className="rounded-xl bg-accent/25 p-3"><div className="text-[10px] text-muted-foreground">{String(label)}</div><div className={'mt-1 text-xs font-semibold '+tone(s?.direction)}>{nice(s?.direction)}</div><div className="mt-1 font-mono text-[10px] text-muted-foreground">{s?Math.round(s.score*100):'--'}</div></div>})}
     </div>
-    <div className="mt-3 grid gap-2 md:grid-cols-3">
+    <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
      {[
+       ['Monthly',context?.bias.monthly],
+       ['Weekly',context?.bias.weekly],
        ['Daily',context?.bias.daily],
        ['4H',context?.bias.h4],
        ['1H',context?.bias.h1],
@@ -132,7 +136,7 @@ export default function DashboardPage(){
      <div className="rounded-xl bg-accent/25 p-3"><span className="text-muted-foreground">VAL</span><div className="mt-1 font-mono text-xs">{fmt(context?.volume_profile.val)}</div></div>
     </div>
     <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
-     <div className="rounded-xl border border-border/60 p-3"><span className="text-muted-foreground">Cash flow</span><div className={'mt-1 text-xs font-semibold '+tone(context?.cash_flow.direction==='inflow'?'bullish':context?.cash_flow.direction==='outflow'?'bearish':'neutral')}>{nice(context?.cash_flow.direction)}</div><div className="mt-1 font-mono text-[9px] text-muted-foreground">CMF {fmt(context?.cash_flow.cmf20,3)} · ΔVol {fmt(context?.cash_flow.signed_tick_volume_imbalance,3)}</div></div>
+     <div className="rounded-xl border border-border/60 p-3"><span className="text-muted-foreground">Cash flow</span><div className={'mt-1 text-xs font-semibold '+tone(context?.cash_flow.direction==='inflow'?'bullish':context?.cash_flow.direction==='outflow'?'bearish':'neutral')}>{nice(context?.cash_flow.direction)} · {fmt(context?.cash_flow.score,2)}</div><div className="mt-1 font-mono text-[9px] text-muted-foreground">Spot CMF {fmt(context?.spot_tick_flow?.cmf20,3)} · GC CMF {fmt(context?.futures_flow?.cmf20,3)}</div><div className="mt-1 text-[9px] text-muted-foreground">{nice(context?.cash_flow.agreement)}</div></div>
      <div className="rounded-xl border border-border/60 p-3"><span className="text-muted-foreground">Structure</span><div className="mt-1 text-xs font-semibold">{nice(context?.smart_money.break_of_structure)}</div><div className="mt-1 text-[9px] text-muted-foreground">Sweep {nice(context?.smart_money.liquidity_sweep)} · {nice(context?.smart_money.dealing_range?.zone)}</div></div>
     </div>
     <div className="mt-3 flex flex-wrap gap-2">{(context?.liquidity.levels||[]).slice(0,6).map(level=><span key={level.name} className="rounded-full bg-accent/35 px-2.5 py-1 text-[9px]"><b>{level.name}</b> <span className="font-mono">{fmt(level.price)}</span></span>)}</div>
@@ -155,10 +159,10 @@ export default function DashboardPage(){
 
   <section className="mb-4 grid gap-3 lg:grid-cols-12">
    <div className="card p-5 lg:col-span-5">
-    <div className="flex items-center gap-2"><Brain className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Scenario paths</h2></div>
-    <div className="mt-4 space-y-2">{scenarios.map(s=><div key={s.name} className="rounded-xl border border-border/60 p-3"><div className="flex items-center justify-between"><div><div className="text-xs font-semibold">{nice(s.name)}</div><div className={'mt-1 text-[10px] '+tone(s.direction)}>{nice(s.direction)}</div></div><div className="font-mono text-sm font-semibold">{Math.round(s.weight*100)}%</div></div><div className="mt-2 grid grid-cols-3 gap-2 text-[10px]"><div><span className="text-muted-foreground">Target</span><div className="font-mono">{fmt(s.target)}</div></div><div><span className="text-muted-foreground">Trigger</span><div className="font-mono">{typeof s.trigger==='number'?fmt(s.trigger):typeof s.trigger==='string'?nice(s.trigger):'--'}</div></div><div><span className="text-muted-foreground">Invalid.</span><div className="font-mono">{fmt(s.invalidation)}</div></div></div></div>)}</div>
+    <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2"><Brain className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Scenario paths</h2></div><span className="text-[9px] text-muted-foreground">relative weights · not probabilities</span></div>
+    <div className="mt-4 space-y-2">{scenarios.map(s=><div key={s.name} className="rounded-xl border border-border/60 p-3"><div className="flex items-center justify-between"><div><div className="text-xs font-semibold">{nice(s.name)}</div><div className={'mt-1 text-[10px] '+tone(s.direction)}>{s.direction==='neutral'?'Direction unresolved':nice(s.direction)}</div><div className="mt-0.5 text-[9px] text-muted-foreground">{nice(s.direction_basis)}</div></div><div className="font-mono text-sm font-semibold">{Math.round(s.weight*100)}%</div></div><div className="mt-2 grid grid-cols-3 gap-2 text-[10px]"><div><span className="text-muted-foreground">Target</span><div className="font-mono">{fmt(s.target)}</div></div><div><span className="text-muted-foreground">Trigger</span><div className="font-mono">{typeof s.trigger==='number'?fmt(s.trigger):typeof s.trigger==='string'?nice(s.trigger):'--'}</div></div><div><span className="text-muted-foreground">Invalid.</span><div className="font-mono">{fmt(s.invalidation)}</div></div></div></div>)}</div>
    </div>
-   <div className="card p-5 lg:col-span-4"><div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Competing hypotheses</h2></div><div className="mt-4 space-y-3">{(cog?.hypotheses||[]).map(h=><div key={h.name}><div className="mb-1 flex justify-between text-xs"><span>{nice(h.name)}</span><span className="font-mono">{Math.round(h.weight*100)}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-accent"><div className="h-full rounded-full bg-primary" style={{width:(Math.max(2,Math.round(h.weight*100)))+'%'}}/></div></div>)}</div></div>
+   <div className="card p-5 lg:col-span-4"><div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Competing hypotheses</h2></div><span className="text-[9px] text-muted-foreground">relative weights</span></div><div className="mt-4 space-y-3">{(cog?.hypotheses||[]).map(h=><div key={h.name}><div className="mb-1 flex justify-between text-xs"><span>{nice(h.name)}</span><span className="font-mono">{Math.round(h.weight*100)}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-accent"><div className="h-full rounded-full bg-primary" style={{width:(Math.max(2,Math.round(h.weight*100)))+'%'}}/></div></div>)}</div></div>
    <div className="card p-5 lg:col-span-3"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500"/><h2 className="text-sm font-semibold">Risk & gates</h2></div>{gates.length?<div className="mt-3 space-y-2">{Array.from(new Set(gates)).slice(0,5).map(x=><div key={x} className="rounded-xl bg-accent/30 px-3 py-2 text-[11px] text-muted-foreground">{nice(x)}</div>)}</div>:<div className="mt-4 text-xs text-muted-foreground">No research-data gates are active.</div>}<div className="mt-4 flex items-center gap-2 border-t border-border/60 pt-3 text-[11px] text-amber-500"><Lock className="h-3.5 w-3.5"/> Live execution remains locked until a tradable broker feed is connected.</div></div>
   </section>
 
