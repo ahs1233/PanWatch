@@ -1487,3 +1487,71 @@ class MCPCallLog(Base):
     duration_ms = Column(Integer, default=0)
     client_ip = Column(String, nullable=True)
     called_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchSourceRecord(Base):
+    """Immutable source provenance captured by the research evidence layer."""
+
+    __tablename__ = "research_sources"
+    __table_args__ = (
+        Index("ix_research_source_domain_published", "domain", "published_at"),
+        Index("ix_research_source_independence", "independence_key"),
+        Index("ix_research_source_content_hash", "content_hash"),
+    )
+
+    source_id = Column(String, primary_key=True)
+    url = Column(Text, nullable=False, default="")
+    canonical_url = Column(Text, nullable=False, default="")
+    domain = Column(String, nullable=False, default="")
+    publisher = Column(String, default="")
+    title = Column(Text, default="")
+    source_tier = Column(String, nullable=False, default="unknown")
+    source_family = Column(String, nullable=False, default="")
+    independence_key = Column(String, nullable=False, default="")
+    published_at = Column(DateTime, nullable=True)
+    retrieved_at = Column(DateTime, nullable=False)
+    observed_at = Column(DateTime, nullable=False)
+    content_hash = Column(String, nullable=False)
+    parent_source_id = Column(String, nullable=True)
+    tool_name = Column(String, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchEvidenceRecord(Base):
+    """Append-only evidence item linked to immutable source provenance."""
+
+    __tablename__ = "research_evidence"
+    __table_args__ = (
+        Index(
+            "ix_research_evidence_claim_kind_time",
+            "claim_key",
+            "observation_kind",
+            "event_time",
+        ),
+        Index("ix_research_evidence_source", "source_id"),
+        Index("ix_research_evidence_recorded", "recorded_at"),
+    )
+
+    evidence_id = Column(String, primary_key=True)
+    claim_key = Column(String, nullable=False)
+    source_id = Column(
+        String,
+        ForeignKey("research_sources.source_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    statement = Column(Text, nullable=False)
+    relation = Column(String, nullable=False, default="supports")
+    observation_kind = Column(String, nullable=False, default="actual")
+    event_time = Column(DateTime, nullable=True)
+    observed_at = Column(DateTime, nullable=False)
+    recorded_at = Column(DateTime, nullable=False)
+    confidence = Column(Float, nullable=False, default=1.0)
+    content_hash = Column(String, nullable=False)
+    numeric_value = Column(Float, nullable=True)
+    unit = Column(String, default="")
+    period = Column(String, default="")
+    revision_of = Column(String, nullable=True)
+    supersedes = Column(String, nullable=True)
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
