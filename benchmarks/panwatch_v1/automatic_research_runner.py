@@ -138,6 +138,9 @@ class _AI:
     async def chat(self, *_args, **_kwargs):
         return self.text
 
+    async def chat_multi(self, *_args, **_kwargs):
+        return self.text
+
 
 class _Gateway:
     def __init__(self, docs):
