@@ -224,10 +224,11 @@ async def get_chart_series(
     limit: int = 160,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Return bounded real OHLC research bars for the terminal chart.
+    """Return deep-history OHLC with the full EMA ladder.
 
-    The chart uses the exact same source family as the cognition engine so the
-    visual state and machine reasoning cannot silently diverge.
+    EMA 1000 requires substantially more history than the intraday engine uses,
+    so chart/context retrieval intentionally fetches up to 1000 MT5 bars and
+    only trims after indicator calculation.
     """
     timeframe_map = {
         "1m": XAUTimeframe.M1,
@@ -238,46 +239,69 @@ async def get_chart_series(
     if key not in timeframe_map:
         key = "5m"
     limit = max(30, min(int(limit), 240))
-    bars = await get_research_bars(force=force)
-    rows = list(bars.get(timeframe_map[key]) or [])[-limit:]
+    tf = timeframe_map[key]
 
-    def ema(values: list[float], period: int) -> list[float]:
-        if not values:
-            return []
+    provider = BiquoteXAUOHLCProvider()
+    try:
+        rows = await asyncio.to_thread(
+            provider.bars,
+            tf,
+            limit=1000,
+            timeout_seconds=14.0,
+        )
+    except Exception:
+        bars = await get_research_bars(force=force)
+        rows = list(bars.get(tf) or [])
+
+    rows = sorted(rows, key=lambda row: row.timestamp)
+
+    def ema_series(values: list[float], period: int) -> list[float | None]:
+        out: list[float | None] = [None] * len(values)
+        if len(values) < period:
+            return out
+        seed = sum(values[:period]) / period
         alpha = 2.0 / (period + 1.0)
-        out: list[float] = []
-        current = values[0]
-        for value in values:
-            current = value if not out else (value - current) * alpha + current
-            out.append(current)
+        current = seed
+        out[period - 1] = current
+        for i in range(period, len(values)):
+            current = (values[i] - current) * alpha + current
+            out[i] = current
         return out
 
     closes = [float(row.close) for row in rows]
-    ema9 = ema(closes, 9)
-    ema21 = ema(closes, 21)
+    ema_map = {
+        period: ema_series(closes, period)
+        for period in (9, 21, 50, 200, 1000)
+    }
+    start_index = max(0, len(rows) - limit)
     payload = []
-    for i, row in enumerate(rows):
-        payload.append({
+    for i, row in enumerate(rows[start_index:], start=start_index):
+        item = {
             "time": row.timestamp.isoformat(),
             "open": float(row.open),
             "high": float(row.high),
             "low": float(row.low),
             "close": float(row.close),
             "volume": float(getattr(row, "volume", 0.0) or 0.0),
-            "ema9": round(ema9[i], 6),
-            "ema21": round(ema21[i], 6),
             "source": str(getattr(row, "source", "") or ""),
-        })
+        }
+        for period in (9, 21, 50, 200, 1000):
+            value = ema_map[period][i]
+            item[f"ema{period}"] = round(value, 6) if value is not None else None
+        payload.append(item)
 
     return {
         "instrument": "XAUUSD",
         "timeframe": key,
         "count": len(payload),
+        "history_count": len(rows),
         "bars": payload,
         "source": payload[-1]["source"] if payload else None,
         "observed_at": payload[-1]["time"] if payload else None,
+        "ema_periods": [9, 21, 50, 200, 1000],
         "research_only": True,
     }
+
 
 def _spot_fill_state(provider_health: list[dict[str, Any]]) -> dict[str, Any]:
     """Classify paper-fill availability independently from analysis context."""
