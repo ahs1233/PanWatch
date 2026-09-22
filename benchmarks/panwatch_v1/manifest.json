@@ -1,6 +1,6 @@
 {
   "benchmark": "PanWatch Benchmark v1",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "purpose": "Measure current PanWatch decision integrity without confusing implemented core behavior with future research-engine capabilities.",
   "tracks": [
     {
@@ -116,7 +116,7 @@
     },
     {
       "id": "company_sector_research",
-      "status": "specified_not_automated",
+      "status": "automated",
       "tasks": [
         "earnings_release_vs_secondary_summary",
         "guidance_vs_consensus",
@@ -128,7 +128,9 @@
         "contradictory_revenue_numbers",
         "source_recency_precedence",
         "thesis_update_after_new_filing"
-      ]
+      ],
+      "runner": "benchmarks.panwatch_v1.company_sector_runner",
+      "scope_note": "Frozen-fixture comparative research integrity across source precedence, guidance, source independence, restatements, rumors, entity isolation, periods, numeric conflicts, recency and thesis updates."
     }
   ],
   "future_research_rubric": {
@@ -154,7 +156,7 @@
     "automatic_research_loop is automated for quote-grounded probe execution, tool-call budgets, cooldowns and belief re-evaluation.",
     "general_claim_acquisition is automated for grounded admission, deduplication, conservative supersession and domain-neutral ingestion.",
     "semantic_claim_resolution is automated for paraphrase reuse, conflict separation, period integrity and conservative revision matching.",
-    "company_sector_research remains specified but not automated as a blind comparative corpus.",
-    "External baseline comparison is intentionally not faked without configured model access, frozen/live source packets and human labels."
+    "External baseline comparison is intentionally not faked without configured model access, frozen/live source packets and human labels.",
+    "company_sector_research is automated with entity-isolation, source-quality, period, conflict, recency and thesis-update cases."
   ]
 }
