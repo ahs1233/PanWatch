@@ -683,12 +683,16 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     for name, state in assessment.frame_states.items():
         frame_bars = bars.get(state.timeframe) or []
         frame_source = frame_bars[-1].source if frame_bars else ""
+        ladder = ema_stack(frame_bars).get("values", {}) if frame_bars else {}
         frames[name] = {
             "timeframe": state.timeframe.value,
             "source": frame_source,
             "close": state.close,
             "ema_fast": state.ema_fast,
             "ema_slow": state.ema_slow,
+            "ema50": ladder.get("50"),
+            "ema200": ladder.get("200"),
+            "ema1000": ladder.get("1000"),
             "rsi14": state.rsi14,
             "atr14": state.atr14,
             "atr_pct": state.atr_pct,
