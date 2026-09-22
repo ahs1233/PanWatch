@@ -487,3 +487,71 @@ async def test_timeout_fallback_rejects_boilerplate_and_non_numeric_opinion():
         max_candidates=3,
     )
     assert rows == []
+
+
+
+class _EmptyAI:
+    async def chat_multi(self, *_args, **_kwargs):
+        return '{"claims":[]}'
+
+
+@pytest.mark.asyncio
+async def test_empty_model_output_uses_deterministic_grounded_fallback():
+    extractor = GroundedClaimExtractor(
+        _EmptyAI(),
+        timeout_seconds=15,
+        max_source_chars=7000,
+    )
+    doc = _doc(
+        "https://energy.example/report",
+        (
+            "Global data center electricity demand is expected to grow by 26 percent in 2026. "
+            "Total electricity use reached 415 TWh in 2025. "
+            "The outlook remains uncertain."
+        ),
+    )
+    rows = await extractor.extract(
+        document=doc,
+        topic_hint="data center electricity demand",
+        max_candidates=3,
+    )
+    assert len(rows) >= 2
+    source = doc.text.casefold()
+    for row in rows:
+        assert row.quote == row.statement
+        assert row.quote.casefold() in source
+        assert row.metadata["extractor"] == "deterministic_grounded_fallback_v1"
+        assert row.metadata["fallback_reason"] == "empty_model_output"
+
+
+@pytest.mark.asyncio
+async def test_fallback_extractor_provenance_is_persisted_in_candidate_audit():
+    _engine, db = _db()
+    try:
+        doc = _doc(
+            "https://energy.example/report",
+            "Electricity demand is expected to grow by 26 percent in 2026.",
+        )
+        extractor = GroundedClaimExtractor(_EmptyAI())
+        graph = ClaimGraph()
+        ledger = EvidenceLedger()
+        falsification = FalsificationEngine()
+        result = await GeneralClaimAcquisition(
+            graph=graph,
+            ledger=ledger,
+            falsification=falsification,
+            extractor=extractor,
+        ).run(
+            db=db,
+            documents=[doc],
+            seed_topic="data center electricity demand",
+            evaluated_at=T0,
+        )
+        assert result.claims_accepted == 1
+        audit = db.query(ResearchClaimCandidateRecord).one()
+        assert audit.meta["extractor"] == "deterministic_grounded_fallback_v1"
+        assert audit.meta["fallback_reason"] == "empty_model_output"
+        claim = graph.claims[0]
+        assert claim.metadata["extractor"] == "deterministic_grounded_fallback_v1"
+    finally:
+        db.close()
