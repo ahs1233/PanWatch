@@ -56,6 +56,8 @@ jobs:
             benchmarks \
             src/bootstrap/application.py \
             src/platform/external_tools \
+            src/platform/persistence/models.py \
+            src/platform/persistence/migrations.py \
             src/platform/marketdata/xau_models.py \
             src/platform/marketdata/xau_research_provider.py \
             src/platform/marketdata/xau_spot_reference.py \
