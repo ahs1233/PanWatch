@@ -78,6 +78,9 @@ def pandas_ta_snapshot(rows: list[XAUBar]) -> dict[str, Any]:
     out: dict[str, Any] = {"status": "ok", "library": "pandas-ta-classic"}
     try:
         for period in (9, 21, 50, 200, 1000):
+            if len(close) < period:
+                out[f"ema{period}"] = None
+                continue
             series = ta.ema(close, length=period)
             value = series.iloc[-1] if series is not None and len(series) else None
             out[f"ema{period}"] = None if value is None or value != value else round(float(value), 6)
