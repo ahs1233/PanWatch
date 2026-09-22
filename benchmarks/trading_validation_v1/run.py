@@ -1,8 +1,7 @@
 """Executable Validation Framework v1 benchmark.
 
-This intentionally tests two hypotheses:
-1) a stable edge-like synthetic fixture that should survive all configured gates
-2) a textbook overfit fixture that is profitable IS and loses OOS
+It proves the framework can distinguish a stable synthetic fixture from a
+textbook IS winner / OOS loser while enforcing leakage guards.
 """
 
 from __future__ import annotations
@@ -17,8 +16,10 @@ from src.modules.strategy.validation import (
     ParameterPoint,
     TradeRecord,
     ValidationPolicy,
+    WalkForwardFoldResult,
     validate_experiment,
 )
+from src.modules.strategy.validation.splits import walk_forward_splits
 
 
 START = datetime(2025, 1, 1, tzinfo=timezone.utc)
@@ -57,6 +58,7 @@ def spec() -> ExperimentSpec:
         walk_forward_step=20,
         monte_carlo_iterations=500,
         monte_carlo_seed=20260923,
+        strategy_frozen_before_oos=True,
         policy=ValidationPolicy(
             min_oos_trades=30,
             min_oos_expectancy=0.0,
@@ -80,13 +82,44 @@ def surface() -> list[ParameterPoint]:
     ]
 
 
+def walk_forward_evidence(trades: list[TradeRecord]) -> list[WalkForwardFoldResult]:
+    results: list[WalkForwardFoldResult] = []
+    for fold in walk_forward_splits(trades, train_size=60, test_size=20, step=20):
+        train = list(fold.train)
+        test = list(fold.test)
+        results.append(
+            WalkForwardFoldResult(
+                fold_index=fold.index,
+                train_start=train[0].opened_at,
+                train_end=train[-1].closed_at,
+                selected_at=train[-1].closed_at,
+                test_start=test[0].opened_at,
+                test_end=test[-1].closed_at,
+                selected_strategy_fingerprint=f"wf:{fold.index}",
+                selected_parameters={"ema_fast": 9, "ema_slow": 21},
+                test_trades=tuple(test),
+            )
+        )
+    return results
+
+
+def validate(trades: list[TradeRecord]):
+    return validate_experiment(
+        spec=spec(),
+        trades=trades,
+        parameter_surface=surface(),
+        parameter_surface_is_in_sample_only=True,
+        walk_forward_results=walk_forward_evidence(trades),
+    )
+
+
 def main() -> None:
     pattern = (1.2, 0.9, 0.7, -0.55, 0.8, 1.0, -0.45, 0.65)
     stable = [trade(i, pattern[i % len(pattern)]) for i in range(200)]
     overfit = [trade(i, 1.0 if i < 120 else -0.8) for i in range(200)]
 
-    stable_report = validate_experiment(spec=spec(), trades=stable, parameter_surface=surface())
-    overfit_report = validate_experiment(spec=spec(), trades=overfit, parameter_surface=surface())
+    stable_report = validate(stable)
+    overfit_report = validate(overfit)
 
     result = {
         "benchmark": "trading-validation-v1",
@@ -94,6 +127,7 @@ def main() -> None:
             "verdict": stable_report.verdict.value,
             "oos": asdict(stable_report.out_of_sample),
             "walk_forward_positive_fraction": stable_report.walk_forward["positive_test_fraction"],
+            "walk_forward_provenance": stable_report.walk_forward["provenance"],
             "monte_carlo_loss_probability": stable_report.monte_carlo["loss_probability"],
             "parameter_stability_score": stable_report.parameter_stability["stability_score"],
         },
@@ -105,6 +139,7 @@ def main() -> None:
         },
         "passed": (
             stable_report.verdict.value == "pass"
+            and stable_report.walk_forward["provenance"] == "train_select_future_test"
             and overfit_report.verdict.value == "fail"
             and overfit_report.in_sample.expectancy > 0
             and overfit_report.out_of_sample.expectancy < 0
