@@ -22,7 +22,9 @@ type ChartSeries = { instrument:string; timeframe:string; count:number; bars:XAU
 
 const fmt=(v?:number|null,d=2)=>v==null||!Number.isFinite(v)?'--':v.toFixed(d)
 const nice=(v?:string)=>String(v||'--').replace(/_/g,' ').replace(/^./,x=>x.toUpperCase())
-const tone=(v?:string)=>v==='bullish'||v==='long_setup'?'text-emerald-500':v==='bearish'||v==='short_setup'?'text-rose-500':'text-muted-foreground'
+const tone=(v?:string)=>v==='bullish'||v==='long'||v==='long_setup'?'text-emerald-500':v==='bearish'||v==='short'||v==='short_setup'?'text-rose-500':'text-muted-foreground'
+const conditionTone=(v?:string)=>v==='satisfied'?'text-emerald-500':v==='failed'?'text-rose-500':'text-amber-500'
+const conditionDot=(v?:string)=>v==='satisfied'?'bg-emerald-500':v==='failed'?'bg-rose-500':'bg-amber-500'
 
 export default function DashboardPage(){
  const nav=useNavigate(); const [snapshot,setSnapshot]=useState<Snapshot|null>(null); const [macro,setMacro]=useState<Macro|null>(null); const [fusion,setFusion]=useState<Fusion|null>(null); const [ready,setReady]=useState<Readiness|null>(null); const [chart,setChart]=useState<ChartSeries|null>(null); const [timeframe,setTimeframe]=useState<'1m'|'5m'|'15m'>('5m'); const [chartLoading,setChartLoading]=useState(true); const [loading,setLoading]=useState(true); const [error,setError]=useState('')
@@ -50,8 +52,8 @@ export default function DashboardPage(){
 
   {error&&<div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-500">{error}</div>}
 
-  <section className="mb-4 grid gap-3 xl:grid-cols-12">
-   <div className="card overflow-hidden p-3 xl:col-span-8">
+  <section className="mb-4 grid gap-3 lg:grid-cols-12">
+   <div className="card overflow-hidden p-3 lg:col-span-8">
     <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
      <div>
       <div className="text-sm font-semibold">Market structure</div>
@@ -65,50 +67,31 @@ export default function DashboardPage(){
      <XAUChart bars={chart?.bars||[]} loading={chartLoading} swingHigh={snapshot?.swing_high_reference} swingLow={snapshot?.swing_low_reference} triggerLevel={plan?.trigger_level}/>
     </div>
    </div>
-   <div className="space-y-3 xl:col-span-4">
+
+   <aside className="space-y-3 lg:col-span-4">
     <div className="card p-4">
-     <div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">Directional edge</div>
-     <div className={'mt-1 text-xl font-bold '+tone(direction)}>{directionLabel}</div>
+     <div className="flex items-start justify-between gap-3">
+      <div><div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">PanWatch decision</div><div className={'mt-1 text-xl font-bold '+tone(direction)}>{directionLabel}</div><div className="mt-1 text-[11px] font-medium text-muted-foreground">{statusText}</div></div>
+      <div className="text-right"><div className="font-mono text-2xl font-bold">{score}<span className="text-[11px] text-muted-foreground">/100</span></div><div className="text-[9px] text-muted-foreground">decision score</div></div>
+     </div>
      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
-      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Edge score</span><div className="mt-1 font-mono font-semibold">{edge?Math.round(edge.score*100):'--'}</div></div>
-      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Strength</span><div className="mt-1 font-semibold">{nice(edge?.band)}</div></div>
-      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Trigger</span><div className="mt-1 font-mono font-semibold">{fmt(plan?.trigger_level)}</div></div>
+      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Edge</span><div className={'mt-1 font-semibold '+tone(direction)}>{edge?Math.round(edge.score*100):'--'} · {nice(edge?.band)}</div></div>
+      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Regime</span><div className="mt-1 font-semibold">{nice(cog?.regime.label)}</div></div>
+      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Trigger</span><div className="mt-1 font-mono font-semibold">{fmt(plan?.trigger_level)}</div><div className="mt-0.5 text-[9px] text-muted-foreground">{nice(plan?.trigger_state)}</div></div>
       <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Invalidation</span><div className="mt-1 font-mono font-semibold">{fmt(plan?.invalidation_reference)}</div></div>
      </div>
+     <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+      <div className="flex justify-between rounded-lg bg-accent/20 px-2.5 py-2"><span className="text-muted-foreground">Data quality</span><b>{quality}%</b></div>
+      <div className="flex justify-between rounded-lg bg-accent/20 px-2.5 py-2"><span className="text-muted-foreground">Macro</span><b>{macro?.synthesis_ok?nice(macro.bias_label):'Degraded'}</b></div>
+     </div>
+     {plan?.scenario_conflict&&<div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-2.5 text-[10px] leading-5 text-amber-500">Dominant scenario conflicts with the directional edge. PanWatch is waiting for confirmation instead of forcing an entry.</div>}
     </div>
+
     <div className="card p-4">
-     <div className="flex items-center gap-2"><Target className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Activation conditions</h2></div>
-     <div className="mt-3 space-y-2">{(plan?.activation_conditions||[]).map(x=><div key={x} className="flex items-center gap-2 text-[11px]"><span className="h-1.5 w-1.5 rounded-full bg-primary"/><span>{nice(x)}</span></div>)}{!(plan?.activation_conditions||[]).length&&<div className="text-[11px] text-muted-foreground">No directional trigger is active.</div>}</div>
+     <div className="flex items-center justify-between gap-2"><div className="flex items-center gap-2"><Target className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Activation state</h2></div><span className="text-[10px] text-muted-foreground">{plan?.activation?.satisfied||0}/{plan?.activation?.total||0} satisfied</span></div>
+     <div className="mt-3 space-y-2">{(plan?.activation_conditions||[]).map(x=><div key={x.key} className="flex items-center justify-between gap-3 rounded-lg bg-accent/20 px-3 py-2 text-[11px]"><div className="flex min-w-0 items-center gap-2"><span className={'h-1.5 w-1.5 shrink-0 rounded-full '+conditionDot(x.status)}/><span className="truncate">{x.label}</span></div><span className={'shrink-0 text-[10px] font-semibold '+conditionTone(x.status)}>{x.status.toUpperCase()}</span></div>)}{!(plan?.activation_conditions||[]).length&&<div className="text-[11px] text-muted-foreground">No directional trigger is active.</div>}</div>
     </div>
-   </div>
-  </section>
-
-  <section className="mb-4 grid gap-3 lg:grid-cols-12">
-   <div className="card p-5 lg:col-span-7">
-    <div className="flex items-start justify-between gap-3">
-     <div><div className="text-xs text-muted-foreground">PanWatch decision</div><div className={'mt-1 text-2xl font-bold '+tone(direction)}>{directionLabel}</div><div className="mt-1 text-sm text-muted-foreground">{statusText}</div><div className="mt-1 text-[10px] text-muted-foreground">{plan?.setup_confirmed?'Strict entry setup confirmed':'Directional bias only · entry trigger not yet confirmed'}</div></div>
-     <div className="text-right"><div className="text-xs text-muted-foreground">Decision score</div><div className="mt-1 font-mono text-3xl font-bold">{score}<span className="text-sm text-muted-foreground"> / 100</span></div><div className="text-[10px] text-muted-foreground">not win probability</div></div>
-    </div>
-    <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-4">
-     {[['Regime',nice(cog?.regime.label)],['Data quality',quality+'%'],['Macro',macro?.synthesis_ok?nice(macro.bias_label):'Unavailable'],['Timing',statusText]].map(([a,b])=><div key={a} className="rounded-xl bg-accent/30 p-3"><div className="text-[10px] text-muted-foreground">{a}</div><div className="mt-1 text-xs font-semibold">{b}</div></div>)}
-    </div>
-   </div>
-   <div className="card p-5 lg:col-span-5">
-    <div className="flex items-center gap-2"><Brain className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Why now</h2></div>
-    <div className="mt-4 space-y-2 text-xs">
-     <div className="flex justify-between"><span className="text-muted-foreground">Directional edge</span><b className={tone(direction)}>{nice(direction)} {edge?Math.round(edge.strength*100)+'%':''}</b></div>
-     <div className="flex justify-between"><span className="text-muted-foreground">Macro relation</span><b>{nice(fusion?.macro_relation)}</b></div>
-     <div className="flex justify-between"><span className="text-muted-foreground">Adversarial check</span><b>{cog?.adversarial.veto?'VETO':'CLEAR'}</b></div>
-     <div className="flex justify-between"><span className="text-muted-foreground">Execution</span><b className="text-amber-500">LOCKED</b></div>
-    </div>
-   </div>
-  </section>
-
-  <section className="mb-4 grid gap-3 md:grid-cols-3">
-   {frames.map(f=><div key={f.timeframe} className="card p-4">
-    <div className="flex items-center justify-between"><div><div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">{f.timeframe}</div><div className={`mt-1 font-bold uppercase ${tone(f.direction)}`}>{f.direction}</div></div><div className="font-mono text-xl font-semibold">{fmt(f.close)}</div></div>
-    <div className="mt-4 grid grid-cols-4 gap-2 text-[10px]"><div><span className="text-muted-foreground">EMA9</span><div className="mt-1 font-mono">{fmt(f.ema_fast)}</div></div><div><span className="text-muted-foreground">EMA21</span><div className="mt-1 font-mono">{fmt(f.ema_slow)}</div></div><div><span className="text-muted-foreground">RSI</span><div className="mt-1 font-mono">{fmt(f.rsi14,1)}</div></div><div><span className="text-muted-foreground">ATR</span><div className="mt-1 font-mono">{fmt(f.atr14)}</div></div></div>
-   </div>)}
+   </aside>
   </section>
 
   <section className="mb-4 grid gap-3 lg:grid-cols-12">
@@ -124,13 +107,13 @@ export default function DashboardPage(){
    </div>
   </section>
 
-  <section className="mb-4 grid gap-3 xl:grid-cols-12">
-   <div className="card p-5 xl:col-span-5">
+  <section className="mb-4 grid gap-3 lg:grid-cols-12">
+   <div className="card p-5 lg:col-span-5">
     <div className="flex items-center gap-2"><Brain className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Scenario paths</h2></div>
     <div className="mt-4 space-y-2">{scenarios.map(s=><div key={s.name} className="rounded-xl border border-border/60 p-3"><div className="flex items-center justify-between"><div><div className="text-xs font-semibold">{nice(s.name)}</div><div className={'mt-1 text-[10px] '+tone(s.direction)}>{nice(s.direction)}</div></div><div className="font-mono text-sm font-semibold">{Math.round(s.weight*100)}%</div></div><div className="mt-2 grid grid-cols-3 gap-2 text-[10px]"><div><span className="text-muted-foreground">Target</span><div className="font-mono">{fmt(s.target)}</div></div><div><span className="text-muted-foreground">Trigger</span><div className="font-mono">{typeof s.trigger==='number'?fmt(s.trigger):typeof s.trigger==='string'?nice(s.trigger):'--'}</div></div><div><span className="text-muted-foreground">Invalid.</span><div className="font-mono">{fmt(s.invalidation)}</div></div></div></div>)}</div>
    </div>
-   <div className="card p-5 xl:col-span-4"><div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Competing hypotheses</h2></div><div className="mt-4 space-y-3">{(cog?.hypotheses||[]).map(h=><div key={h.name}><div className="mb-1 flex justify-between text-xs"><span>{nice(h.name)}</span><span className="font-mono">{Math.round(h.weight*100)}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-accent"><div className="h-full rounded-full bg-primary" style={{width:(Math.max(2,Math.round(h.weight*100)))+'%'}}/></div></div>)}</div></div>
-   <div className="card p-5 xl:col-span-3"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500"/><h2 className="text-sm font-semibold">Risk & gates</h2></div>{gates.length?<div className="mt-3 space-y-2">{Array.from(new Set(gates)).slice(0,5).map(x=><div key={x} className="rounded-xl bg-accent/30 px-3 py-2 text-[11px] text-muted-foreground">{nice(x)}</div>)}</div>:<div className="mt-4 text-xs text-muted-foreground">No research-data gates are active.</div>}<div className="mt-4 flex items-center gap-2 border-t border-border/60 pt-3 text-[11px] text-amber-500"><Lock className="h-3.5 w-3.5"/> Live execution remains locked until a tradable broker feed is connected.</div></div>
+   <div className="card p-5 lg:col-span-4"><div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Competing hypotheses</h2></div><div className="mt-4 space-y-3">{(cog?.hypotheses||[]).map(h=><div key={h.name}><div className="mb-1 flex justify-between text-xs"><span>{nice(h.name)}</span><span className="font-mono">{Math.round(h.weight*100)}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-accent"><div className="h-full rounded-full bg-primary" style={{width:(Math.max(2,Math.round(h.weight*100)))+'%'}}/></div></div>)}</div></div>
+   <div className="card p-5 lg:col-span-3"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500"/><h2 className="text-sm font-semibold">Risk & gates</h2></div>{gates.length?<div className="mt-3 space-y-2">{Array.from(new Set(gates)).slice(0,5).map(x=><div key={x} className="rounded-xl bg-accent/30 px-3 py-2 text-[11px] text-muted-foreground">{nice(x)}</div>)}</div>:<div className="mt-4 text-xs text-muted-foreground">No research-data gates are active.</div>}<div className="mt-4 flex items-center gap-2 border-t border-border/60 pt-3 text-[11px] text-amber-500"><Lock className="h-3.5 w-3.5"/> Live execution remains locked until a tradable broker feed is connected.</div></div>
   </section>
 
   <section className="card p-4"><div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-xs"><div className="flex items-center gap-2"><Database className="h-4 w-4 text-primary"/><b>Research stack</b></div><span>Atria <b className={ready?.ai.api_key_configured?'text-emerald-500':'text-rose-500'}>{ready?.ai.api_key_configured?'ONLINE':'OFFLINE'}</b></span><span>Agent-Reach <b className={ready?.toolbox.reachable?'text-emerald-500':'text-rose-500'}>{ready?.toolbox.reachable?`ONLINE · ${ready.toolbox.tool_count}`:'OFFLINE'}</b></span><span>Scrapling <b className={ready?.toolbox.scrapling_fetch_available?'text-emerald-500':'text-rose-500'}>{ready?.toolbox.scrapling_fetch_available?'ONLINE':'OFFLINE'}</b></span></div></section>
