@@ -1125,6 +1125,10 @@ def _adversarial_review(
     )
     flow_score = _clip(_number((context.get("cash_flow") or {}).get("score"), 0.0), -1.0, 1.0)
     smart_score = _clip(_number((context.get("smart_money") or {}).get("score"), 0.0), -1.0, 1.0)
+    validation = context.get("cross_validation") or {}
+    library_direction = str(validation.get("library_direction") or "neutral")
+    library_agreement = _clip(_number(validation.get("library_agreement"), 0.0))
+    smc_concordance = str(validation.get("smc_concordance") or "unresolved")
     primary = hypotheses[0] if hypotheses else {"name": "none", "weight": 0.0, "direction": "none"}
     rsi5 = _number(perception.get("rsi_5m"), 50.0)
 
@@ -1145,6 +1149,12 @@ def _adversarial_review(
         counter_evidence.append("cash_flow_opposes_setup")
     if setup_dir and smart_score * setup_dir <= -0.35:
         counter_evidence.append("smart_money_structure_opposes_setup")
+    if smc_concordance == "conflict" and library_agreement >= 0.67:
+        counter_evidence.append("smc_cross_validation_conflict")
+    if setup_dir > 0 and library_direction == "bearish" and library_agreement >= 0.67:
+        counter_evidence.append("smc_validators_oppose_long")
+    elif setup_dir < 0 and library_direction == "bullish" and library_agreement >= 0.67:
+        counter_evidence.append("smc_validators_oppose_short")
     if primary.get("direction") not in {
         "long" if setup_dir > 0 else "short" if setup_dir < 0 else "none",
         "none",
