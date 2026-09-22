@@ -352,12 +352,135 @@ def market_profile_snapshot(rows: list[XAUBar]) -> dict[str, Any]:
         return {"status": "error", "library": "MarketProfile", "error": type(exc).__name__}
 
 
+
+def structure_scope_reference_snapshot(rows: list[XAUBar]) -> dict[str, Any]:
+    """Linux-safe reference implementation of structure-scope's public architecture.
+
+    The upstream project is Windows/MetaTrader5-oriented and declares no
+    repository license, so PanWatch does not copy or install its source.
+    Instead this adapter independently evaluates the documented ideas:
+    completed-HTF EMA50 alignment, active London/New York session, and the
+    causal sweep -> structure-shift -> FVG sequence.
+    """
+    if len(rows) < 120:
+        return {
+            "status": "insufficient_data",
+            "library": "structure-scope-reference",
+            "runtime_dependency": False,
+        }
+    try:
+        import pandas as pd
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "library": "structure-scope-reference",
+            "runtime_dependency": False,
+            "error": type(exc).__name__,
+        }
+
+    try:
+        df = _frame(rows).sort_index()
+        close = df["close"]
+
+        def completed_ema_context(rule: str, period: int = 50) -> tuple[float | None, float | None, float | None]:
+            sampled = close.resample(rule, label="right", closed="left").last().dropna()
+            if len(sampled) < period + 2:
+                return None, None, None
+            ema = sampled.ewm(span=period, adjust=False, min_periods=period).mean().dropna()
+            if len(ema) < 2:
+                return float(sampled.iloc[-1]), None, None
+            return float(sampled.iloc[-1]), float(ema.iloc[-1]), float(ema.iloc[-1] - ema.iloc[-2])
+
+        h4_close, h4_ema50, h4_slope = completed_ema_context("4h")
+        d1_close, d1_ema50, d1_slope = completed_ema_context("1D")
+        h4_bull = bool(h4_close is not None and h4_ema50 is not None and h4_slope is not None and h4_close > h4_ema50 and h4_slope > 0)
+        h4_bear = bool(h4_close is not None and h4_ema50 is not None and h4_slope is not None and h4_close < h4_ema50 and h4_slope < 0)
+        d1_bull = bool(d1_close is not None and d1_ema50 is not None and d1_slope is not None and d1_close > d1_ema50 and d1_slope > 0)
+        d1_bear = bool(d1_close is not None and d1_ema50 is not None and d1_slope is not None and d1_close < d1_ema50 and d1_slope < 0)
+        htf_direction = "bullish" if h4_bull and d1_bull else "bearish" if h4_bear and d1_bear else "mixed"
+
+        latest = rows[-1].timestamp
+        hour = latest.hour
+        london = 7 <= hour < 16
+        new_york = 13 <= hour < 22
+        session = (
+            "london_new_york_overlap"
+            if london and new_york
+            else "london"
+            if london
+            else "new_york"
+            if new_york
+            else "off_session"
+        )
+
+        primary = pyvsmc_snapshot(rows[-500:])
+        liq = primary.get("liquidity") or {}
+        choch = primary.get("choch") or {}
+        fvg = primary.get("fvg") or {}
+
+        sell_sweep = liq.get("sell_side_sweep_index")
+        buy_sweep = liq.get("buy_side_sweep_index")
+        bull_choch = choch.get("bullish_index")
+        bear_choch = choch.get("bearish_index")
+        bull_fvg = fvg.get("bullish_index")
+        bear_fvg = fvg.get("bearish_index")
+
+        long_sequence = bool(
+            isinstance(sell_sweep, int)
+            and isinstance(bull_choch, int)
+            and isinstance(bull_fvg, int)
+            and sell_sweep < bull_choch <= bull_fvg
+        )
+        short_sequence = bool(
+            isinstance(buy_sweep, int)
+            and isinstance(bear_choch, int)
+            and isinstance(bear_fvg, int)
+            and buy_sweep < bear_choch <= bear_fvg
+        )
+
+        setup = (
+            "long_watch"
+            if htf_direction == "bullish" and long_sequence
+            else "short_watch"
+            if htf_direction == "bearish" and short_sequence
+            else "none"
+        )
+        session_confirmed = session != "off_session"
+        return {
+            "status": "ok",
+            "library": "structure-scope-reference",
+            "runtime_dependency": False,
+            "upstream_runtime_compatible": False,
+            "upstream_reason": "Windows/MetaTrader5 runtime and no declared repository license",
+            "architecture_reference": "itsmustafa119/structure-scope",
+            "htf_direction": htf_direction,
+            "h4": {"close": h4_close, "ema50": h4_ema50, "ema50_slope": h4_slope},
+            "daily": {"close": d1_close, "ema50": d1_ema50, "ema50_slope": d1_slope},
+            "session": session,
+            "session_confirmed": session_confirmed,
+            "causal_sequence": {
+                "long_sweep_choch_fvg": long_sequence,
+                "short_sweep_choch_fvg": short_sequence,
+            },
+            "setup": setup,
+            "execution_allowed": False,
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "library": "structure-scope-reference",
+            "runtime_dependency": False,
+            "error": type(exc).__name__,
+        }
+
+
 def library_consensus(rows: list[XAUBar]) -> dict[str, Any]:
     primary = pyvsmc_snapshot(rows)
     oracle = smartmoneyconcepts_snapshot(rows)
     mcp_oracle = smc_mcp_snapshot(rows)
     ta = pandas_ta_snapshot(rows)
     profile = market_profile_snapshot(rows)
+    structure_scope = structure_scope_reference_snapshot(rows)
 
     directions = []
     for item in (primary, oracle, mcp_oracle):
@@ -370,7 +493,7 @@ def library_consensus(rows: list[XAUBar]) -> dict[str, Any]:
     agreement = max(bullish, bearish) / len(directions) if directions else 0.0
 
     return {
-        "version": "library-consensus-v1",
+        "version": "library-consensus-v2",
         "direction": consensus_direction,
         "agreement": round(agreement, 4),
         "independent_direction_votes": len(directions),
@@ -379,12 +502,14 @@ def library_consensus(rows: list[XAUBar]) -> dict[str, Any]:
         "oracle_smc_mcp": mcp_oracle,
         "technical_oracle": ta,
         "profile_oracle": profile,
+        "structure_scope_reference": structure_scope,
         "status": {
             "pyvsmc": primary.get("status"),
             "smartmoneyconcepts": oracle.get("status"),
             "smc_mcp": mcp_oracle.get("status"),
             "pandas_ta_classic": ta.get("status"),
             "marketprofile": profile.get("status"),
+            "structure_scope_reference": structure_scope.get("status"),
         },
     }
 
