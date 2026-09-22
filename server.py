@@ -1546,20 +1546,27 @@ async def verify_runtime_integrations() -> None:
                     },
                 }
             ]
-            final_message = None
-            async for event_type, payload in ai.chat_stream(
-                [
-                    {
-                        "role": "user",
-                        "content": "You must call the runtime_probe function now. Do not answer with normal text.",
-                    }
-                ],
-                tools=probe_tools,
-                temperature=0,
-                tool_choice="auto",
-            ):
-                if event_type == "message":
-                    final_message = payload
+            async def _consume_tool_probe():
+                final_message = None
+                async for event_type, payload in ai.chat_stream(
+                    [
+                        {
+                            "role": "user",
+                            "content": "You must call the runtime_probe function now. Do not answer with normal text.",
+                        }
+                    ],
+                    tools=probe_tools,
+                    temperature=0,
+                    tool_choice="auto",
+                ):
+                    if event_type == "message":
+                        final_message = payload
+                return final_message
+
+            final_message = await asyncio.wait_for(
+                _consume_tool_probe(),
+                timeout=30,
+            )
             tool_calls = (final_message or {}).get("tool_calls") or []
             logger.info(
                 "[runtime-smoke] AI streaming tool_call_ok=%s tool_name=%s",
@@ -1652,7 +1659,14 @@ async def lifespan(app):
     setup_proxy()  # 设置进程 env 代理(HTTP_PROXY/NO_PROXY);所有 httpx(trust_env=True)据此走代理
     setup_ssl()
     setup_playwright()
-    await verify_runtime_integrations()
+
+    # Runtime smoke checks are observability probes, not readiness gates.
+    # Run them in the background so an external AI/research outage cannot
+    # hold the ASGI startup lifecycle and fail Railway health checks.
+    runtime_smoke_task = asyncio.create_task(
+        verify_runtime_integrations(),
+        name="runtime-integrations-smoke",
+    )
 
     # 从环境变量初始化认证（Docker 部署用）
     from src.modules.administration.api.auth import init_auth_from_env
@@ -1782,6 +1796,9 @@ async def lifespan(app):
     if xau_replay_scheduler:
         xau_replay_scheduler.shutdown()
         logger.info("XAU paper scheduler stopped")
+    if runtime_smoke_task and not runtime_smoke_task.done():
+        runtime_smoke_task.cancel()
+        await asyncio.gather(runtime_smoke_task, return_exceptions=True)
 
 
 # 模块级 app 实例，供 uvicorn reload 使用

@@ -6,6 +6,7 @@ on:
       - feat/ahmed-toolbox-xau
   pull_request:
     paths:
+      - "server.py"
       - "src/platform/external_tools/**"
       - "src/platform/marketdata/xau_*"
       - "src/modules/strategy/xau_intraday.py"
