@@ -236,34 +236,67 @@ async def get_chart_series(
     limit: int = 160,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Return deep-history OHLC with the full EMA ladder.
+    """Return deep-history OHLC with EMA 9/21/50/200/1000.
 
-    EMA 1000 requires substantially more history than the intraday engine uses,
-    so chart/context retrieval intentionally fetches up to 1000 MT5 bars and
-    only trims after indicator calculation.
+    Higher-timeframe charting is part of the same research architecture as the
+    decision engine. Weekly/monthly bars are aggregated from daily XAUUSD data.
     """
-    timeframe_map = {
+    direct_map = {
         "1m": XAUTimeframe.M1,
         "5m": XAUTimeframe.M5,
         "15m": XAUTimeframe.M15,
+        "30m": XAUTimeframe.M30,
+        "1h": XAUTimeframe.H1,
+        "4h": XAUTimeframe.H4,
+        "1d": XAUTimeframe.D1,
+    }
+    aggregate_map = {
+        "1w": XAUTimeframe.W1,
+        "1mo": XAUTimeframe.MN1,
     }
     key = str(timeframe or "5m").strip().lower()
-    if key not in timeframe_map:
+    if key not in direct_map and key not in aggregate_map:
         key = "5m"
     limit = max(30, min(int(limit), 240))
-    tf = timeframe_map[key]
 
     provider = BiquoteXAUOHLCProvider()
-    try:
-        rows = await asyncio.to_thread(
-            provider.bars,
-            tf,
-            limit=1000,
-            timeout_seconds=14.0,
-        )
-    except Exception:
-        bars = await get_research_bars(force=force)
-        rows = list(bars.get(tf) or [])
+    rows = []
+    if key in aggregate_map:
+        try:
+            daily = await asyncio.to_thread(
+                provider.bars,
+                XAUTimeframe.D1,
+                limit=1000,
+                timeout_seconds=14.0,
+            )
+            rows = aggregate_bars(daily, aggregate_map[key])
+        except Exception:
+            yahoo = YahooGoldResearchProvider()
+            try:
+                rows = await asyncio.to_thread(yahoo.bars, aggregate_map[key])
+            except Exception:
+                rows = []
+    else:
+        tf = direct_map[key]
+        try:
+            rows = await asyncio.to_thread(
+                provider.bars,
+                tf,
+                limit=1000,
+                timeout_seconds=14.0,
+            )
+        except Exception:
+            if tf in {XAUTimeframe.M1, XAUTimeframe.M5, XAUTimeframe.M15}:
+                bars = await get_research_bars(force=force)
+                rows = list(bars.get(tf) or [])
+            elif tf in {XAUTimeframe.H1, XAUTimeframe.D1}:
+                yahoo = YahooGoldResearchProvider()
+                try:
+                    rows = await asyncio.to_thread(yahoo.bars, tf)
+                except Exception:
+                    rows = []
+            else:
+                rows = []
 
     rows = sorted(rows, key=lambda row: row.timestamp)
 
@@ -311,6 +344,10 @@ async def get_chart_series(
         "source": payload[-1]["source"] if payload else None,
         "observed_at": payload[-1]["time"] if payload else None,
         "ema_periods": [9, 21, 50, 200, 1000],
+        "ema_coverage": {
+            str(period): len(rows) >= period
+            for period in (9, 21, 50, 200, 1000)
+        },
         "research_only": True,
     }
 
