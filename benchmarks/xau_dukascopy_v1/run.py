@@ -38,9 +38,11 @@ def _find_data_hour(provider, candidates):
     return None, attempts
 
 
-def _recent_candidates(now):
-    anchor = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=4)
-    return [anchor - timedelta(hours=i) for i in range(0, 72)]
+def _modern_candidates():
+    # Fixed known trading session avoids conflating deep-history access with
+    # Dukascopy's separate latest-file publication lag.
+    start = datetime(2026, 7, 3, 12, tzinfo=UTC)
+    return [start + timedelta(hours=i) for i in range(0, 6)]
 
 
 def _old_candidates():
@@ -50,14 +52,13 @@ def _old_candidates():
 
 def main() -> None:
     provider = DukascopyXAUHistoryProvider(
-        timeout_seconds=20.0,
-        retries=2,
-        retry_backoff_seconds=0.5,
+        timeout_seconds=8.0,
+        retries=1,
+        retry_backoff_seconds=0.25,
     )
-    now = datetime.now(UTC)
 
     old, old_attempts = _find_data_hour(provider, _old_candidates())
-    recent, recent_attempts = _find_data_hour(provider, _recent_candidates(now))
+    recent, recent_attempts = _find_data_hour(provider, _modern_candidates())
 
     result = {
         "benchmark": "xau-dukascopy-deep-history-smoke-v1",
@@ -68,9 +69,9 @@ def main() -> None:
         "centralized_order_flow": provider.centralized_order_flow,
         "execution_eligible": provider.execution_eligible,
         "old_search": old_attempts,
-        "recent_search": recent_attempts,
+        "modern_search": recent_attempts,
         "old_hour": None,
-        "recent_hour": None,
+        "modern_hour": None,
         "deep_history_gap_days": None,
         "passed": False,
     }
@@ -102,7 +103,7 @@ def main() -> None:
             end=recent.hour + timedelta(hours=1),
             max_hours=1,
         )
-        result["recent_hour"] = {
+        result["modern_hour"] = {
             "hour": recent.hour.isoformat(),
             "tick_count": len(recent.ticks),
             "min_mid": min(mids),
@@ -118,7 +119,7 @@ def main() -> None:
         result["deep_history_gap_days"] = gap_days
 
         old_info = result["old_hour"]
-        recent_info = result["recent_hour"]
+        recent_info = result["modern_hour"]
         sane_old = (
             old_info["tick_count"] > 0
             and old_info["m1_bars"] > 0
