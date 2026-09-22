@@ -2366,7 +2366,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(126, "assistant_task_events", _m126_assistant_task_events),
     Migration(127, "research_evidence_foundation", _m127_research_evidence_foundation),
     Migration(128, "claim_graph_and_falsification", _m128_claim_graph_and_falsification),
-    Migration(129, "persistent_belief_state", _m129_persistent_belief_state),\n    Migration(130, "automatic_research_loop", _m130_automatic_research_loop),
+    Migration(129, "persistent_belief_state", _m129_persistent_belief_state),
+    Migration(130, "automatic_research_loop", _m130_automatic_research_loop),
 )
 
 
