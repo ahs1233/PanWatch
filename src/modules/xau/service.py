@@ -953,9 +953,11 @@ def _resolve_event_gate(
 
 
 def _parse_json(value: str) -> dict[str, Any]:
-    value = value.strip()
-    value = re.sub(r"^~~~(?:json)?\s*", "", value, flags=re.I)
-    value = re.sub(r"\s*~~~$", "", value)
+    value = str(value or "").strip()
+    # Providers commonly wrap otherwise-valid JSON in Markdown fences.
+    # Accept both backtick and tilde fences while keeping the parser strict.
+    value = re.sub(r"^(?:```|~~~)(?:json)?\\s*", "", value, flags=re.I)
+    value = re.sub(r"\\s*(?:```|~~~)\\s*$", "", value)
     try:
         parsed = json.loads(value)
         return parsed if isinstance(parsed, dict) else {}
