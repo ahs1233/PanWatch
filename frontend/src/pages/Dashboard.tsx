@@ -49,6 +49,39 @@ export default function DashboardPage(){
 
   {error&&<div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-500">{error}</div>}
 
+  <section className="mb-4 grid gap-3 xl:grid-cols-12">
+   <div className="card overflow-hidden p-3 xl:col-span-8">
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
+     <div>
+      <div className="text-sm font-semibold">Market structure</div>
+      <div className="text-[10px] text-muted-foreground">{chart?.source||'research bars'} · {chart?.count||0} bars</div>
+     </div>
+     <div className="flex rounded-xl bg-accent/40 p-1">
+      {(['1m','5m','15m'] as const).map(tf=><button key={tf} onClick={()=>setTimeframe(tf)} className={timeframe===tf?'rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-primary-foreground shadow-sm':'rounded-lg px-3 py-1.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground'}>{tf}</button>)}
+     </div>
+    </div>
+    <div className="overflow-x-auto">
+     <XAUChart bars={chart?.bars||[]} loading={chartLoading} swingHigh={snapshot?.swing_high_reference} swingLow={snapshot?.swing_low_reference} triggerLevel={plan?.trigger_level}/>
+    </div>
+   </div>
+   <div className="space-y-3 xl:col-span-4">
+    <div className="card p-4">
+     <div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">Directional edge</div>
+     <div className={'mt-1 text-xl font-bold '+tone(direction)}>{directionLabel}</div>
+     <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Edge score</span><div className="mt-1 font-mono font-semibold">{edge?Math.round(edge.score*100):'--'}</div></div>
+      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Strength</span><div className="mt-1 font-semibold">{nice(edge?.band)}</div></div>
+      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Trigger</span><div className="mt-1 font-mono font-semibold">{fmt(plan?.trigger_level)}</div></div>
+      <div className="rounded-xl bg-accent/30 p-3"><span className="text-muted-foreground">Invalidation</span><div className="mt-1 font-mono font-semibold">{fmt(plan?.invalidation_reference)}</div></div>
+     </div>
+    </div>
+    <div className="card p-4">
+     <div className="flex items-center gap-2"><Target className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Activation conditions</h2></div>
+     <div className="mt-3 space-y-2">{(plan?.activation_conditions||[]).map(x=><div key={x} className="flex items-center gap-2 text-[11px]"><span className="h-1.5 w-1.5 rounded-full bg-primary"/><span>{nice(x)}</span></div>)}{!(plan?.activation_conditions||[]).length&&<div className="text-[11px] text-muted-foreground">No directional trigger is active.</div>}</div>
+    </div>
+   </div>
+  </section>
+
   <section className="mb-4 grid gap-3 lg:grid-cols-12">
    <div className="card p-5 lg:col-span-7">
     <div className="flex items-start justify-between gap-3">
