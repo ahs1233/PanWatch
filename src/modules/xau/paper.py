@@ -1146,13 +1146,16 @@ class XAUPaperTradingEngine:
         self.settings = settings or Settings()
         self._reversal_streaks: dict[str, dict[str, object]] = {}
         self._memory_cache = None
-        self._autopsy_checked_at = 0.0
+        self._autopsy_checked_at: float | None = None
 
     def _invalidate_memory(self):
         self._memory_cache = None
 
     def _backfill_protective_autopsies(self, db):
-        if time.monotonic() - self._autopsy_checked_at < 60:
+        if (
+            self._autopsy_checked_at is not None
+            and time.monotonic() - self._autopsy_checked_at < 60
+        ):
             return
         trades = db.query(XAUPaperTrade).order_by(XAUPaperTrade.closed_at.desc()).limit(120).all()
         for trade in trades:
@@ -2227,7 +2230,7 @@ class XAUPaperTradingEngine:
         except Exception:
             db.rollback()
             self._invalidate_memory()
-            self._autopsy_checked_at = 0.0
+            self._autopsy_checked_at = None
             raise
         finally:
             db.close()
