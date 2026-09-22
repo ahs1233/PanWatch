@@ -11,8 +11,13 @@ import json
 import logging
 import re
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import quote_plus
+
+import httpx
 
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
@@ -1445,6 +1450,61 @@ def _parse_json(value: str) -> dict[str, Any]:
                 return {}
 
 
+def _direct_macro_rss_evidence(query: str, *, now: datetime) -> str:
+    """Public-network fallback when Ahmed Toolbox search is unavailable.
+
+    It is intentionally small and source-attributed. Headlines are evidence
+    discovery only; the synthesis layer still treats them conservatively.
+    """
+    urls = [
+        (
+            "Google News",
+            "https://news.google.com/rss/search?q="
+            + quote_plus(query)
+            + "&hl=en-US&gl=US&ceid=US:en",
+        ),
+        (
+            "Federal Reserve",
+            "https://www.federalreserve.gov/feeds/press_all.xml",
+        ),
+    ]
+    cutoff = now - timedelta(hours=36)
+    lines: list[str] = []
+    headers = {"User-Agent": "PanWatch-XAU/0.7"}
+    for source_name, url in urls:
+        try:
+            response = httpx.get(url, timeout=12.0, headers=headers, follow_redirects=True)
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+        except Exception:
+            continue
+        items = root.findall(".//item")
+        for item in items[:30]:
+            title = str(item.findtext("title") or "").strip()
+            link = str(item.findtext("link") or "").strip()
+            pub = str(item.findtext("pubDate") or item.findtext("date") or "").strip()
+            published = None
+            if pub:
+                try:
+                    published = parsedate_to_datetime(pub)
+                    if published.tzinfo is None:
+                        published = published.replace(tzinfo=timezone.utc)
+                    published = published.astimezone(timezone.utc)
+                except Exception:
+                    published = None
+            if published and published < cutoff:
+                continue
+            if not title:
+                continue
+            when = published.isoformat() if published else "time_unknown"
+            lines.append(f"[{source_name}] {when} | {title} | {link}")
+            if len(lines) >= 14:
+                break
+        if len(lines) >= 14:
+            break
+    return "\n".join(lines)
+
+
 async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
     global _macro_cache, _macro_last_good
     now = time.monotonic()
@@ -1482,6 +1542,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
 
         raw = ""
         search_error = None
+        search_source = "ahmed_toolbox"
         try:
             toolbox = AhmedToolboxClient(
                 settings.ahmed_toolbox_url,
@@ -1494,7 +1555,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     "reach_web_search",
                     {"query": query, "num_results": 7},
                 ),
-                timeout=55,
+                timeout=45,
             )
             if result.get("isError"):
                 search_error = _tool_text(result)[:500]
@@ -1502,6 +1563,22 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                 raw = _tool_text(result)
         except Exception as exc:
             search_error = type(exc).__name__
+
+        if not raw:
+            try:
+                raw = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _direct_macro_rss_evidence,
+                        query,
+                        now=macro_now,
+                    ),
+                    timeout=22,
+                )
+                if raw:
+                    search_source = "direct_rss_fallback"
+            except Exception as exc:
+                if not search_error:
+                    search_error = type(exc).__name__
 
         data = {
             "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -1524,6 +1601,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
             "drivers": [],
             "search_ok": bool(raw),
             "search_error": search_error,
+            "search_source": search_source if raw else None,
             "synthesis_ok": False,
         }
 
