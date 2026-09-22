@@ -1,704 +1,91 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Activity, AlertTriangle, Newspaper, RefreshCw, ShieldAlert, Sparkles } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowRight, Brain, Database, Lock, Newspaper, RefreshCw, Sparkles, Target } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api/client'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 
-type Direction = 'bullish' | 'bearish' | 'neutral'
+type Frame = { timeframe:string; close:number; ema_fast:number; ema_slow:number; rsi14:number; atr14:number; direction:string; recent_swing_high:number; recent_swing_low:number }
+type Snapshot = { indicative_spot?:{price:number;bid:number|null;ask:number|null;spread_bps:number|null;source:string;is_stale:boolean}|null; micro?:{direction:string;return_10m_pct:number|null;return_30m_pct:number|null;source:string}|null; candidate:string; alignment:string; blocked:boolean; block_reasons:string[]; warnings:string[]; atr_reference:number|null; swing_high_reference:number|null; swing_low_reference:number|null; frames:Record<string,Frame>; disclaimer:string }
+type Macro = { bias:number; bias_label:string; confidence:number; event_risk:boolean; summary:string; drivers:string[]; search_ok:boolean; synthesis_ok?:boolean; synthesis_error?:string|null; refresh_pending?:boolean }
+type Hypothesis = { name:string; weight:number; direction:string }
+type Cognition = { data_quality:{score:number;issues:string[]}; regime:{label:string;confidence:number}; hypotheses:Hypothesis[]; adversarial:{veto:boolean;counter_evidence:string[]}; confidence:{calibrated_confidence:number}; execution_plan:{action:string}; meta_controller:{decision:string} }
+type Fusion = { state:string; macro_relation:string; research_ready:boolean; event_risk:boolean; reasons:string[]; cognition?:Cognition; execution_status:string }
+type Terminal = { technical:Snapshot; macro:Macro; fusion:Fusion }
+type Readiness = { profile:string; ai:{api_key_configured:boolean}; toolbox:{reachable:boolean;tool_count:number;scrapling_fetch_available:boolean} }
 
-interface XAUFrame {
-  timeframe: string
-  source: string
-  close: number
-  ema_fast: number
-  ema_slow: number
-  rsi14: number
-  atr14: number
-  atr_pct: number
-  breakout: string
-  direction: Direction
-  recent_swing_high: number
-  recent_swing_low: number
-  observed_at: string
-}
+const fmt=(v?:number|null,d=2)=>v==null||!Number.isFinite(v)?'--':v.toFixed(d)
+const nice=(v?:string)=>String(v||'--').replace(/_/g,' ').replace(/^./,x=>x.toUpperCase())
+const tone=(v?:string)=>v==='bullish'||v==='long_setup'?'text-emerald-500':v==='bearish'||v==='short_setup'?'text-rose-500':'text-muted-foreground'
 
-interface XAUMicroContext {
-  status: string
-  direction: Direction
-  price: number
-  ema_fast: number
-  ema_slow: number
-  return_10m_pct: number | null
-  return_30m_pct: number | null
-  recent_high: number | null
-  recent_low: number | null
-  point_count: number
-  observed_at: string
-  last_point_at: string
-  age_seconds: number | null
-  coverage_seconds: number | null
-  source: string
-  is_stale: boolean
-  indicative: boolean
-  execution_eligible: boolean
-}
+export default function DashboardPage(){
+ const nav=useNavigate(); const [snapshot,setSnapshot]=useState<Snapshot|null>(null); const [macro,setMacro]=useState<Macro|null>(null); const [fusion,setFusion]=useState<Fusion|null>(null); const [ready,setReady]=useState<Readiness|null>(null); const [loading,setLoading]=useState(true); const [error,setError]=useState('')
+ const load=useCallback(async(force=false)=>{setLoading(true);setError('');try{const d=await fetchAPI<Terminal>(`/xau/terminal${force?'?force=true':''}`,{timeoutMs:95000});setSnapshot(d.technical);setMacro(d.macro);setFusion(d.fusion)}catch(e){setError(e instanceof Error?e.message:'Research unavailable')}finally{setLoading(false)}},[])
+ useEffect(()=>{void load();fetch('/api/runtime-readiness').then(r=>r.json()).then(b=>setReady(b?.data||b)).catch(()=>{})},[load])
+ const frames=useMemo(()=>['1m','5m','15m'].map(k=>snapshot?.frames?.[k]).filter(Boolean) as Frame[],[snapshot])
+ const cog=fusion?.cognition; const score=Math.round((cog?.confidence.calibrated_confidence||0)*100); const quality=Math.round((cog?.data_quality.score||0)*100)
+ const price=snapshot?.indicative_spot?.price; const direction=snapshot?.alignment||'mixed'
+ const statusText=cog?.execution_plan.action?nice(cog.execution_plan.action):nice(fusion?.state)
+ const gates=[...(snapshot?.block_reasons||[]),...(snapshot?.warnings||[])]
 
-interface IndicativeSpot {
-  price: number
-  bid: number | null
-  ask: number | null
-  spread: number | null
-  spread_bps: number | null
-  observed_at: string
-  age_seconds: number
-  source: string
-  is_stale: boolean
-  indicative: boolean
-  execution_eligible: boolean
-}
+ return <div className="page-container pb-10">
+  <section className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+   <div>
+    <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[.16em] text-muted-foreground"><span className="h-2 w-2 rounded-full bg-emerald-500"/> Live research terminal</div>
+    <div className="mt-2 flex flex-wrap items-end gap-x-5 gap-y-1"><h1 className="text-3xl font-bold tracking-tight">XAU/USD</h1><div className="font-mono text-3xl font-bold">{fmt(price)}</div><div className={`pb-1 text-sm font-semibold uppercase ${tone(direction)}`}>{direction}</div></div>
+    <p className="mt-1 text-xs text-muted-foreground">Gold intelligence · technical structure · macro context · adversarial reasoning</p>
+   </div>
+   <Button onClick={()=>void load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading?'animate-spin':''}`}/>Refresh intelligence</Button>
+  </section>
 
-interface XAUSnapshot {
-  instrument: string
-  name: string
-  research_proxy: string
-  research_source: string
-  research_only: boolean
-  execution_feed_connected: boolean
-  execution_status: string
-  price: number | null
-  indicative_spot: IndicativeSpot | null
-  indicative_spot_error?: string | null
-  micro: XAUMicroContext | null
-  micro_error?: string | null
-  technical_mode: string
-  spot_minus_proxy: number | null
-  spot_minus_proxy_bps: number | null
-  change_pct_1m: number | null
-  observed_at: string | null
-  status: string
-  candidate: string
-  blocked: boolean
-  block_reasons: string[]
-  raw_proxy_block_reasons?: string[]
-  warnings: string[]
-  alignment: string
-  atr_reference: number | null
-  swing_high_reference: number | null
-  swing_low_reference: number | null
-  frames: Record<string, XAUFrame>
-  disclaimer: string
-}
+  {error&&<div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-500">{error}</div>}
 
-interface RuntimeReadiness {
-  status: string
-  profile: string
-  ai: { model: string; api_key_configured: boolean }
-  toolbox: {
-    configured: boolean
-    reachable: boolean
-    tool_count: number
-    scrapling_fetch_available: boolean
-    error?: string | null
-  }
-}
-
-interface CognitiveHypothesis {
-  name: string
-  weight: number
-  direction: string
-}
-
-interface CognitionState {
-  version: string
-  data_quality: { score: number; issues: string[] }
-  perception: {
-    directional_pressure: number
-    momentum: string
-    return_10m_pct: number
-    return_30m_pct: number
-    acceleration: number
-    volatility_pct: number
-    breakout: string
-    rsi_5m: number
-    rsi_15m: number
-  }
-  regime: { label: string; confidence: number }
-  hypotheses: CognitiveHypothesis[]
-  memory: {
-    trade_count: number
-    expectancy_r: number
-    profit_factor: number | null
-    learning_strength: number
-    confidence_adjustment: number
-  }
-  adversarial: { veto: boolean; veto_score: number; counter_evidence: string[] }
-  confidence: {
-    raw_confidence: number
-    calibrated_confidence: number
-    band: string
-  }
-  execution_plan: {
-    action: string
-    side: string | null
-    entry_zone: number[] | null
-    invalidation_reference: number | null
-    extension_atr: number
-    reasons: string[]
-  }
-  meta_controller: {
-    decision: string
-    paper_entry_allowed: boolean
-    min_confidence: number
-    live_execution_allowed: boolean
-  }
-}
-
-interface DecisionFusion {
-  state: string
-  base_state?: string
-  technical_candidate: string
-  technical_status: string
-  technical_mode: string
-  macro_bias: number
-  macro_bias_label: string
-  macro_confidence: number
-  macro_relation: string
-  event_risk: boolean
-  research_ready: boolean
-  regime?: string
-  cognitive_confidence?: number
-  meta_decision?: string
-  paper_entry_allowed?: boolean
-  cognition?: CognitionState
-  execution_allowed: boolean
-  execution_status: string
-  reasons: string[]
-}
-
-interface TerminalResponse {
-  technical: XAUSnapshot
-  macro: MacroContext
-  fusion: DecisionFusion
-}
-
-interface MacroContext {
-  observed_at: string
-  bias: number
-  bias_label: string
-  confidence: number
-  event_risk: boolean
-  summary: string
-  drivers: string[]
-  search_ok: boolean
-  search_error?: string | null
-  synthesis_error?: string | null
-}
-
-function fmt(value?: number | null, digits = 2): string {
-  if (value == null || !Number.isFinite(value)) return '--'
-  return value.toFixed(digits)
-}
-
-function directionClass(direction?: string): string {
-  if (direction === 'bullish') return 'text-emerald-500'
-  if (direction === 'bearish') return 'text-rose-500'
-  return 'text-muted-foreground'
-}
-
-function candidateLabel(value?: string): string {
-  if (value === 'long_setup') return 'LONG SETUP'
-  if (value === 'short_setup') return 'SHORT SETUP'
-  return 'NO SETUP'
-}
-
-function friendlyReason(value: string): string {
-  return value
-    .replace(/_/g, ' ')
-    .replace(/^./, (char: string) => char.toUpperCase())
-}
-
-export default function DashboardPage() {
-  const navigate = useNavigate()
-  const [snapshot, setSnapshot] = useState<XAUSnapshot | null>(null)
-  const [macro, setMacro] = useState<MacroContext | null>(null)
-  const [fusion, setFusion] = useState<DecisionFusion | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [macroLoading, setMacroLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [macroError, setMacroError] = useState('')
-  const [readiness, setReadiness] = useState<RuntimeReadiness | null>(null)
-
-  const loadTechnical = useCallback(async (force = false) => {
-    setLoading(true)
-    setError('')
-    try {
-      const data = await fetchAPI<XAUSnapshot>(`/xau/snapshot${force ? '?force=true' : ''}`, {
-        timeoutMs: 45000,
-      })
-      setSnapshot(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'XAU research snapshot unavailable')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  const loadMacro = useCallback(async (force = false) => {
-    setMacroLoading(true)
-    setMacroError('')
-    try {
-      const data = await fetchAPI<TerminalResponse>(`/xau/terminal${force ? '?force=true' : ''}`, {
-        timeoutMs: 95000,
-      })
-      setMacro(data.macro)
-      setFusion(data.fusion)
-      setSnapshot(data.technical)
-    } catch (err) {
-      setMacroError(err instanceof Error ? err.message : 'Macro research unavailable')
-    } finally {
-      setMacroLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void loadTechnical()
-    void loadMacro()
-    fetch('/api/runtime-readiness')
-      .then((response) => response.json())
-      .then((body) => setReadiness(body?.data || body))
-      .catch(() => setReadiness(null))
-  }, [loadTechnical, loadMacro])
-
-  const frames = useMemo(
-    () => ['1m', '5m', '15m'].map((key) => snapshot?.frames?.[key]).filter(Boolean) as XAUFrame[],
-    [snapshot],
-  )
-
-  const gateItems = useMemo(
-    () => [...(snapshot?.block_reasons || []), ...(snapshot?.warnings || [])],
-    [snapshot],
-  )
-
-  const macroBiasClass =
-    macro?.bias === 1 ? 'text-emerald-500' : macro?.bias === -1 ? 'text-rose-500' : 'text-muted-foreground'
-
-  return (
-    <div className="page-container pb-10">
-      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="mb-2 flex items-center gap-2">
-            <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold tracking-[0.14em] text-primary">
-              XAU TERMINAL
-            </span>
-            <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-600">
-              RESEARCH ONLY
-            </span>
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground md:text-3xl">
-            Gold / U.S. Dollar
-          </h1>
-          <p className="mt-1 max-w-3xl text-[13px] leading-6 text-muted-foreground">
-            Live indicative XAU/USD spot, roughly-two-minute micro momentum, sampled spot 5m / 15m structure,
-            macro context and external research. GC=F is retained only as fallback context.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => void loadMacro(true)} disabled={macroLoading}>
-            <Newspaper className={`mr-2 h-4 w-4 ${macroLoading ? 'animate-pulse' : ''}`} />
-            Refresh macro
-          </Button>
-          <Button onClick={() => void loadTechnical(true)} disabled={loading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh market
-          </Button>
-        </div>
-      </div>
-
-      <div className="mb-4 rounded-2xl border border-amber-500/25 bg-amber-500/8 p-4">
-        <div className="flex items-start gap-3">
-          <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
-          <div>
-            <div className="text-[13px] font-semibold text-foreground">Execution gate is locked</div>
-            <div className="mt-1 text-[12px] leading-5 text-muted-foreground">
-              An indicative spot bid/ask reference is connected, but it is not a broker execution quote. Live entry,
-              SL and TP automation remains locked until a venue-specific tradable XAUUSD feed is connected.
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="card mb-4 p-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Decision fusion</div>
-            <div className={`mt-1 text-[18px] font-bold ${fusion?.state === 'setup_macro_support' ? 'text-emerald-500' : fusion?.state === 'setup_macro_conflict' || fusion?.state === 'event_gate' || fusion?.state === 'data_gate' ? 'text-amber-500' : 'text-foreground'}`}>
-              {fusion ? friendlyReason(fusion.state) : macroLoading ? 'Loading fusion…' : '--'}
-            </div>
-            <div className="mt-1 text-[11px] text-muted-foreground">
-              Technical {candidateLabel(fusion?.technical_candidate)} · Macro {fusion?.macro_relation || '--'} · Execution locked
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-[11px]">
-            <div className="rounded-xl bg-accent/30 px-3 py-2">
-              <div className="text-muted-foreground">Research</div>
-              <div className={fusion?.research_ready ? 'mt-1 font-semibold text-emerald-500' : 'mt-1 font-semibold text-muted-foreground'}>
-                {fusion?.research_ready ? 'READY' : 'WAIT'}
-              </div>
-            </div>
-            <div className="rounded-xl bg-accent/30 px-3 py-2">
-              <div className="text-muted-foreground">Event gate</div>
-              <div className={fusion?.event_risk ? 'mt-1 font-semibold text-rose-500' : 'mt-1 font-semibold text-emerald-500'}>
-                {fusion?.event_risk ? 'ACTIVE' : 'CLEAR'}
-              </div>
-            </div>
-            <div className="rounded-xl bg-accent/30 px-3 py-2">
-              <div className="text-muted-foreground">Macro</div>
-              <div className="mt-1 font-semibold uppercase">{fusion?.macro_relation || '--'}</div>
-            </div>
-          </div>
-        </div>
-        {fusion?.reasons?.length ? (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {fusion.reasons.map((reason) => (
-              <span key={reason} className="rounded-full bg-accent/40 px-2.5 py-1 text-[10px] text-muted-foreground">
-                {friendlyReason(reason)}
-              </span>
-            ))}
-          </div>
-        ) : null}
-      </div>
-
-      {fusion?.cognition ? (
-        <div className="card mb-4 p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Cognitive engine</div>
-              <div className="mt-1 text-[16px] font-bold text-foreground">Multi-layer market reasoning</div>
-            </div>
-            <div className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
-              fusion.cognition.meta_controller.decision === 'eligible'
-                ? 'bg-emerald-500/10 text-emerald-500'
-                : fusion.cognition.meta_controller.decision === 'veto'
-                  ? 'bg-rose-500/10 text-rose-500'
-                  : 'bg-amber-500/10 text-amber-500'
-            }`}>
-              {fusion.cognition.meta_controller.decision.toUpperCase()}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            <div className="rounded-xl bg-accent/30 p-3">
-              <div className="text-[10px] text-muted-foreground">Regime</div>
-              <div className="mt-1 text-[13px] font-semibold uppercase">{friendlyReason(fusion.cognition.regime.label)}</div>
-            </div>
-            <div className="rounded-xl bg-accent/30 p-3">
-              <div className="text-[10px] text-muted-foreground">Decision score · not win probability</div>
-              <div className="mt-1 text-[13px] font-semibold">{Math.round(fusion.cognition.confidence.calibrated_confidence * 100)} / 100</div>
-            </div>
-            <div className="rounded-xl bg-accent/30 p-3">
-              <div className="text-[10px] text-muted-foreground">Data quality</div>
-              <div className="mt-1 text-[13px] font-semibold">{Math.round(fusion.cognition.data_quality.score * 100)}%</div>
-            </div>
-            <div className="rounded-xl bg-accent/30 p-3">
-              <div className="text-[10px] text-muted-foreground">Execution timing</div>
-              <div className="mt-1 text-[13px] font-semibold">{friendlyReason(fusion.cognition.execution_plan.action)}</div>
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <div className="mb-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Competing hypotheses</div>
-            <div className="grid gap-2 md:grid-cols-3">
-              {fusion.cognition.hypotheses.map((hypothesis) => (
-                <div key={hypothesis.name} className="rounded-xl border border-border/60 px-3 py-2">
-                  <div className="text-[11px] font-semibold">{friendlyReason(hypothesis.name)}</div>
-                  <div className="mt-1 text-[10px] text-muted-foreground">
-                    Weight {Math.round(hypothesis.weight * 100)}% · {hypothesis.direction.toUpperCase()}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {fusion.cognition.adversarial.counter_evidence.length ? (
-            <div className="mt-3">
-              <div className="mb-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Adversarial review</div>
-              <div className="flex flex-wrap gap-2">
-                {fusion.cognition.adversarial.counter_evidence.map((item) => (
-                  <span key={item} className="rounded-full bg-amber-500/10 px-2.5 py-1 text-[10px] text-amber-600">
-                    {friendlyReason(item)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="mt-3 text-[11px] text-muted-foreground">Adversarial layer found no material counter-evidence.</div>
-          )}
-        </div>
-      ) : null}
-
-      {error && (
-        <div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/8 p-4 text-[13px] text-rose-500">
-          {error}
-        </div>
-      )}
-
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
-        <div className="card p-4">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Indicative XAU/USD spot</div>
-          <div className="mt-2 font-mono text-[24px] font-bold text-foreground">
-            {fmt(snapshot?.indicative_spot?.price)}
-          </div>
-          <div className="mt-1 font-mono text-[11px] text-muted-foreground">
-            Bid {fmt(snapshot?.indicative_spot?.bid)} · Ask {fmt(snapshot?.indicative_spot?.ask)}
-          </div>
-          <div className="mt-1 text-[10px] text-muted-foreground">
-            {snapshot?.indicative_spot
-              ? `${snapshot.indicative_spot.source} · ${snapshot.indicative_spot.is_stale ? 'STALE' : 'FRESH'} · spread ${fmt(snapshot.indicative_spot.spread_bps, 2)} bps`
-              : 'Spot reference unavailable'}
-          </div>
-        </div>
-
-        <div className="card p-4">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Live spot micro</div>
-          <div className={`mt-2 text-[18px] font-bold uppercase ${directionClass(snapshot?.micro?.direction)}`}>
-            {snapshot?.micro?.direction || '--'}
-          </div>
-          <div className="mt-1 font-mono text-[11px] text-muted-foreground">
-            10m {fmt(snapshot?.micro?.return_10m_pct, 3)}% · 30m {fmt(snapshot?.micro?.return_30m_pct, 3)}%
-          </div>
-          <div className="mt-1 text-[10px] text-muted-foreground">
-            {snapshot?.micro
-              ? `${snapshot.micro.source} · ${snapshot.micro.point_count} pts · ${snapshot.micro.is_stale ? 'STALE' : 'FRESH'}`
-              : 'Micro-series unavailable'}
-          </div>
-        </div>
-
-        <div className="card p-4">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Candidate</div>
-          <div className={`mt-2 text-[18px] font-bold ${snapshot?.candidate === 'long_setup' ? 'text-emerald-500' : snapshot?.candidate === 'short_setup' ? 'text-rose-500' : 'text-muted-foreground'}`}>
-            {candidateLabel(snapshot?.candidate)}
-          </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">
-            {snapshot?.blocked ? 'Blocked by gates' : 'Research engine ready'}
-          </div>
-        </div>
-
-        <div className="card p-4">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Timeframe alignment</div>
-          <div className={`mt-2 text-[18px] font-bold uppercase ${directionClass(snapshot?.alignment)}`}>
-            {snapshot?.alignment || '--'}
-          </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">
-            {snapshot?.technical_mode === 'spot_micro_plus_spot_5m_15m'
-              ? 'Spot micro · GC 5m · GC 15m'
-              : 'GC 1m · GC 5m · GC 15m'}
-          </div>
-        </div>
-
-        <div className="card p-4">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Macro bias</div>
-          <div className={`mt-2 text-[18px] font-bold uppercase ${macroBiasClass}`}>
-            {macroLoading ? 'LOADING' : macro?.bias_label || '--'}
-          </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">
-            Confidence {macro ? `${Math.round((macro.confidence || 0) * 100)}%` : '--'}
-          </div>
-        </div>
-
-        <div className="card p-4">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Execution feed</div>
-          <div className="mt-2 text-[18px] font-bold text-amber-500">LOCKED</div>
-          <div className="mt-1 text-[11px] text-muted-foreground">Indicative spot ≠ tradable broker quote</div>
-        </div>
-      </div>
-
-      <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
-        {frames.map((frame) => (
-          <div key={frame.timeframe} className="card p-4">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{frame.timeframe}</div>
-                <div className={`mt-1 text-[18px] font-bold uppercase ${directionClass(frame.direction)}`}>
-                  {frame.direction}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="font-mono text-[18px] font-semibold">{fmt(frame.close)}</div>
-                <div className="text-[10px] text-muted-foreground">
-                  {frame.source?.includes('xaus.com') ? 'Sampled XAU spot' : 'GC=F proxy'}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-[12px]">
-              <div>
-                <div className="text-muted-foreground">EMA 9</div>
-                <div className="mt-0.5 font-mono">{fmt(frame.ema_fast)}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">EMA 21</div>
-                <div className="mt-0.5 font-mono">{fmt(frame.ema_slow)}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">RSI 14</div>
-                <div className="mt-0.5 font-mono">{fmt(frame.rsi14, 1)}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">ATR 14</div>
-                <div className="mt-0.5 font-mono">{fmt(frame.atr14, 2)}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">Breakout</div>
-                <div className="mt-0.5 uppercase">{frame.breakout}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">ATR %</div>
-                <div className="mt-0.5 font-mono">{fmt(frame.atr_pct, 3)}%</div>
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-2 border-t border-border/60 pt-3 text-[11px]">
-              <div>
-                <div className="text-muted-foreground">Swing high</div>
-                <div className="font-mono">{fmt(frame.recent_swing_high)}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">Swing low</div>
-                <div className="font-mono">{fmt(frame.recent_swing_low)}</div>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
-        <div className="card p-4 lg:col-span-7">
-          <div className="mb-3 flex items-center gap-2">
-            <Newspaper className="h-4 w-4 text-primary" />
-            <h2 className="text-[14px] font-semibold">Macro & news context</h2>
-            {macro?.event_risk && (
-              <span className="ml-auto rounded-full bg-rose-500/10 px-2 py-1 text-[10px] font-semibold text-rose-500">
-                EVENT RISK
-              </span>
-            )}
-          </div>
-
-          {macroLoading ? (
-            <div className="py-8 text-center text-[12px] text-muted-foreground">Researching current macro context…</div>
-          ) : macroError ? (
-            <div className="rounded-xl bg-rose-500/8 p-3 text-[12px] text-rose-500">{macroError}</div>
-          ) : (
-            <>
-              <p className="text-[13px] leading-6 text-foreground">{macro?.summary || 'No macro summary available.'}</p>
-              <div className="mt-4 space-y-2">
-                {(macro?.drivers || []).map((driver, index) => (
-                  <div key={index} className="flex items-start gap-2 rounded-xl bg-accent/30 px-3 py-2.5 text-[12px] leading-5">
-                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-                    <span>{driver}</span>
-                  </div>
-                ))}
-              </div>
-              {!macro?.search_ok && (
-                <div className="mt-3 text-[11px] text-muted-foreground">
-                  External web research did not return usable material{macro?.search_error ? `: ${macro.search_error}` : '.'}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        <div className="space-y-3 lg:col-span-5">
-          <div className="card p-4">
-            <div className="mb-3 flex items-center gap-2">
-              <Activity className="h-4 w-4 text-primary" />
-              <h2 className="text-[14px] font-semibold">Research levels</h2>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="rounded-xl bg-accent/30 p-3">
-                <div className="text-[10px] text-muted-foreground">5m ATR</div>
-                <div className="mt-1 font-mono text-[14px]">{fmt(snapshot?.atr_reference)}</div>
-              </div>
-              <div className="rounded-xl bg-accent/30 p-3">
-                <div className="text-[10px] text-muted-foreground">Swing high</div>
-                <div className="mt-1 font-mono text-[14px]">{fmt(snapshot?.swing_high_reference)}</div>
-              </div>
-              <div className="rounded-xl bg-accent/30 p-3">
-                <div className="text-[10px] text-muted-foreground">Swing low</div>
-                <div className="mt-1 font-mono text-[14px]">{fmt(snapshot?.swing_low_reference)}</div>
-              </div>
-            </div>
-          </div>
-
-          <div className="card p-4">
-            <div className="mb-3 flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-500" />
-              <h2 className="text-[14px] font-semibold">Gates & warnings</h2>
-            </div>
-            {gateItems.length === 0 ? (
-              <div className="text-[12px] text-muted-foreground">No research-data gates are active.</div>
-            ) : (
-              <div className="space-y-2">
-                {gateItems.map((item) => (
-                  <div key={item} className="rounded-xl bg-accent/30 px-3 py-2 text-[11px] text-muted-foreground">
-                    {friendlyReason(item)}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => navigate('/assistant')}
-            className="card flex w-full items-center justify-between p-4 text-left transition hover:border-primary/30 hover:bg-primary/5"
-          >
-            <div>
-              <div className="flex items-center gap-2 text-[13px] font-semibold">
-                <Sparkles className="h-4 w-4 text-primary" />
-                Open AI research
-              </div>
-              <div className="mt-1 text-[11px] text-muted-foreground">
-                Atria + Agent-Reach + Scrapling + XAU technical tool
-              </div>
-            </div>
-            <span className="text-primary">→</span>
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-4 card p-4">
-        <div className="mb-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-          Research stack
-        </div>
-        <div className="grid grid-cols-2 gap-3 text-[12px] md:grid-cols-4">
-          <div>
-            <div className="text-muted-foreground">Profile</div>
-            <div className="mt-1 font-semibold uppercase">{readiness?.profile || 'xau'}</div>
-          </div>
-          <div>
-            <div className="text-muted-foreground">Atria</div>
-            <div className={`mt-1 font-semibold ${readiness?.ai.api_key_configured ? 'text-emerald-500' : 'text-rose-500'}`}>
-              {readiness?.ai.api_key_configured ? 'ONLINE' : 'OFFLINE'}
-            </div>
-          </div>
-          <div>
-            <div className="text-muted-foreground">Agent-Reach</div>
-            <div className={`mt-1 font-semibold ${readiness?.toolbox.reachable ? 'text-emerald-500' : 'text-rose-500'}`}>
-              {readiness?.toolbox.reachable ? `ONLINE · ${readiness.toolbox.tool_count} tools` : 'OFFLINE'}
-            </div>
-          </div>
-          <div>
-            <div className="text-muted-foreground">Scrapling</div>
-            <div className={`mt-1 font-semibold ${readiness?.toolbox.scrapling_fetch_available ? 'text-emerald-500' : 'text-rose-500'}`}>
-              {readiness?.toolbox.scrapling_fetch_available ? 'ONLINE' : 'OFFLINE'}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 text-[10px] leading-5 text-muted-foreground">
-        {snapshot?.disclaimer || 'Research context only. A real spot execution feed is required before execution automation can be enabled.'}
-      </div>
+  <section className="mb-4 grid gap-3 lg:grid-cols-12">
+   <div className="card p-5 lg:col-span-7">
+    <div className="flex items-start justify-between gap-3">
+     <div><div className="text-xs text-muted-foreground">PanWatch decision</div><div className={`mt-1 text-2xl font-bold ${tone(snapshot?.candidate)}`}>{snapshot?.candidate==='long_setup'?'LONG SETUP':snapshot?.candidate==='short_setup'?'SHORT SETUP':'OBSERVE'}</div><div className="mt-1 text-sm text-muted-foreground">{statusText}</div></div>
+     <div className="text-right"><div className="text-xs text-muted-foreground">Decision score</div><div className="mt-1 font-mono text-3xl font-bold">{score}<span className="text-sm text-muted-foreground"> / 100</span></div><div className="text-[10px] text-muted-foreground">not win probability</div></div>
     </div>
-  )
+    <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-4">
+     {[['Regime',nice(cog?.regime.label)],['Data quality',quality+'%'],['Macro',macro?.synthesis_ok?nice(macro.bias_label):'Unavailable'],['Timing',statusText]].map(([a,b])=><div key={a} className="rounded-xl bg-accent/30 p-3"><div className="text-[10px] text-muted-foreground">{a}</div><div className="mt-1 text-xs font-semibold">{b}</div></div>)}
+    </div>
+   </div>
+   <div className="card p-5 lg:col-span-5">
+    <div className="flex items-center gap-2"><Brain className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Why now</h2></div>
+    <div className="mt-4 space-y-2 text-xs">
+     <div className="flex justify-between"><span className="text-muted-foreground">Technical alignment</span><b className={tone(direction)}>{nice(direction)}</b></div>
+     <div className="flex justify-between"><span className="text-muted-foreground">Macro relation</span><b>{nice(fusion?.macro_relation)}</b></div>
+     <div className="flex justify-between"><span className="text-muted-foreground">Adversarial check</span><b>{cog?.adversarial.veto?'VETO':'CLEAR'}</b></div>
+     <div className="flex justify-between"><span className="text-muted-foreground">Execution</span><b className="text-amber-500">LOCKED</b></div>
+    </div>
+   </div>
+  </section>
+
+  <section className="mb-4 grid gap-3 md:grid-cols-3">
+   {frames.map(f=><div key={f.timeframe} className="card p-4">
+    <div className="flex items-center justify-between"><div><div className="text-[10px] uppercase tracking-[.15em] text-muted-foreground">{f.timeframe}</div><div className={`mt-1 font-bold uppercase ${tone(f.direction)}`}>{f.direction}</div></div><div className="font-mono text-xl font-semibold">{fmt(f.close)}</div></div>
+    <div className="mt-4 grid grid-cols-4 gap-2 text-[10px]"><div><span className="text-muted-foreground">EMA9</span><div className="mt-1 font-mono">{fmt(f.ema_fast)}</div></div><div><span className="text-muted-foreground">EMA21</span><div className="mt-1 font-mono">{fmt(f.ema_slow)}</div></div><div><span className="text-muted-foreground">RSI</span><div className="mt-1 font-mono">{fmt(f.rsi14,1)}</div></div><div><span className="text-muted-foreground">ATR</span><div className="mt-1 font-mono">{fmt(f.atr14)}</div></div></div>
+   </div>)}
+  </section>
+
+  <section className="mb-4 grid gap-3 lg:grid-cols-12">
+   <div className="card p-5 lg:col-span-7">
+    <div className="flex items-center justify-between"><div className="flex items-center gap-2"><Newspaper className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Macro & news context</h2></div><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${macro?.synthesis_ok?'bg-emerald-500/10 text-emerald-500':'bg-amber-500/10 text-amber-500'}`}>{macro?.synthesis_ok?'SYNTHESIZED':'DEGRADED'}</span></div>
+    <p className="mt-4 text-sm leading-6">{macro?.summary||'Macro research is refreshing.'}</p>
+    <div className="mt-3 space-y-2">{(macro?.drivers||[]).map((d,i)=><div key={i} className="flex gap-2 rounded-xl bg-accent/25 px-3 py-2 text-xs"><span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary"/><span>{d}</span></div>)}</div>
+    {!macro?.synthesis_ok&&macro?.search_ok&&<div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-500">Web evidence is available; synthesis is temporarily degraded{macro?.synthesis_error?` (${macro.synthesis_error})`:''}.</div>}
+   </div>
+   <div className="space-y-3 lg:col-span-5">
+    <div className="card p-5"><div className="flex items-center gap-2"><Target className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Key levels</h2></div><div className="mt-4 grid grid-cols-3 gap-2">{[['ATR 5m',snapshot?.atr_reference],['Swing high',snapshot?.swing_high_reference],['Swing low',snapshot?.swing_low_reference]].map(([a,b])=><div key={String(a)} className="rounded-xl bg-accent/30 p-3"><div className="text-[10px] text-muted-foreground">{String(a)}</div><div className="mt-1 font-mono text-sm">{fmt(b as number|null)}</div></div>)}</div></div>
+    <button onClick={()=>nav('/assistant')} className="card flex w-full items-center justify-between p-5 text-left transition hover:border-primary/30 hover:bg-primary/5"><div><div className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-primary"/>Deep AI Research</div><div className="mt-1 text-[11px] text-muted-foreground">Open the full research workspace</div></div><ArrowRight className="h-4 w-4 text-primary"/></button>
+   </div>
+  </section>
+
+  <section className="mb-4 grid gap-3 lg:grid-cols-12">
+   <div className="card p-5 lg:col-span-7"><div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Competing hypotheses</h2></div><div className="mt-4 space-y-3">{(cog?.hypotheses||[]).map(h=><div key={h.name}><div className="mb-1 flex justify-between text-xs"><span>{nice(h.name)}</span><span className="font-mono">{Math.round(h.weight*100)}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-accent"><div className="h-full rounded-full bg-primary" style={{width:`${Math.max(2,Math.round(h.weight*100))}%`}}/></div></div>)}</div></div>
+   <div className="card p-5 lg:col-span-5"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500"/><h2 className="text-sm font-semibold">Risk & gates</h2></div>{gates.length?<div className="mt-3 space-y-2">{gates.slice(0,5).map(x=><div key={x} className="rounded-xl bg-accent/30 px-3 py-2 text-xs text-muted-foreground">{nice(x)}</div>)}</div>:<div className="mt-4 text-xs text-muted-foreground">No research-data gates are active.</div>}<div className="mt-4 flex items-center gap-2 border-t border-border/60 pt-3 text-xs text-amber-500"><Lock className="h-3.5 w-3.5"/> Live execution remains locked until a tradable broker feed is connected.</div></div>
+  </section>
+
+  <section className="card p-4"><div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-xs"><div className="flex items-center gap-2"><Database className="h-4 w-4 text-primary"/><b>Research stack</b></div><span>Atria <b className={ready?.ai.api_key_configured?'text-emerald-500':'text-rose-500'}>{ready?.ai.api_key_configured?'ONLINE':'OFFLINE'}</b></span><span>Agent-Reach <b className={ready?.toolbox.reachable?'text-emerald-500':'text-rose-500'}>{ready?.toolbox.reachable?`ONLINE · ${ready.toolbox.tool_count}`:'OFFLINE'}</b></span><span>Scrapling <b className={ready?.toolbox.scrapling_fetch_available?'text-emerald-500':'text-rose-500'}>{ready?.toolbox.scrapling_fetch_available?'ONLINE':'OFFLINE'}</b></span></div></section>
+  <div className="mt-3 text-[10px] leading-5 text-muted-foreground">{snapshot?.disclaimer}</div>
+ </div>
 }
