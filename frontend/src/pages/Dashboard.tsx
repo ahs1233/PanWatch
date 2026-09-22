@@ -31,10 +31,11 @@ export default function DashboardPage(){
  useEffect(()=>{void load();fetch('/api/runtime-readiness').then(r=>r.json()).then(b=>setReady(b?.data||b)).catch(()=>{});const id=window.setInterval(()=>void refreshQuiet(),20000);return()=>window.clearInterval(id)},[load,refreshQuiet])
  useEffect(()=>{void loadChart(timeframe);const id=window.setInterval(()=>void loadChart(timeframe,false,true),20000);return()=>window.clearInterval(id)},[timeframe,loadChart])
  const frames=useMemo(()=>['1m','5m','15m'].map(k=>snapshot?.frames?.[k]).filter(Boolean) as Frame[],[snapshot])
- const cog=fusion?.cognition; const score=Math.round((cog?.confidence.calibrated_confidence||0)*100); const quality=Math.round((cog?.data_quality.score||0)*100)
- const price=snapshot?.indicative_spot?.price; const direction=snapshot?.alignment||'mixed'
- const statusText=cog?.execution_plan.action?nice(cog.execution_plan.action):nice(fusion?.state)
- const gates=[...(snapshot?.block_reasons||[]),...(snapshot?.warnings||[])]
+ const cog=fusion?.cognition; const edge=cog?.directional_edge; const plan=cog?.execution_plan; const scenarios=cog?.scenarios||[]; const score=Math.round((cog?.confidence.calibrated_confidence||0)*100); const quality=Math.round((cog?.data_quality.score||0)*100)
+ const price=snapshot?.indicative_spot?.price; const direction=edge?.direction||snapshot?.alignment||'mixed'
+ const directionLabel=direction==='bullish'?'BULLISH LEAN':direction==='bearish'?'BEARISH LEAN':'NO CLEAR EDGE'
+ const statusText=plan?.action?nice(plan.action):nice(fusion?.state)
+ const gates=[...(snapshot?.block_reasons||[]),...(snapshot?.warnings||[]),...(cog?.adversarial.counter_evidence||[])]
 
  return <div className="page-container pb-10">
   <section className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
