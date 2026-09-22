@@ -510,7 +510,7 @@ class GeneralClaimAcquisition:
 
         audits: list[dict[str, Any]] = []
         accepted_ids: set[str] = set()
-        seen_fingerprints: set[str] = set()
+        seen_source_fingerprints: set[tuple[str, str]] = set()
         extracted = accepted = duplicates = rejected = superseded = 0
         errors: list[str] = []
 
@@ -552,10 +552,44 @@ class GeneralClaimAcquisition:
                 for candidate in candidates:
                     extracted += 1
                     fingerprint = _candidate_fingerprint(candidate)
-                    if fingerprint in seen_fingerprints:
+                    source_fingerprint = (source.source_id, fingerprint)
+                    if source_fingerprint in seen_source_fingerprints:
                         duplicates += 1
+                        audits.append(
+                            {
+                                "candidate_id": _stable_id(
+                                    "cand",
+                                    run_id,
+                                    source.source_id,
+                                    fingerprint,
+                                    "same_source_duplicate",
+                                ),
+                                "source_id": source.source_id,
+                                "fingerprint": fingerprint,
+                                "quote": candidate.quote,
+                                "statement": candidate.statement,
+                                "claim_key": _safe_claim_key(
+                                    candidate.proposed_claim_key,
+                                    candidate.statement,
+                                ),
+                                "kind": candidate.kind.value,
+                                "observation_kind": candidate.observation_kind.value,
+                                "confidence": candidate.confidence,
+                                "valid_from": candidate.valid_from,
+                                "valid_until": candidate.valid_until,
+                                "supersedes_previous": candidate.supersedes_previous,
+                                "decision": "duplicate",
+                                "reason": "same_source_candidate_duplicate",
+                                "accepted_claim_id": None,
+                                "meta": {
+                                    "source_url": document.url,
+                                    "time_sensitive": candidate.time_sensitive,
+                                    "freshness_seconds": candidate.freshness_seconds,
+                                },
+                            }
+                        )
                         continue
-                    seen_fingerprints.add(fingerprint)
+                    seen_source_fingerprints.add(source_fingerprint)
 
                     claim_key = _safe_claim_key(
                         candidate.proposed_claim_key,
