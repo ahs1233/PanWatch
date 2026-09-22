@@ -1965,6 +1965,90 @@ def _m126_assistant_task_events(conn: Connection) -> None:
     )
 
 
+
+def _m127_research_evidence_foundation(conn: Connection) -> None:
+    """Persist immutable source provenance and append-only evidence."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_sources (
+            source_id TEXT PRIMARY KEY,
+            url TEXT NOT NULL DEFAULT '',
+            canonical_url TEXT NOT NULL DEFAULT '',
+            domain TEXT NOT NULL DEFAULT '',
+            publisher TEXT DEFAULT '',
+            title TEXT DEFAULT '',
+            source_tier TEXT NOT NULL DEFAULT 'unknown',
+            source_family TEXT NOT NULL DEFAULT '',
+            independence_key TEXT NOT NULL DEFAULT '',
+            published_at DATETIME,
+            retrieved_at DATETIME NOT NULL,
+            observed_at DATETIME NOT NULL,
+            content_hash TEXT NOT NULL,
+            parent_source_id TEXT,
+            tool_name TEXT DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            claim_key TEXT NOT NULL,
+            source_id TEXT NOT NULL REFERENCES research_sources(source_id) ON DELETE RESTRICT,
+            statement TEXT NOT NULL,
+            relation TEXT NOT NULL DEFAULT 'supports',
+            observation_kind TEXT NOT NULL DEFAULT 'actual',
+            event_time DATETIME,
+            observed_at DATETIME NOT NULL,
+            recorded_at DATETIME NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            content_hash TEXT NOT NULL,
+            numeric_value REAL,
+            unit TEXT DEFAULT '',
+            period TEXT DEFAULT '',
+            revision_of TEXT,
+            supersedes TEXT,
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_source_domain_published",
+        "CREATE INDEX ix_research_source_domain_published "
+        "ON research_sources(domain, published_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_source_independence",
+        "CREATE INDEX ix_research_source_independence "
+        "ON research_sources(independence_key)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_source_content_hash",
+        "CREATE INDEX ix_research_source_content_hash "
+        "ON research_sources(content_hash)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_evidence_claim_kind_time",
+        "CREATE INDEX ix_research_evidence_claim_kind_time "
+        "ON research_evidence(claim_key, observation_kind, event_time)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_evidence_source",
+        "CREATE INDEX ix_research_evidence_source "
+        "ON research_evidence(source_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_evidence_recorded",
+        "CREATE INDEX ix_research_evidence_recorded "
+        "ON research_evidence(recorded_at)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -1991,7 +2075,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(123, "assistant_approval_workflow", _m123_assistant_approval_workflow),
     Migration(124, "assistant_context_snapshots", _m124_assistant_context_snapshots),
     Migration(125, "assistant_task_protocol", _m125_assistant_task_protocol),
-    Migration(126, "assistant_task_events", _m126_assistant_task_events),
+    Migration(126, "assistant_task_events", _m126_assistant_task_events),\n    Migration(127, "research_evidence_foundation", _m127_research_evidence_foundation),
 )
 
 
