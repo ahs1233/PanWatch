@@ -1738,11 +1738,14 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     if len(preview) >= 4:
                         break
                 data["summary"] = (
-                    "Macro evidence was collected, but model synthesis is temporarily unavailable. "
-                    "No directional macro bias is being asserted until synthesis recovers."
+                    "Fresh macro evidence was collected, but model synthesis is temporarily unavailable. "
+                    "PanWatch keeps macro direction neutral until synthesis recovers."
                 )
-                data["drivers"] = preview
+                data["drivers"] = preview[:3]
                 data["synthesis_error"] = type(exc).__name__
+                data["fallback_used"] = True
+                data["fallback_mode"] = "evidence_only"
+                data["confidence"] = 0.15 if preview else 0.0
                 if _macro_last_good:
                     last_time = _event_timestamp(_macro_last_good.get("observed_at"))
                     fallback_age = (
