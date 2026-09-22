@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from .paper import XAUPaperTradingEngine
-from .service import build_decision_fusion, get_macro_context, get_xau_snapshot
+from .service import build_decision_fusion, get_chart_series, get_macro_context, get_xau_snapshot
 
 router = APIRouter()
 
@@ -22,6 +22,21 @@ async def snapshot(force: bool = Query(default=False)):
 @router.get("/macro")
 async def macro(force: bool = Query(default=False)):
     return await get_macro_context(force=force)
+
+
+@router.get("/chart")
+async def chart(
+    timeframe: str = Query(default="5m", pattern="^(1m|5m|15m)$"),
+    limit: int = Query(default=160, ge=30, le=240),
+    force: bool = Query(default=False),
+):
+    try:
+        return await get_chart_series(timeframe=timeframe, limit=limit, force=force)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"XAU chart data unavailable: {type(exc).__name__}",
+        ) from exc
 
 
 @router.get("/terminal")
