@@ -20,7 +20,7 @@ type MarketContext = {
  volume_note?:string
 }
 type Snapshot = { indicative_spot?:{price:number;bid:number|null;ask:number|null;spread_bps:number|null;source:string;is_stale:boolean}|null; micro?:{direction:string;return_10m_pct:number|null;return_30m_pct:number|null;source:string}|null; candidate:string; alignment:string; blocked:boolean; block_reasons:string[]; warnings:string[]; atr_reference:number|null; swing_high_reference:number|null; swing_low_reference:number|null; frames:Record<string,Frame>; market_context?:MarketContext|null; market_context_error?:string|null; disclaimer:string }
-type Macro = { bias:number; bias_label:string; confidence:number; event_risk:boolean; summary:string; drivers:string[]; search_ok:boolean; synthesis_ok?:boolean; synthesis_error?:string|null; refresh_pending?:boolean }
+type Macro = { bias:number; bias_label:string; confidence:number; event_risk:boolean; summary:string; drivers:string[]; search_ok:boolean; search_source?:string|null; synthesis_ok?:boolean; synthesis_error?:string|null; fallback_mode?:string|null; refresh_pending?:boolean }
 type Hypothesis = { name:string; weight:number; direction:string }
 type Scenario = { name:string; direction:string; weight:number; target:number|null; trigger:number|string|null; trigger_kind?:string; direction_basis?:string; weight_type?:string; invalidation:number|null }
 type Edge = { score:number; direction:string; strength:number; band:string; macro_freshness:number; higher_timeframe_score?:number; higher_timeframe_direction?:string; higher_timeframe_conflict?:boolean; smart_money_score?:number; cash_flow_score?:number; components:Record<string,number> }
@@ -154,10 +154,10 @@ export default function DashboardPage(){
 
   <section className="mb-4 grid gap-3 lg:grid-cols-12">
    <div className="card p-5 lg:col-span-7">
-    <div className="flex items-center justify-between"><div className="flex items-center gap-2"><Newspaper className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Macro & news context</h2></div><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${macro?.synthesis_ok?'bg-emerald-500/10 text-emerald-500':'bg-amber-500/10 text-amber-500'}`}>{macro?.synthesis_ok?'SYNTHESIZED':'DEGRADED'}</span></div>
+    <div className="flex items-center justify-between"><div className="flex items-center gap-2"><Newspaper className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Macro & news context</h2></div><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${macro?.synthesis_ok?'bg-emerald-500/10 text-emerald-500':'bg-amber-500/10 text-amber-500'}`}>{macro?.synthesis_ok?'SYNTHESIZED':macro?.search_ok?'EVIDENCE ONLY':'DEGRADED'}</span></div>
     <p className="mt-4 text-sm leading-6">{macro?.summary||'Macro research is refreshing.'}</p>
     <div className="mt-3 space-y-2">{(macro?.drivers||[]).map((d,i)=><div key={i} className="flex gap-2 rounded-xl bg-accent/25 px-3 py-2 text-xs"><span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary"/><span>{d}</span></div>)}</div>
-    {!macro?.synthesis_ok&&macro?.search_ok&&<div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-500">Web evidence is available; synthesis is temporarily degraded{macro?.synthesis_error?` (${macro.synthesis_error})`:''}.</div>}
+    {!macro?.synthesis_ok&&macro?.search_ok&&<div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-500">Fresh macro evidence is available; synthesis is temporarily degraded{macro?.synthesis_error?` (${macro.synthesis_error})`:''}.</div>}
    </div>
    <div className="space-y-3 lg:col-span-5">
     <div className="card p-5"><div className="flex items-center gap-2"><Target className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Key levels</h2></div><div className="mt-4 grid grid-cols-3 gap-2">{[['ATR 5m',snapshot?.atr_reference],['Swing high',snapshot?.swing_high_reference],['Swing low',snapshot?.swing_low_reference]].map(([a,b])=><div key={String(a)} className="rounded-xl bg-accent/30 p-3"><div className="text-[10px] text-muted-foreground">{String(a)}</div><div className="mt-1 font-mono text-sm">{fmt(b as number|null)}</div></div>)}</div></div>
