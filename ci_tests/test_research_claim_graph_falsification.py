@@ -116,6 +116,7 @@ def test_claim_identity_is_stable_and_registration_is_idempotent():
     assert a.claim_id == b.claim_id
     assert graph.register_claim(a).claim_id == a.claim_id
     assert graph.register_claim(a).claim_id == a.claim_id
+    assert graph.register_claim(b).claim_id == a.claim_id
 
 
 def test_reasoning_cycle_is_rejected():
