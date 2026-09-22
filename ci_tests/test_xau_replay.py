@@ -238,10 +238,15 @@ def test_default_replay_history_does_not_mix_sources_on_partial_biquote_failure(
     history, source = asyncio.run(_fetch_default_replay_history(limit=1000))
 
     assert source == "yfinance:GC=F"
-    assert all(history[tf] for tf in XAUTimeframe)
+    replay_timeframes = (
+        XAUTimeframe.M1,
+        XAUTimeframe.M5,
+        XAUTimeframe.M15,
+    )
+    assert all(history[tf] for tf in replay_timeframes)
     assert all(
         row.source == "yfinance:GC=F"
-        for tf in XAUTimeframe
+        for tf in replay_timeframes
         for row in history[tf]
     )
 

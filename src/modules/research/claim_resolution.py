@@ -22,6 +22,7 @@ from typing import Any, Iterable
 
 from .claim_graph import ClaimGraph, ClaimNode
 from .evidence import normalize_text
+from .entity_identity import EntityIdentityLayer
 
 
 class SemanticClaimRelation(StrEnum):
@@ -201,6 +202,13 @@ def _polarity_conflict(left: str, right: str) -> bool:
 class ConservativeClaimResolver:
     """Resolve one candidate against the active Claim Graph conservatively."""
 
+    def __init__(
+        self,
+        *,
+        entity_identity: EntityIdentityLayer | None = None,
+    ) -> None:
+        self.entity_identity = entity_identity or EntityIdentityLayer()
+
     def resolve(
         self,
         *,
@@ -209,9 +217,17 @@ class ConservativeClaimResolver:
         graph: ClaimGraph,
         supersedes_previous: bool = False,
         revision_explicit: bool = False,
+        metadata: dict[str, Any] | None = None,
+        quote: str = "",
     ) -> ClaimResolution:
         candidate_text = normalize_text(statement)
         candidate_key = normalize_text(claim_key)
+        candidate_entity = self.entity_identity.resolve(
+            claim_key=candidate_key,
+            statement=candidate_text,
+            metadata=metadata,
+            quote=quote,
+        )
         active = _active_claims(graph)
         if not active:
             return ClaimResolution(
@@ -234,6 +250,15 @@ class ConservativeClaimResolver:
             lexical, jaccard, sequence = _lexical_similarity(
                 candidate_text,
                 existing.statement,
+            )
+            existing_entity = self.entity_identity.resolve(
+                claim_key=existing.claim_key,
+                statement=existing.statement,
+                metadata=existing.metadata,
+            )
+            entity_comparison = self.entity_identity.compare(
+                candidate_entity,
+                existing_entity,
             )
             exact = candidate_text.casefold() == normalize_text(
                 existing.statement
@@ -261,7 +286,11 @@ class ConservativeClaimResolver:
             reason = "insufficient_semantic_overlap"
             score = lexical
 
-            if exact:
+            if entity_comparison.same_entity is False:
+                relation = SemanticClaimRelation.DISTINCT
+                reason = "different_entity_identity"
+                score = lexical
+            elif exact:
                 relation = SemanticClaimRelation.EXACT
                 reason = "normalized_statement_exact_match"
                 score = 1.0
@@ -357,6 +386,19 @@ class ConservativeClaimResolver:
                     "candidate_negated": _has_negation(candidate_text),
                     "existing_negated": _has_negation(existing.statement),
                     "existing_claim_key": existing.claim_key,
+                    "entity_relation": entity_comparison.relation,
+                    "entity_match": entity_comparison.same_entity,
+                    "entity_reason": entity_comparison.reason,
+                    "candidate_entity_id": (
+                        candidate_entity.canonical_id
+                        if candidate_entity is not None
+                        else None
+                    ),
+                    "existing_entity_id": (
+                        existing_entity.canonical_id
+                        if existing_entity is not None
+                        else None
+                    ),
                 },
             )
 

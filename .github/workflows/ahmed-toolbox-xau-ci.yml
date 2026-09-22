@@ -32,8 +32,10 @@ on:
       - "ci_tests/test_research_external_store.py"
       - "ci_tests/test_research_automatic_loop.py"
       - "ci_tests/test_research_claim_acquisition.py"
+      - "ci_tests/test_research_entity_identity.py"
       - "ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py"
       - "ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py"
+      - "ci_tests/test_panwatch_company_sector_benchmark_v1.py"
       - "ci_tests/test_panwatch_automatic_research_benchmark_v1.py"
       - "ci_tests/test_panwatch_belief_benchmark_v1.py"
       - ".github/workflows/ahmed-toolbox-xau-ci.yml"
@@ -84,7 +86,7 @@ jobs:
       - name: Run focused tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py ci_tests/test_xau_replay.py ci_tests/test_xau_resilience.py ci_tests/test_panwatch_benchmark_v1.py ci_tests/test_research_evidence_foundation.py ci_tests/test_research_claim_graph_falsification.py ci_tests/test_panwatch_economic_benchmark_v1.py ci_tests/test_panwatch_reasoning_benchmark_v1.py ci_tests/test_research_persistent_belief_state.py ci_tests/test_research_external_store.py ci_tests/test_research_automatic_loop.py ci_tests/test_research_claim_acquisition.py ci_tests/test_panwatch_belief_benchmark_v1.py ci_tests/test_panwatch_automatic_research_benchmark_v1.py ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py
+        run: python -m pytest -q ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_cognition.py ci_tests/test_xau_replay.py ci_tests/test_xau_resilience.py ci_tests/test_panwatch_benchmark_v1.py ci_tests/test_research_evidence_foundation.py ci_tests/test_research_claim_graph_falsification.py ci_tests/test_panwatch_economic_benchmark_v1.py ci_tests/test_panwatch_reasoning_benchmark_v1.py ci_tests/test_research_persistent_belief_state.py ci_tests/test_research_external_store.py ci_tests/test_research_automatic_loop.py ci_tests/test_research_claim_acquisition.py ci_tests/test_research_entity_identity.py ci_tests/test_panwatch_belief_benchmark_v1.py ci_tests/test_panwatch_automatic_research_benchmark_v1.py ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py ci_tests/test_panwatch_company_sector_benchmark_v1.py
 
       - name: Run PanWatch Benchmark v1
         env:
@@ -162,6 +164,17 @@ jobs:
         with:
           name: panwatch-semantic-resolution-v1-python-${{ matrix.python-version }}
           path: semantic-resolution-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Company/Sector Research Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.company_sector_runner --json company-sector-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload company/sector research benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-company-sector-v1-python-${{ matrix.python-version }}
+          path: company-sector-benchmark-result-${{ matrix.python-version }}.json
 
   frontend:
     runs-on: ubuntu-latest

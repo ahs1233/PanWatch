@@ -423,6 +423,8 @@ class GroundedClaimExtractor:
                                 "quote": "exact source quote",
                                 "statement": "one concise testable proposition",
                                 "claim_key": "stable.semantic.key",
+                                "entity_name": "exact entity name from quote or null",
+                                "entity_type": "company|organization|person|sector|product|asset|country|location|unknown",
                                 "kind": "fact|interpretation|hypothesis|forecast|mechanism|scenario|conclusion",
                                 "observation_kind": (
                                     "actual|forecast|revision|estimate|guidance|"
@@ -442,6 +444,8 @@ class GroundedClaimExtractor:
                         "Return no claim unless the exact quote supports the full statement.",
                         "Claims must be materially useful for research, not trivial metadata.",
                         "Do not invent entities, dates, causality, numbers, or scope.",
+                        "Set entity_name only when that entity name appears explicitly in the quote.",
+                        "Use an entity-scoped claim_key when the source clearly identifies the subject.",
                         "Set supersedes_previous only for an explicit revision/update/restatement.",
                         "For interpretation/opinion, phrase the claim as an attributable testable proposition when possible.",
                     ],
@@ -531,6 +535,19 @@ class GroundedClaimExtractor:
             except (TypeError, ValueError):
                 freshness_seconds = None
 
+            entity_name = normalize_text(
+                str(row.get("entity_name") or "")
+            )
+            entity_type = normalize_text(
+                str(row.get("entity_type") or "unknown")
+            ).lower()
+            grounded_entity = (
+                entity_name
+                if entity_name
+                and entity_name.casefold() in quote.casefold()
+                else ""
+            )
+
             candidates.append(
                 ClaimCandidate(
                     quote=quote,
@@ -547,7 +564,17 @@ class GroundedClaimExtractor:
                     supersedes_previous=bool(
                         row.get("supersedes_previous", False)
                     ),
-                    metadata={"extractor": "grounded_claim_v1"},
+                    metadata={
+                        "extractor": "grounded_claim_v1",
+                        **(
+                            {
+                                "entity_name": grounded_entity,
+                                "entity_type": entity_type,
+                            }
+                            if grounded_entity
+                            else {}
+                        ),
+                    },
                 )
             )
         if candidates:
@@ -838,6 +865,12 @@ class GeneralClaimAcquisition:
                     if decision == "rejected":
                         rejected += 1
                     else:
+                        candidate_entity = self.resolver.entity_identity.resolve(
+                            claim_key=claim_key,
+                            statement=candidate.statement,
+                            metadata=candidate.metadata,
+                            quote=candidate.quote,
+                        )
                         resolution = self.resolver.resolve(
                             statement=candidate.statement,
                             claim_key=claim_key,
@@ -846,6 +879,8 @@ class GeneralClaimAcquisition:
                             revision_explicit=bool(
                                 _REVISION_CUE_RE.search(candidate.quote)
                             ),
+                            metadata=candidate.metadata,
+                            quote=candidate.quote,
                         )
                         matched_claim = (
                             self.graph.get_claim(resolution.matched_claim_id)
@@ -908,6 +943,11 @@ class GeneralClaimAcquisition:
                                     "semantic_resolution_score": resolution.score,
                                     "semantic_match_claim_id": resolution.matched_claim_id,
                                     **candidate.metadata,
+                                    **(
+                                        candidate_entity.to_metadata()
+                                        if candidate_entity is not None
+                                        else {}
+                                    ),
                                 },
                             )
                             self.graph.register_claim(claim)
@@ -1063,6 +1103,18 @@ class GeneralClaimAcquisition:
                                 "semantic_match_claim_id": (
                                     resolution.matched_claim_id
                                     if resolution is not None
+                                    else None
+                                ),
+                                "entity_id": (
+                                    candidate_entity.canonical_id
+                                    if decision != "rejected"
+                                    and candidate_entity is not None
+                                    else None
+                                ),
+                                "entity_identity_source": (
+                                    candidate_entity.source
+                                    if decision != "rejected"
+                                    and candidate_entity is not None
                                     else None
                                 ),
                             },

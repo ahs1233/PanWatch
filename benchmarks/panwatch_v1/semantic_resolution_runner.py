@@ -151,7 +151,7 @@ def run_semantic_resolution_benchmark() -> dict:
     score = round((earned / total) * 100.0, 2) if total else 0.0
     return {
         "benchmark": "PanWatch Benchmark v1",
-        "version": "1.6.0",
+        "version": "1.7.0",
         "track": "semantic_claim_resolution",
         "score_percent": score,
         "passed_cases": sum(1 for item in results if item.passed),
