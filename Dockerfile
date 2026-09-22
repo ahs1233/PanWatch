@@ -96,6 +96,9 @@ COPY src/ ./src/
 COPY server.py ./
 COPY prompts/ ./prompts/
 
+# Functional smoke: exercise SMC engines, TA oracle, volume profile and vectorbt.
+RUN python -m src.modules.xau.library_smoke
+
 # 写入版本号
 RUN echo "${VERSION}" > VERSION
 
