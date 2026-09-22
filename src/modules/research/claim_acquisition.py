@@ -96,6 +96,11 @@ _BOILERPLATE_RE = re.compile(
     r"sign in|log in|contact us|read more|all rights reserved)\b",
     re.IGNORECASE,
 )
+_PAGE_METADATA_RE = re.compile(
+    r"^(?:published(?:\s+time|\s+date)?|last\s+updated|updated(?:\s+at)?|"
+    r"date\s+published|reading\s+time|author|byline)\s*:\s*",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -275,6 +280,8 @@ def _deterministic_grounded_candidates(
         if len(sentence) < 40 or len(sentence) > 360:
             continue
         if _BOILERPLATE_RE.search(sentence):
+            continue
+        if _PAGE_METADATA_RE.search(sentence):
             continue
         if sentence.count("http") or sentence.count("|") > 2:
             continue
@@ -743,16 +750,23 @@ class GeneralClaimAcquisition:
 
                     normalized_quote = normalize_text(candidate.quote)
                     normalized_doc = normalize_text(document.text)
+                    normalized_statement = normalize_text(candidate.statement)
                     if normalized_quote.casefold() not in normalized_doc.casefold():
                         decision = "rejected"
                         reason = "ungrounded_quote"
+                    elif (
+                        _PAGE_METADATA_RE.search(normalized_quote)
+                        or _PAGE_METADATA_RE.search(normalized_statement)
+                    ):
+                        decision = "rejected"
+                        reason = "page_metadata"
                     elif not candidate.testable:
                         decision = "rejected"
                         reason = "not_testable"
-                    elif len(normalize_text(candidate.statement)) < 12:
+                    elif len(normalized_statement) < 12:
                         decision = "rejected"
                         reason = "statement_too_short"
-                    elif normalize_text(candidate.statement).endswith("?"):
+                    elif normalized_statement.endswith("?"):
                         decision = "rejected"
                         reason = "question_not_claim"
 
