@@ -23,11 +23,13 @@ const nice=(v?:string)=>String(v||'--').replace(/_/g,' ').replace(/^./,x=>x.toUp
 const tone=(v?:string)=>v==='bullish'||v==='long_setup'?'text-emerald-500':v==='bearish'||v==='short_setup'?'text-rose-500':'text-muted-foreground'
 
 export default function DashboardPage(){
- const nav=useNavigate(); const [snapshot,setSnapshot]=useState<Snapshot|null>(null); const [macro,setMacro]=useState<Macro|null>(null); const [fusion,setFusion]=useState<Fusion|null>(null); const [ready,setReady]=useState<Readiness|null>(null); const [loading,setLoading]=useState(true); const [error,setError]=useState('')
+ const nav=useNavigate(); const [snapshot,setSnapshot]=useState<Snapshot|null>(null); const [macro,setMacro]=useState<Macro|null>(null); const [fusion,setFusion]=useState<Fusion|null>(null); const [ready,setReady]=useState<Readiness|null>(null); const [chart,setChart]=useState<ChartSeries|null>(null); const [timeframe,setTimeframe]=useState<'1m'|'5m'|'15m'>('5m'); const [chartLoading,setChartLoading]=useState(true); const [loading,setLoading]=useState(true); const [error,setError]=useState('')
  const applyTerminal=useCallback((d:Terminal)=>{setSnapshot(d.technical);setMacro(d.macro);setFusion(d.fusion)},[])
  const load=useCallback(async(force=false)=>{setLoading(true);setError('');try{const d=await fetchAPI<Terminal>(`/xau/terminal${force?'?force=true':''}`,{timeoutMs:95000});applyTerminal(d)}catch(e){setError(e instanceof Error?e.message:'Research unavailable')}finally{setLoading(false)}},[applyTerminal])
  const refreshQuiet=useCallback(async()=>{try{const d=await fetchAPI<Terminal>('/xau/terminal',{timeoutMs:20000});applyTerminal(d)}catch{}},[applyTerminal])
- useEffect(()=>{void load();fetch('/api/runtime-readiness').then(r=>r.json()).then(b=>setReady(b?.data||b)).catch(()=>{});const id=window.setInterval(()=>void refreshQuiet(),30000);return()=>window.clearInterval(id)},[load,refreshQuiet])
+ const loadChart=useCallback(async(tf:'1m'|'5m'|'15m',force=false,silent=false)=>{if(!silent)setChartLoading(true);try{const d=await fetchAPI<ChartSeries>(`/xau/chart?timeframe=${tf}&limit=160${force?'&force=true':''}`,{timeoutMs:45000});setChart(d)}catch{if(!silent)setChart(null)}finally{if(!silent)setChartLoading(false)}},[])
+ useEffect(()=>{void load();fetch('/api/runtime-readiness').then(r=>r.json()).then(b=>setReady(b?.data||b)).catch(()=>{});const id=window.setInterval(()=>void refreshQuiet(),20000);return()=>window.clearInterval(id)},[load,refreshQuiet])
+ useEffect(()=>{void loadChart(timeframe);const id=window.setInterval(()=>void loadChart(timeframe,false,true),20000);return()=>window.clearInterval(id)},[timeframe,loadChart])
  const frames=useMemo(()=>['1m','5m','15m'].map(k=>snapshot?.frames?.[k]).filter(Boolean) as Frame[],[snapshot])
  const cog=fusion?.cognition; const score=Math.round((cog?.confidence.calibrated_confidence||0)*100); const quality=Math.round((cog?.data_quality.score||0)*100)
  const price=snapshot?.indicative_spot?.price; const direction=snapshot?.alignment||'mixed'
