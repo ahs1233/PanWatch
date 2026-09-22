@@ -12,43 +12,53 @@ from src.modules.strategy.validation.models import (
     TradeRecord,
     ValidationReport,
     ValidationVerdict,
+    WalkForwardFoldResult,
 )
 from src.modules.strategy.validation.monte_carlo import bootstrap_trade_sequences
 from src.modules.strategy.validation.segmentation import segment_performance
-from src.modules.strategy.validation.splits import chronological_split, walk_forward_splits
+from src.modules.strategy.validation.splits import chronological_split
 from src.modules.strategy.validation.stability import analyze_parameter_stability
 from src.modules.strategy.validation.stress import cost_stress
 
 
-def _walk_forward_summary(trades: list[TradeRecord], spec: ExperimentSpec) -> dict:
-    folds = walk_forward_splits(
-        trades,
-        train_size=spec.walk_forward_train,
-        test_size=spec.walk_forward_test,
-        step=spec.walk_forward_step,
-    )
+def _walk_forward_summary(
+    results: list[WalkForwardFoldResult] | None,
+) -> dict:
+    """Summarize externally produced, leakage-guarded walk-forward folds."""
+
+    if not results:
+        return {
+            "fold_count": 0,
+            "positive_test_fraction": None,
+            "folds": [],
+            "provenance": "missing",
+        }
+
     rows: list[dict] = []
-    for fold in folds:
-        train = compute_performance(list(fold.train))
-        test = compute_performance(list(fold.test))
+    ordered = sorted(results, key=lambda item: item.fold_index)
+    for fold in ordered:
+        test = compute_performance(list(fold.test_trades))
         rows.append(
             {
-                "fold": fold.index,
-                "train": asdict(train),
+                "fold": fold.fold_index,
+                "train_start": fold.train_start.isoformat(),
+                "train_end": fold.train_end.isoformat(),
+                "selected_at": fold.selected_at.isoformat(),
+                "test_start": fold.test_start.isoformat(),
+                "test_end": fold.test_end.isoformat(),
+                "selected_strategy_fingerprint": fold.selected_strategy_fingerprint,
+                "selected_parameters": dict(fold.selected_parameters),
                 "test": asdict(test),
                 "test_positive": bool(test.expectancy is not None and test.expectancy > 0),
             }
         )
 
-    fraction = (
-        sum(1 for row in rows if row["test_positive"]) / len(rows)
-        if rows
-        else None
-    )
+    fraction = sum(1 for row in rows if row["test_positive"]) / len(rows)
     return {
         "fold_count": len(rows),
         "positive_test_fraction": fraction,
         "folds": rows,
+        "provenance": "train_select_future_test",
     }
 
 
@@ -58,10 +68,22 @@ def _gates(
     walk_forward: dict,
     monte_carlo: dict,
     stability: dict,
+    *,
+    parameter_surface_supplied: bool,
+    parameter_surface_is_in_sample_only: bool,
 ) -> tuple[GateResult, ...]:
     policy = spec.policy
     gates: list[GateResult] = []
 
+    gates.append(
+        GateResult(
+            "strategy_frozen_before_oos",
+            spec.strategy_frozen_before_oos,
+            spec.strategy_frozen_before_oos,
+            True,
+            "Prevents tuning on information from the holdout period.",
+        )
+    )
     gates.append(
         GateResult(
             "oos_trade_count",
@@ -105,18 +127,32 @@ def _gates(
             None if wf_fraction is None else wf_fraction >= policy.min_walk_forward_positive_fraction,
             wf_fraction,
             policy.min_walk_forward_positive_fraction,
-            "None means the dataset was too short for a full walk-forward fold.",
+            "Requires real train->selection->future-test fold evidence.",
         )
     )
 
     stability_score = stability.get("stability_score")
+    if not parameter_surface_supplied:
+        stability_passed = None
+        stability_detail = "No parameter surface supplied."
+    elif not parameter_surface_is_in_sample_only:
+        stability_passed = False
+        stability_detail = "Parameter surface touched non-IS data; stability evidence is contaminated."
+    else:
+        stability_passed = (
+            None
+            if stability_score is None
+            else stability_score >= policy.min_parameter_stability_score
+        )
+        stability_detail = "Parameter surface declared in-sample-only."
+
     gates.append(
         GateResult(
             "parameter_stability",
-            None if stability_score is None else stability_score >= policy.min_parameter_stability_score,
+            stability_passed,
             stability_score,
             policy.min_parameter_stability_score,
-            "Requires an externally supplied parameter surface; absent data is not assumed stable.",
+            stability_detail,
         )
     )
 
@@ -137,6 +173,8 @@ def validate_experiment(
     spec: ExperimentSpec,
     trades: list[TradeRecord],
     parameter_surface: list[ParameterPoint] | None = None,
+    parameter_surface_is_in_sample_only: bool = False,
+    walk_forward_results: list[WalkForwardFoldResult] | None = None,
     cost_per_trade_levels: tuple[float, ...] = (0.0, 0.05, 0.10, 0.25, 0.50),
 ) -> ValidationReport:
     ordered = sorted(trades, key=lambda t: (t.closed_at, t.trade_id))
@@ -144,7 +182,7 @@ def validate_experiment(
 
     in_sample = compute_performance(ins)
     out_of_sample = compute_performance(oos_trades)
-    walk_forward = _walk_forward_summary(ordered, spec)
+    walk_forward = _walk_forward_summary(walk_forward_results)
     monte_carlo = bootstrap_trade_sequences(
         oos_trades,
         iterations=spec.monte_carlo_iterations,
@@ -154,7 +192,15 @@ def validate_experiment(
     segmentation = segment_performance(oos_trades)
     stress = cost_stress(oos_trades, cost_per_trade_levels)
 
-    gates = _gates(spec, out_of_sample, walk_forward, monte_carlo, stability)
+    gates = _gates(
+        spec,
+        out_of_sample,
+        walk_forward,
+        monte_carlo,
+        stability,
+        parameter_surface_supplied=bool(parameter_surface),
+        parameter_surface_is_in_sample_only=parameter_surface_is_in_sample_only,
+    )
     known = [g for g in gates if g.passed is not None]
     unknown = [g for g in gates if g.passed is None]
 
@@ -164,8 +210,16 @@ def validate_experiment(
             "Some evidence gates are unavailable: "
             + ", ".join(g.name for g in unknown)
         )
+    if not walk_forward_results:
+        limitations.append(
+            "No true walk-forward fold results supplied; rolling slices are not treated as walk-forward evidence."
+        )
     if not parameter_surface:
         limitations.append("No parameter surface supplied; optimization stability is unproven.")
+    elif not parameter_surface_is_in_sample_only:
+        limitations.append("Parameter surface is not proven to be in-sample-only.")
+    if not spec.strategy_frozen_before_oos:
+        limitations.append("Strategy was not declared frozen before OOS evaluation.")
     if not any(t.mae is not None for t in oos_trades):
         limitations.append("OOS MAE is unavailable.")
     if not any(t.mfe is not None for t in oos_trades):
