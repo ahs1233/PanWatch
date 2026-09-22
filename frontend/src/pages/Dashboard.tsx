@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Activity, AlertTriangle, ArrowRight, Brain, Database, Lock, Newspaper, RefreshCw, Sparkles, Target } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api/client'
@@ -9,9 +9,11 @@ type Frame = { timeframe:string; close:number; ema_fast:number; ema_slow:number;
 type Snapshot = { indicative_spot?:{price:number;bid:number|null;ask:number|null;spread_bps:number|null;source:string;is_stale:boolean}|null; micro?:{direction:string;return_10m_pct:number|null;return_30m_pct:number|null;source:string}|null; candidate:string; alignment:string; blocked:boolean; block_reasons:string[]; warnings:string[]; atr_reference:number|null; swing_high_reference:number|null; swing_low_reference:number|null; frames:Record<string,Frame>; disclaimer:string }
 type Macro = { bias:number; bias_label:string; confidence:number; event_risk:boolean; summary:string; drivers:string[]; search_ok:boolean; synthesis_ok?:boolean; synthesis_error?:string|null; refresh_pending?:boolean }
 type Hypothesis = { name:string; weight:number; direction:string }
-type Scenario = { name:string; direction:string; weight:number; target:number|null; trigger:number|string|null; invalidation:number|null }
+type Scenario = { name:string; direction:string; weight:number; target:number|null; trigger:number|string|null; trigger_kind?:string; invalidation:number|null }
 type Edge = { score:number; direction:string; strength:number; band:string; macro_freshness:number; components:Record<string,number> }
-type Plan = { action:string; side:string|null; setup_confirmed:boolean; trigger_level:number|null; activation_conditions:string[]; invalidation_reference:number|null; reasons:string[] }
+type ActivationCondition = { key:string; label:string; status:'satisfied'|'pending'|'failed'; current:number|string|null; threshold:number|string|null }
+type ActivationState = { state:string; conditions:ActivationCondition[]; satisfied:number; pending:number; failed:number; total:number }
+type Plan = { action:string; side:string|null; setup_confirmed:boolean; trigger_level:number|null; trigger_state?:string; activation?:ActivationState; activation_conditions:ActivationCondition[]; invalidation_reference:number|null; dominant_scenario?:string; dominant_scenario_direction?:string; dominant_scenario_weight?:number; scenario_conflict?:boolean; reasons:string[] }
 type Cognition = { version?:string; data_quality:{score:number;issues:string[]}; regime:{label:string;confidence:number}; hypotheses:Hypothesis[]; scenarios?:Scenario[]; directional_edge?:Edge; adversarial:{veto:boolean;counter_evidence:string[]}; confidence:{calibrated_confidence:number}; execution_plan:Plan; meta_controller:{decision:string} }
 type Fusion = { state:string; macro_relation:string; research_ready:boolean; event_risk:boolean; reasons:string[]; cognition?:Cognition; execution_status:string }
 type Terminal = { technical:Snapshot; macro:Macro; fusion:Fusion }
@@ -30,7 +32,6 @@ export default function DashboardPage(){
  const loadChart=useCallback(async(tf:'1m'|'5m'|'15m',force=false,silent=false)=>{if(!silent)setChartLoading(true);try{const d=await fetchAPI<ChartSeries>(`/xau/chart?timeframe=${tf}&limit=160${force?'&force=true':''}`,{timeoutMs:45000});setChart(d)}catch{if(!silent)setChart(null)}finally{if(!silent)setChartLoading(false)}},[])
  useEffect(()=>{void load();fetch('/api/runtime-readiness').then(r=>r.json()).then(b=>setReady(b?.data||b)).catch(()=>{});const id=window.setInterval(()=>void refreshQuiet(),20000);return()=>window.clearInterval(id)},[load,refreshQuiet])
  useEffect(()=>{void loadChart(timeframe);const id=window.setInterval(()=>void loadChart(timeframe,false,true),20000);return()=>window.clearInterval(id)},[timeframe,loadChart])
- const frames=useMemo(()=>['1m','5m','15m'].map(k=>snapshot?.frames?.[k]).filter(Boolean) as Frame[],[snapshot])
  const cog=fusion?.cognition; const edge=cog?.directional_edge; const plan=cog?.execution_plan; const scenarios=cog?.scenarios||[]; const score=Math.round((cog?.confidence.calibrated_confidence||0)*100); const quality=Math.round((cog?.data_quality.score||0)*100)
  const price=snapshot?.indicative_spot?.price; const direction=edge?.direction||snapshot?.alignment||'mixed'
  const directionLabel=direction==='bullish'?'BULLISH LEAN':direction==='bearish'?'BEARISH LEAN':'NO CLEAR EDGE'
