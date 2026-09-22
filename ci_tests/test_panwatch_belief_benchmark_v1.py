@@ -21,4 +21,4 @@ def test_persistent_belief_track_states_remaining_boundaries():
     report = run_belief_benchmark()
     text = " ".join(report["limitations"]).lower()
     assert "claim extraction" in text
-    assert "counter-research" in text
+    assert "automatic research loop" in text
