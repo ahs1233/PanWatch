@@ -24,6 +24,7 @@ from src.platform.persistence.models import (
     ResearchClaimEdgeRecord,
     ResearchClaimEvidenceLinkRecord,
     ResearchClaimRecord,
+    ResearchClaimResolutionRecord,
     ResearchEvidenceRecord,
     ResearchFalsificationRuleRecord,
     ResearchLoopRunRecord,
@@ -51,6 +52,7 @@ _RESEARCH_TABLES = [
     ResearchProbeAttemptRecord.__table__,
     ResearchAcquisitionRunRecord.__table__,
     ResearchClaimCandidateRecord.__table__,
+    ResearchClaimResolutionRecord.__table__,
 ]
 
 
