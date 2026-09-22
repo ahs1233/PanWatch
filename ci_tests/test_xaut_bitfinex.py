@@ -94,3 +94,39 @@ def test_footprint_uses_executed_trade_sign_not_candle_direction():
     assert any(level["bid_volume"] > 0 for level in levels)
     assert any(level["ask_volume"] > 0 for level in levels)
     assert result["footprint"]["method"] == "aggressor-signed-trades"
+
+
+def test_volume_profile_uses_real_executed_xaut_volume_and_value_area():
+    result = analyze_xaut_microstructure(
+        _snapshot(),
+        xau_spot_price=4363.5,
+        volume_profile_tick=0.5,
+    )
+    profile = result["volume_profile"]
+    assert profile["status"] == "ready"
+    assert profile["volume_kind"] == "executed_xaut_volume"
+    assert profile["global_xauusd_volume_profile"] is False
+    assert profile["total_volume_xaut"] == 6.4
+    assert profile["val"] <= profile["poc"] <= profile["vah"]
+    assert profile["value_area_volume_share"] >= 0.70
+    assert profile["high_volume_nodes"]
+    assert profile["low_volume_nodes"]
+    assert profile["levels"]
+
+
+def test_volume_profile_maps_poc_vah_val_to_xau_by_instantaneous_basis_only():
+    result = analyze_xaut_microstructure(
+        _snapshot(),
+        xau_spot_price=4363.5,
+        volume_profile_tick=0.5,
+    )
+    profile = result["volume_profile"]
+    mapping = profile["xauusd_mapping"]
+    assert mapping["available"] is True
+    assert mapping["method"] == "instantaneous_xau_minus_xaut_basis"
+    assert mapping["execution_eligible"] is False
+    assert mapping["poc"] == round(profile["poc"] + 3.0, 4)
+    assert mapping["vah"] == round(profile["vah"] + 3.0, 4)
+    assert mapping["val"] == round(profile["val"] + 3.0, 4)
+    assert result["evidence_policy"]["volume_profile_is_real_executed_xaut_volume"] is True
+    assert result["evidence_policy"]["xaut_volume_profile_is_global_xauusd_volume"] is False

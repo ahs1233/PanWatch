@@ -114,6 +114,134 @@ def _footprint(trades: list[XAUTTrade], *, tick: float = 0.1) -> dict[str, Any]:
     }
 
 
+def _volume_profile(
+    trades: list[XAUTTrade],
+    *,
+    tick: float = 0.5,
+    value_area_fraction: float = 0.70,
+) -> dict[str, Any]:
+    """Build a price-by-executed-volume profile from real XAUT trades.
+
+    This is centralized Bitfinex XAUT volume. It is stronger evidence than an
+    MT5 tick-volume proxy for this venue, but it is not global OTC XAUUSD volume.
+    """
+    if not trades:
+        return {"available": False, "status": "unavailable", "reason": "no_trades"}
+
+    tick = max(0.01, float(tick))
+    value_area_fraction = max(0.50, min(float(value_area_fraction), 0.90))
+    buckets: dict[float, dict[str, float]] = defaultdict(
+        lambda: {"volume": 0.0, "buy_volume": 0.0, "sell_volume": 0.0, "notional": 0.0}
+    )
+    for trade in trades:
+        price = _round_tick(trade.price, tick)
+        row = buckets[price]
+        row["volume"] += trade.size
+        row["notional"] += trade.size * trade.price
+        if trade.amount > 0:
+            row["buy_volume"] += trade.size
+        else:
+            row["sell_volume"] += trade.size
+
+    prices = sorted(buckets)
+    total_volume = sum(buckets[price]["volume"] for price in prices)
+    total_notional = sum(buckets[price]["notional"] for price in prices)
+    if total_volume <= 0:
+        return {"available": False, "status": "unavailable", "reason": "zero_volume"}
+
+    latest_price = trades[-1].price
+    poc_price = max(
+        prices,
+        key=lambda price: (
+            buckets[price]["volume"],
+            -abs(price - latest_price),
+            price,
+        ),
+    )
+    poc_idx = prices.index(poc_price)
+    included = {poc_idx}
+    accumulated = buckets[poc_price]["volume"]
+    target = total_volume * value_area_fraction
+    left = poc_idx - 1
+    right = poc_idx + 1
+    while accumulated < target and (left >= 0 or right < len(prices)):
+        left_volume = buckets[prices[left]]["volume"] if left >= 0 else -1.0
+        right_volume = buckets[prices[right]]["volume"] if right < len(prices) else -1.0
+        if right_volume > left_volume:
+            included.add(right)
+            accumulated += max(0.0, right_volume)
+            right += 1
+        else:
+            included.add(left)
+            accumulated += max(0.0, left_volume)
+            left -= 1
+
+    val = prices[min(included)]
+    vah = prices[max(included)]
+    location = (
+        "above_value"
+        if latest_price > vah
+        else "below_value"
+        if latest_price < val
+        else "inside_value"
+    )
+
+    levels = []
+    for price in prices:
+        row = buckets[price]
+        volume = row["volume"]
+        buy = row["buy_volume"]
+        sell = row["sell_volume"]
+        levels.append({
+            "price": round(price, 4),
+            "volume": round(volume, 6),
+            "share": round(volume / total_volume, 6),
+            "buy_volume": round(buy, 6),
+            "sell_volume": round(sell, 6),
+            "delta": round(buy - sell, 6),
+            "in_value_area": val <= price <= vah,
+        })
+
+    ranked_high = sorted(
+        levels,
+        key=lambda row: (row["volume"], -abs(row["price"] - poc_price)),
+        reverse=True,
+    )
+    ranked_low = sorted(
+        [row for row in levels if row["volume"] > 0],
+        key=lambda row: (row["volume"], abs(row["price"] - poc_price)),
+    )
+    coverage_seconds = (
+        (trades[-1].timestamp - trades[0].timestamp).total_seconds()
+        if len(trades) > 1
+        else 0.0
+    )
+
+    return {
+        "available": True,
+        "status": "ready",
+        "poc": round(poc_price, 4),
+        "vah": round(vah, 4),
+        "val": round(val, 4),
+        "location": location,
+        "tick_size": tick,
+        "value_area_fraction": round(value_area_fraction, 3),
+        "value_area_volume_share": round(accumulated / total_volume, 6),
+        "total_volume_xaut": round(total_volume, 6),
+        "total_notional_usd": round(total_notional, 2),
+        "trade_count": len(trades),
+        "coverage_seconds": round(coverage_seconds, 3),
+        "high_volume_nodes": ranked_high[:8],
+        "low_volume_nodes": ranked_low[:8],
+        "levels": levels,
+        "volume_kind": "executed_xaut_volume",
+        "source": "bitfinex:XAUTUSD:executed_trades",
+        "centralized_proxy_market": True,
+        "global_xauusd_volume_profile": False,
+        "note": "real executed XAUT volume profile; not global OTC XAUUSD volume",
+    }
+
+
 def _book(snapshot: XAUTMicrostructureSnapshot, distance: float) -> dict[str, Any]:
     mid = snapshot.mid
     lower, upper = mid - distance, mid + distance
@@ -168,6 +296,8 @@ def analyze_xaut_microstructure(
     *,
     xau_spot_price: float | None = None,
     footprint_tick: float = 0.1,
+    volume_profile_tick: float = 0.5,
+    value_area_fraction: float = 0.70,
 ) -> dict[str, Any]:
     trades = sorted(snapshot.trades, key=lambda x: x.timestamp)
     latest_trade = trades[-1] if trades else None
@@ -190,6 +320,29 @@ def analyze_xaut_microstructure(
             for distance in (10, 20, 30)
         }
     book10 = books["pm10"]
+    profile = _volume_profile(
+        trades,
+        tick=volume_profile_tick,
+        value_area_fraction=value_area_fraction,
+    )
+    if profile.get("available") and basis is not None:
+        profile = dict(profile)
+        profile["xauusd_mapping"] = {
+            "available": True,
+            "method": "instantaneous_xau_minus_xaut_basis",
+            "basis": round(basis, 6),
+            "poc": round(float(profile["poc"]) + basis, 4),
+            "vah": round(float(profile["vah"]) + basis, 4),
+            "val": round(float(profile["val"]) + basis, 4),
+            "execution_eligible": False,
+        }
+    else:
+        profile = dict(profile)
+        profile["xauusd_mapping"] = {
+            "available": False,
+            "method": "instantaneous_xau_minus_xaut_basis",
+            "execution_eligible": False,
+        }
     return {
         "version": "xaut-free-order-flow-v1",
         "status": "ready",
@@ -225,12 +378,15 @@ def analyze_xaut_microstructure(
         "flow": flows,
         "cvd": _cvd(trades),
         "footprint": _footprint(trades, tick=footprint_tick),
+        "volume_profile": profile,
         "raw_book": books,
         "absorption": _absorption(flows["5m"], book10),
         "forward_range_map": forward,
         "evidence_policy": {
             "trade_sign_is_real_for_xaut": True,
             "raw_book_is_real_for_xaut": True,
+            "volume_profile_is_real_executed_xaut_volume": True,
+            "xaut_volume_profile_is_global_xauusd_volume": False,
             "xaut_is_xauusd_execution_venue": False,
             "xaut_flow_is_global_spot_gold_flow": False,
             "basis_must_be_recomputed": True,
