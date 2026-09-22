@@ -50,7 +50,7 @@ class AutomaticResearchScheduler:
             level = logging.INFO if result.evidence_added or result.beliefs_changed else logging.DEBUG
             logger.log(
                 level,
-                "[auto-research] run=%s status=%s probes=%s/%s cooldown=%s tool_calls=%s docs=%s evidence=%s belief_changes=%s errors=%s",
+                "[auto-research] run=%s status=%s probes=%s/%s cooldown=%s tool_calls=%s docs=%s evidence=%s raw=%s classified=%s belief_changes=%s errors=%s",
                 result.run_id,
                 result.status,
                 result.probes_executed,
@@ -59,6 +59,8 @@ class AutomaticResearchScheduler:
                 result.tool_calls,
                 result.documents_read,
                 result.evidence_added,
+                result.raw_evidence_added,
+                result.classified_evidence_added,
                 result.beliefs_changed,
                 list(result.errors),
             )
