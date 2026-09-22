@@ -16,8 +16,6 @@ from statistics import median
 from typing import Any
 
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
-from src.modules.xau.library_intelligence import library_consensus
-
 EMA_PERIODS = (9, 21, 50, 200, 1000)
 
 
@@ -449,61 +447,21 @@ def build_market_context(
 
     smart_money = smart_money_structure(hourly, h4, liquidity, profile, combined_flow)
 
-    # Cross-check the handwritten context with independent public libraries.
-    # pyvsmc is the primary SMC implementation; smartmoneyconcepts and smc-mcp
-    # are independent oracles. None may unilaterally create an entry signal.
-    library_ctx = library_consensus(hourly[-500:] if len(hourly) > 500 else hourly)
-    library_direction = str(library_ctx.get("direction") or "neutral")
-    library_agreement = float(library_ctx.get("agreement") or 0.0)
-    library_score = (
-        library_agreement
-        if library_direction == "bullish"
-        else -library_agreement
-        if library_direction == "bearish"
-        else 0.0
-    )
+    # Library implementations are deliberately NOT fused here. They observe the
+    # same OHLC input, so counting them as independent evidence would inflate
+    # confidence. service._refresh_market_context attaches them as validation
+    # oracles and cognition uses agreement only as a reliability guard.
 
-    manual_smart_score = float(smart_money.get("score") or 0.0)
-    oracle_weight = min(0.30, 0.10 * int(library_ctx.get("independent_direction_votes") or 0))
-    smart_score = (1.0 - oracle_weight) * manual_smart_score + oracle_weight * library_score
-    smart_score = max(-1.0, min(1.0, smart_score))
-    smart_money["manual_score"] = round(manual_smart_score, 4)
-    smart_money["library_score"] = round(library_score, 4)
-    smart_money["library_agreement"] = round(library_agreement, 4)
-    smart_money["score"] = round(smart_score, 4)
-    smart_money["bias"] = (
-        "bullish" if smart_score >= 0.15
-        else "bearish" if smart_score <= -0.15
-        else "neutral"
-    )
-    smart_money["library_consensus"] = library_ctx
-
-    profile_oracle = library_ctx.get("profile_oracle") or {}
-    if profile.get("available") and profile_oracle.get("status") == "ok":
-        try:
-            manual_poc = float(profile.get("poc"))
-            oracle_poc = float(profile_oracle.get("poc"))
-            atr_h1 = max(_atr(hourly[-60:], 14), 1e-9)
-            poc_delta_atr = abs(manual_poc - oracle_poc) / atr_h1
-            profile["oracle_poc"] = round(oracle_poc, 4)
-            profile["oracle_poc_delta_atr"] = round(poc_delta_atr, 4)
-            profile["oracle_agreement"] = poc_delta_atr <= 0.50
-        except (TypeError, ValueError):
-            pass
-
-    ta_oracle = library_ctx.get("technical_oracle") or {}
-    if ta_oracle.get("status") == "ok":
-        biases["1h"]["ta_oracle"] = {
-            key: ta_oracle.get(key)
-            for key in ("ema9", "ema21", "ema50", "ema200", "ema1000", "rsi14", "atr14", "cmf20", "adx14")
-        }
+    smart_score = float(smart_money.get("score") or 0.0)
+    smart_money["manual_score"] = round(smart_score, 4)
+    smart_money["validation_policy"] = "same-input libraries validate; they do not add directional evidence"
 
     today_score = 0.54 * composite + 0.28 * smart_score + 0.18 * combined_flow_score
     today_score = max(-1.0, min(1.0, today_score))
     today_direction = "bullish" if today_score >= 0.15 else "bearish" if today_score <= -0.15 else "neutral"
 
     return {
-        "version": "htf-context-v2-libraries",
+        "version": "htf-context-v3-validator-separation",
         "bias": {
             "monthly": biases["1mo"],
             "weekly": biases["1w"],
@@ -525,7 +483,6 @@ def build_market_context(
         "futures_flow": futures_flow,
         "liquidity": liquidity,
         "smart_money": smart_money,
-        "library_intelligence": library_ctx,
         "volume_note": (
             "XAUUSD is OTC; MT5 tick volume is an activity proxy, not centralized exchange volume. "
             "GC futures volume is used only as a cross-market participation proxy. Neither is treated "
