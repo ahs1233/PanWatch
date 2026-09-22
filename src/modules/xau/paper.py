@@ -799,13 +799,15 @@ def _decorrelate_research_episodes(
 
     for item in ranked:
         observed_at, outcome_at = item[3], item[4]
+        # PostgreSQL timestamps may be naive UTC while JSON replay timestamps
+        # retain an offset. Normalize before *any* chronological comparison.
+        observed = _utc_naive(observed_at) if isinstance(observed_at, datetime) else None
+        outcome = _utc_naive(outcome_at) if isinstance(outcome_at, datetime) else None
         if (
-            isinstance(observed_at, datetime)
-            and isinstance(outcome_at, datetime)
-            and outcome_at > observed_at
+            observed is not None
+            and outcome is not None
+            and outcome > observed
         ):
-            observed = _utc_naive(observed_at)
-            outcome = _utc_naive(outcome_at)
             if any(
                 observed < selected_outcome and outcome > selected_observed
                 for selected_observed, selected_outcome in intervals
@@ -2462,7 +2464,7 @@ class XAUPaperTradingScheduler:
                 },
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[XAU paper] scan failed: %s", type(exc).__name__)
+            logger.exception("[XAU paper] scan failed: %s", type(exc).__name__)
         finally:
             self._running = False
 

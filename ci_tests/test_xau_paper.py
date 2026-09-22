@@ -38,6 +38,27 @@ from src.platform.runtime.config import Settings
 from src.modules.xau.paper_store import _sqlalchemy_url
 
 
+@pytest.mark.parametrize("offset_hours", [0, 3, -5])
+@pytest.mark.parametrize("aware_start", [False, True])
+def test_research_overlap_normalizes_mixed_timezones_before_comparison(offset_hours, aware_start):
+    from src.modules.xau.paper import _decorrelate_research_episodes
+
+    start = datetime(2026, 9, 22, 4, 0)
+    end = start + timedelta(hours=1)
+    zone = timezone(timedelta(hours=offset_hours))
+    aware = lambda value: value.replace(tzinfo=timezone.utc).astimezone(zone)
+    episodes = [
+        (1.0, 10.0, "60m", aware(start) if aware_start else start,
+         end if aware_start else aware(end)),
+        (0.9, -5.0, "60m", start + timedelta(minutes=30),
+         aware(end + timedelta(minutes=30))),
+        (0.8, 2.0, "60m", aware(end), end + timedelta(hours=1)),
+    ]
+    chosen, discarded = _decorrelate_research_episodes(episodes, limit=80)
+    assert chosen == [episodes[0], episodes[2]]
+    assert discarded == 1
+
+
 @pytest.mark.parametrize("operation", ["scan", "eligibility"])
 def test_database_work_does_not_block_event_loop(monkeypatch, operation):
     from src.modules.xau import paper
@@ -1332,6 +1353,20 @@ def test_replay_memory_temporally_decorrelates_overlapping_horizons():
     assert memory["sample_count"] == 1
     assert memory["overlap_discarded"] == 11
     assert memory["temporally_decorrelated"] is True
+
+    # Production compatibility storage combines a naive SQL timestamp with
+    # an offset-bearing ISO string inside the JSON replay payload.
+    compat = [SimpleNamespace(
+        observed_at=episode.observed_at,
+        meta={"replay_episode": {
+            "state_vector": episode.state_vector,
+            "directional_return_bps": episode.directional_return_bps,
+            "outcome_at": episode.outcome_at.replace(tzinfo=timezone.utc).isoformat(),
+        }},
+    ) for episode in episodes]
+    compat_memory = _replay_research_memory(compat, vector)
+    assert compat_memory["sample_count"] == 1
+    assert compat_memory["overlap_discarded"] == 11
 
 
 def test_shadow_memory_temporally_decorrelates_overlapping_decisions():
