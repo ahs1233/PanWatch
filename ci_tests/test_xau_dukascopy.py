@@ -18,7 +18,7 @@ from src.platform.marketdata.xau_provider_audit import audit_xau_provider_overla
 
 UTC = timezone.utc
 HOUR = datetime(2020, 1, 6, 12, tzinfo=UTC)
-RECORD = struct.Struct(">iiiff")
+RECORD = struct.Struct(">IIIff")
 
 
 def _payload(records):
