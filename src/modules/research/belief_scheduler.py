@@ -13,7 +13,6 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import func
 
-from src.platform.persistence.database import SessionLocal
 from src.platform.persistence.models import (
     ResearchClaimEdgeRecord,
     ResearchClaimEvidenceLinkRecord,
@@ -28,6 +27,7 @@ from .reasoning_store import (
     load_claim_graph,
     load_falsification_engine,
 )
+from .store import open_research_session
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class PersistentBeliefScheduler:
         if self._running:
             return
         self._running = True
-        db = SessionLocal()
+        db = open_research_session()
         try:
             signature = self._input_signature(db)
             if signature == self._last_input_signature:
