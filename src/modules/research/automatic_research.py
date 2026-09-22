@@ -66,7 +66,7 @@ from .research_store import research_session
 
 logger = logging.getLogger(__name__)
 
-_URL_RE = re.compile(r"https?://[^\s<>\]\)\}"']+")
+_URL_RE = re.compile(r'https?://[^\\s<>\\]\\)\\}"\\\']+')
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s\)]+)\)")
 _JSON_FENCE_RE = re.compile(r"^\s*~~~(?:json)?\s*|\s*~~~\s*$", re.I)
 _ALLOWED_KINDS = {item.value: item for item in ObservationKind}
