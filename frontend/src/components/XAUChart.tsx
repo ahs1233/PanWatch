@@ -118,7 +118,7 @@ export default function XAUChart({ bars, loading, swingHigh, swingLow, triggerLe
         <path d={ema21} fill="none" className="stroke-violet-500" strokeWidth="1.4" />
         <path d={ema9} fill="none" className="stroke-blue-500" strokeWidth="1.5" />
 
-        {rows.filter((_, i) => i % Math.max(1, Math.floor(rows.length / 6)) === 0).map((bar, i) => {
+        {rows.filter((_, i) => i % Math.max(1, Math.floor(rows.length / 6)) === 0).map((bar) => {
           const sourceIndex = rows.indexOf(bar)
           const dt = new Date(bar.time)
           return <text key={bar.time} x={x(sourceIndex)} y={height - 10} textAnchor="middle" className="fill-muted-foreground text-[10px]">{dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</text>
