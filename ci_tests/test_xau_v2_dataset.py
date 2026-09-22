@@ -147,6 +147,7 @@ def test_builder_fetches_all_required_frames_with_asymmetric_windows():
     assert result.audit.wiring_ready is True
     assert result.audit.readiness is XAUV2DatasetReadiness.WIRING_VALID
     assert result.audit.edge_claim_ready is False
+    assert result.audit.deep_history_source_required is True
     assert any(
         "intraday_history_too_short" in warning
         for warning in result.audit.warnings
