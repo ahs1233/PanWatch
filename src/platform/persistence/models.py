@@ -1555,3 +1555,116 @@ class ResearchEvidenceRecord(Base):
     supersedes = Column(String, nullable=True)
     meta = Column(JSON, default={})
     created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchClaimRecord(Base):
+    """Immutable claim definition in the research reasoning graph."""
+
+    __tablename__ = "research_claims"
+    __table_args__ = (
+        Index("ix_research_claim_key_kind", "claim_key", "kind"),
+        Index("ix_research_claim_validity", "valid_from", "valid_until"),
+    )
+
+    claim_id = Column(String, primary_key=True)
+    claim_key = Column(String, nullable=False)
+    statement = Column(Text, nullable=False)
+    kind = Column(String, nullable=False, default="hypothesis")
+    prior_confidence = Column(Float, nullable=False, default=0.5)
+    created_at = Column(DateTime, nullable=False)
+    valid_from = Column(DateTime, nullable=True)
+    valid_until = Column(DateTime, nullable=True)
+    supersedes = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    meta = Column(JSON, default={})
+
+
+class ResearchClaimEdgeRecord(Base):
+    """Directed logical/causal relation between two research claims."""
+
+    __tablename__ = "research_claim_edges"
+    __table_args__ = (
+        Index("ix_research_claim_edge_source", "source_claim_id"),
+        Index("ix_research_claim_edge_target", "target_claim_id"),
+        Index("ix_research_claim_edge_relation", "relation"),
+    )
+
+    edge_id = Column(String, primary_key=True)
+    source_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    relation = Column(String, nullable=False)
+    weight = Column(Float, nullable=False, default=1.0)
+    required = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False)
+    meta = Column(JSON, default={})
+
+
+class ResearchClaimEvidenceLinkRecord(Base):
+    """Explicit evidence-to-claim link used by the Claim Graph."""
+
+    __tablename__ = "research_claim_evidence_links"
+    __table_args__ = (
+        Index("ix_research_claim_evidence_claim", "claim_id"),
+        Index("ix_research_claim_evidence_evidence", "evidence_id"),
+    )
+
+    link_id = Column(String, primary_key=True)
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    evidence_id = Column(
+        String,
+        ForeignKey("research_evidence.evidence_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    relation = Column(String, nullable=False, default="supports")
+    weight = Column(Float, nullable=False, default=1.0)
+    created_at = Column(DateTime, nullable=False)
+    meta = Column(JSON, default={})
+
+
+class ResearchFalsificationRuleRecord(Base):
+    """Explicit failure condition attached to a research claim."""
+
+    __tablename__ = "research_falsification_rules"
+    __table_args__ = (
+        Index("ix_research_falsification_claim", "claim_id"),
+        Index("ix_research_falsification_type", "rule_type"),
+    )
+
+    rule_id = Column(String, primary_key=True)
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    description = Column(Text, nullable=False)
+    rule_type = Column(String, nullable=False)
+    hard_fail = Column(Boolean, nullable=False, default=False)
+    weight = Column(Float, nullable=False, default=1.0)
+    evidence_claim_key = Column(String, default="")
+    operator = Column(String, default="")
+    threshold = Column(Float, nullable=True)
+    min_sources = Column(Integer, nullable=False, default=1)
+    max_age_seconds = Column(Integer, nullable=True)
+    related_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    required_kinds = Column(JSON, default=[])
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
