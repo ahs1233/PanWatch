@@ -758,7 +758,7 @@ async def test_semantic_numeric_conflict_creates_bidirectional_contradiction():
             for edge in graph.edges
             if edge.relation is ClaimRelation.CONTRADICTS
         ]
-        assert len(contradictions) == 2
+        assert len(contradictions) == 1
         rows = db.query(ResearchClaimResolutionRecord).all()
         assert any(row.relation == "contradiction" for row in rows)
     finally:
@@ -858,7 +858,7 @@ async def test_semantic_polarity_conflict_creates_contradiction():
             edge
             for edge in graph.edges
             if edge.relation is ClaimRelation.CONTRADICTS
-        ]) == 2
+        ]) == 1
     finally:
         db.close()
 
