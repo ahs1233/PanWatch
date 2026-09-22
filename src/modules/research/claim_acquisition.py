@@ -20,7 +20,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -639,6 +639,23 @@ class GeneralClaimAcquisition:
             seed_topic,
             "|".join(document.url for document in documents),
         )
+
+        stale_before = started - timedelta(minutes=10)
+        stale_runs = (
+            db.query(ResearchAcquisitionRunRecord)
+            .filter(
+                ResearchAcquisitionRunRecord.status == "running",
+                ResearchAcquisitionRunRecord.started_at < stale_before,
+            )
+            .all()
+        )
+        for stale in stale_runs:
+            stale.status = "abandoned"
+            stale.completed_at = started
+            stale.error = "stale_acquisition_recovered"
+        if stale_runs:
+            db.commit()
+
         run = ResearchAcquisitionRunRecord(
             run_id=run_id,
             started_at=started,
