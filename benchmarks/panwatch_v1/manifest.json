@@ -1,0 +1,80 @@
+{
+  "benchmark": "PanWatch Benchmark v1",
+  "version": "1.0.0",
+  "purpose": "Measure current PanWatch decision integrity without confusing implemented core behavior with future research-engine capabilities.",
+  "tracks": [
+    {
+      "id": "xau_decision_core",
+      "status": "automated",
+      "tasks": [
+        "event_risk_veto",
+        "stale_data_veto",
+        "memory_calibration_direction",
+        "overextension_counter_evidence",
+        "probabilistic_regime_consistency",
+        "sensor_disagreement_penalty",
+        "research_prior_sample_guard",
+        "research_prior_integrity_guard",
+        "conflicting_research_priors_damped",
+        "realized_trade_evidence_priority",
+        "market_closed_fill_isolation",
+        "adaptive_threshold_on_bad_calibration",
+        "source_family_discrimination",
+        "state_similarity_discrimination",
+        "live_execution_disabled"
+      ]
+    },
+    {
+      "id": "economic_research",
+      "status": "specified_not_automated",
+      "tasks": [
+        "actual_vs_forecast_macro_release",
+        "revision_vs_original_release",
+        "duplicate_wire_source_independence",
+        "stale_macro_report_trap",
+        "conflicting_numeric_claims",
+        "event_chronology_reconstruction",
+        "policy_statement_vs_market_pricing",
+        "oil_shock_delayed_transmission",
+        "forecast_to_realization_update",
+        "confidence_change_after_new_evidence"
+      ]
+    },
+    {
+      "id": "company_sector_research",
+      "status": "specified_not_automated",
+      "tasks": [
+        "earnings_release_vs_secondary_summary",
+        "guidance_vs_consensus",
+        "duplicate_press_release_independence",
+        "restatement_correction",
+        "filing_vs_acquisition_rumor",
+        "cross_company_kpi_definition",
+        "period_mismatch_detection",
+        "contradictory_revenue_numbers",
+        "source_recency_precedence",
+        "thesis_update_after_new_filing"
+      ]
+    }
+  ],
+  "future_research_rubric": {
+    "fact_accuracy": 25,
+    "citation_coverage": 15,
+    "freshness": 10,
+    "source_independence": 10,
+    "conflict_handling": 10,
+    "uncertainty_calibration": 10,
+    "change_detection": 10,
+    "falsification": 10
+  },
+  "comparison_targets": [
+    "PanWatch",
+    "general_web_llm",
+    "human_researcher"
+  ],
+  "notes": [
+    "Only xau_decision_core is automated in v1.",
+    "The two research tracks are test specifications, not claimed capabilities.",
+    "External baseline comparison is intentionally not faked without configured model access and human labels."
+  ]
+}
