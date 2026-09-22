@@ -1073,7 +1073,7 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     "from the last 30 minutes. Never invent facts, prices, dates, or times. "
                     "If evidence conflicts or is insufficient, bias=0. Keep summary under 90 words and "
                     "drivers to at most four short factual bullets.\n\n"
-                    + raw[:10000]
+                    + raw[:5000]
                 )
                 answer = await asyncio.wait_for(
                     ai.chat_multi(
@@ -1085,9 +1085,9 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                             {"role": "user", "content": prompt},
                         ],
                         temperature=0.1,
-                        max_tokens=500,
+                        max_tokens=260,
                     ),
-                    timeout=45,
+                    timeout=60,
                 )
                 parsed = _parse_json(answer)
                 if not parsed or not isinstance(parsed.get("summary"), str) or not parsed["summary"].strip():
@@ -1135,7 +1135,25 @@ async def _refresh_macro_context(force: bool = False) -> dict[str, Any]:
                     len(data["drivers"]),
                 )
             except Exception as exc:
-                data["summary"] = "Web research succeeded, but macro synthesis failed."
+                preview: list[str] = []
+                seen: set[str] = set()
+                for line in raw.splitlines():
+                    cleaned = re.sub(r"^[\\s#>*\\-\\d.]+", "", line).strip()
+                    if not cleaned or cleaned.startswith(("http://", "https://")) or len(cleaned) < 24:
+                        continue
+                    cleaned = re.sub(r"\\s+", " ", cleaned)[:220]
+                    key = cleaned.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    preview.append(cleaned)
+                    if len(preview) >= 4:
+                        break
+                data["summary"] = (
+                    "Macro evidence was collected, but model synthesis is temporarily unavailable. "
+                    "No directional macro bias is being asserted until synthesis recovers."
+                )
+                data["drivers"] = preview
                 data["synthesis_error"] = type(exc).__name__
                 logger.warning(
                     "XAU macro synthesis degraded error=%s evidence_chars=%s",
