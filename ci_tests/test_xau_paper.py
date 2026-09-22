@@ -62,6 +62,7 @@ def test_research_overlap_normalizes_mixed_timezones_before_comparison(offset_ho
 @pytest.mark.parametrize("operation", ["scan", "eligibility"])
 def test_database_work_does_not_block_event_loop(monkeypatch, operation):
     from src.modules.xau import paper
+    monkeypatch.setattr(XAUPaperTradingEngine, "_protect_sync", lambda *args: {"status": "ok", "execution_allowed": False})
 
     entered, release = threading.Event(), threading.Event()
     event_loop_thread = threading.get_ident()
@@ -78,6 +79,7 @@ def test_database_work_does_not_block_event_loop(monkeypatch, operation):
 
     monkeypatch.setattr(paper, "get_xau_snapshot", snapshot)
     monkeypatch.setattr(paper, "get_macro_context", snapshot)
+    monkeypatch.setattr(paper, "get_indicative_spot", snapshot)
     engine = XAUPaperTradingEngine(Settings(xau_paper_enabled=True))
     monkeypatch.setattr(engine, "_scan_sync" if operation == "scan" else "_eligibility_sync", slow_database_work)
 
@@ -100,6 +102,7 @@ def test_database_work_does_not_block_event_loop(monkeypatch, operation):
 
 def test_cancelled_scan_keeps_transaction_guard_until_worker_finishes(monkeypatch):
     from src.modules.xau import paper
+    monkeypatch.setattr(XAUPaperTradingEngine, "_protect_sync", lambda *args: {"status": "ok", "execution_allowed": False})
 
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
 
@@ -116,6 +119,7 @@ def test_cancelled_scan_keeps_transaction_guard_until_worker_finishes(monkeypatc
 
     monkeypatch.setattr(paper, "get_xau_snapshot", snapshot)
     monkeypatch.setattr(paper, "get_macro_context", snapshot)
+    monkeypatch.setattr(paper, "get_indicative_spot", snapshot)
     first = XAUPaperTradingEngine(Settings(xau_paper_enabled=True))
     second = XAUPaperTradingEngine(Settings(xau_paper_enabled=True))
     monkeypatch.setattr(first, "_scan_sync", transaction)
@@ -177,6 +181,7 @@ def test_worker_session_commits_paper_state_and_remains_readable(monkeypatch, tm
     monkeypatch.setattr(paper, "open_xau_replay_session", open_session)
     monkeypatch.setattr(paper, "get_xau_snapshot", snapshot)
     monkeypatch.setattr(paper, "get_macro_context", snapshot)
+    monkeypatch.setattr(paper, "get_indicative_spot", snapshot)
     engine = XAUPaperTradingEngine(Settings(xau_paper_enabled=True))
 
     async def exercise():

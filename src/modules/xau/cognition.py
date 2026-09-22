@@ -964,6 +964,8 @@ def _confidence(
         "calibrated_confidence": round(calibrated, 4),
         "band": band,
         "calibration_basis": basis,
+        "score_kind": "heuristic_with_historical_adjustment",
+        "is_validated_win_probability": False,
         "historical_probability": historical_probability,
         "sample_count": effective_samples,
         "brier_score": memory_state.get("brier_score"),

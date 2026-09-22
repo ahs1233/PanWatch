@@ -8,8 +8,9 @@ its existing SQLite database.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
@@ -29,6 +30,29 @@ _external_engine = None
 _external_replay_available = False
 XAUPaperSessionLocal = SessionLocal
 XAUReplaySessionLocal = SessionLocal
+
+
+@contextmanager
+def paper_writer_guard():
+    """One paper writer across PostgreSQL replicas, held across commits.
+
+    The dedicated autocommit connection owns the advisory lock; it is never
+    returned to the pool while locked. SQLite deployments use the process lock.
+    """
+    if _external_engine is None or _external_engine.dialect.name != "postgresql":
+        yield True
+        return
+    with _external_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        acquired = bool(conn.execute(text("SELECT pg_try_advisory_lock(782341905)")).scalar())
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                try:
+                    conn.execute(text("SELECT pg_advisory_unlock(782341905)"))
+                except Exception:
+                    conn.invalidate()
+                    raise
 
 
 def _sqlalchemy_url(url: str) -> str:
