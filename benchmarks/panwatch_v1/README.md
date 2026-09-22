@@ -51,6 +51,7 @@ Safety/integrity constraints:
 - persisted cooldown for repeated probes;
 - no-claim cycles make zero research calls;
 - one source failure cannot kill the whole cycle;
+- raw-only degraded mode preserves source-grounded material when classification times out or is rate-limited, without linking it to a claim or changing belief;
 - live execution remains unrelated and disabled;
 - external provider failure does not block PanWatch startup.
 
