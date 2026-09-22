@@ -265,7 +265,7 @@ def _deterministic_grounded_candidates(
     blocks = [
         normalize_text(item)
         for item in re.split(
-            r"\n{2,}|(?<=[.!?])\s+(?=[A-Z0-9])",
+            r"\n+|(?<=[.!?])\s+(?=[A-Z0-9])",
             raw,
         )
         if normalize_text(item)
@@ -511,7 +511,23 @@ class GroundedClaimExtractor:
                     metadata={"extractor": "grounded_claim_v1"},
                 )
             )
-        return candidates
+
+        if candidates:
+            return candidates
+
+        fallback = _deterministic_grounded_candidates(
+            source_text,
+            max_candidates=max_candidates,
+            fallback_reason="empty_model_output",
+        )
+        if fallback:
+            logger.warning(
+                "Claim extraction produced no admitted LLM candidates; "
+                "using deterministic grounded fallback url=%s candidates=%s",
+                document.url,
+                len(fallback),
+            )
+        return fallback
 
 
 class GeneralClaimAcquisition:
@@ -712,6 +728,7 @@ class GeneralClaimAcquisition:
                                     "source_url": document.url,
                                     "time_sensitive": candidate.time_sensitive,
                                     "freshness_seconds": candidate.freshness_seconds,
+                                    **candidate.metadata,
                                 },
                             }
                         )
@@ -823,6 +840,12 @@ class GeneralClaimAcquisition:
                                     "quote_grounded": True,
                                     "claim_acquisition_run_id": run_id,
                                     "candidate_fingerprint": fingerprint,
+                                    "candidate_extractor": candidate.metadata.get(
+                                        "extractor", ""
+                                    ),
+                                    "fallback_reason": candidate.metadata.get(
+                                        "fallback_reason", ""
+                                    ),
                                 },
                             )
                             self.ledger.append(evidence)
@@ -881,6 +904,7 @@ class GeneralClaimAcquisition:
                                 "freshness_seconds": (
                                     candidate.freshness_seconds
                                 ),
+                                **candidate.metadata,
                             },
                         }
                     )
