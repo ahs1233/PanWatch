@@ -212,6 +212,7 @@ def _active_claims(graph: ClaimGraph) -> list[ClaimNode]:
         claim
         for claim in graph.claims
         if claim.claim_id not in superseded
+        and not bool(claim.metadata.get("admission_invalidated"))
     ]
 
 
@@ -746,6 +747,12 @@ class GeneralClaimAcquisition:
                     if normalized_quote.casefold() not in normalized_doc.casefold():
                         decision = "rejected"
                         reason = "ungrounded_quote"
+                    elif (
+                        _is_structural_non_claim(normalized_quote)
+                        or _is_structural_non_claim(normalized_statement)
+                    ):
+                        decision = "rejected"
+                        reason = "structural_non_claim"
                     elif not candidate.testable:
                         decision = "rejected"
                         reason = "not_testable"
