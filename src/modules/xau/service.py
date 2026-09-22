@@ -67,6 +67,7 @@ _macro_last_good = None
 _macro_refresh_task = None
 _context_cache = None
 _market_context_cache = None
+_market_context_refresh_task = None
 _bars_lock = asyncio.Lock()
 _spot_lock = asyncio.Lock()
 _consensus_lock = asyncio.Lock()
@@ -185,23 +186,9 @@ async def get_research_bars(force: bool = False):
 
 
 
-async def get_market_context(force: bool = False) -> dict[str, Any]:
-    """Higher-timeframe XAU context: 1h/4h/daily → weekly/monthly bias.
-
-    XAUUSD spot is OTC, so MT5 tick volume is treated as participation proxy.
-    GC futures volume is fetched separately as a cross-market confirmation
-    sensor and is never substituted for spot execution data.
-    """
+async def _refresh_market_context() -> dict[str, Any]:
     global _market_context_cache
-    now = time.monotonic()
-    if not force and _market_context_cache and now - _market_context_cache[0] < _MARKET_CONTEXT_TTL:
-        return _market_context_cache[1]
-
     async with _market_context_lock:
-        now = time.monotonic()
-        if not force and _market_context_cache and now - _market_context_cache[0] < _MARKET_CONTEXT_TTL:
-            return _market_context_cache[1]
-
         provider = BiquoteXAUOHLCProvider()
         yahoo = YahooGoldResearchProvider()
 
@@ -219,7 +206,10 @@ async def get_market_context(force: bool = False) -> dict[str, Any]:
 
         async def fetch_futures_hourly():
             try:
-                return await asyncio.to_thread(yahoo.bars, XAUTimeframe.H1)
+                return await asyncio.wait_for(
+                    asyncio.to_thread(yahoo.bars, XAUTimeframe.H1),
+                    timeout=12.0,
+                )
             except Exception as exc:
                 logger.warning("GC futures hourly flow fetch failed error=%s", type(exc).__name__)
                 return []
@@ -233,12 +223,18 @@ async def get_market_context(force: bool = False) -> dict[str, Any]:
 
         if not h1:
             try:
-                h1 = await asyncio.to_thread(yahoo.bars, XAUTimeframe.H1)
+                h1 = await asyncio.wait_for(
+                    asyncio.to_thread(yahoo.bars, XAUTimeframe.H1),
+                    timeout=12.0,
+                )
             except Exception:
                 h1 = []
         if not daily:
             try:
-                daily = await asyncio.to_thread(yahoo.bars, XAUTimeframe.D1)
+                daily = await asyncio.wait_for(
+                    asyncio.to_thread(yahoo.bars, XAUTimeframe.D1),
+                    timeout=12.0,
+                )
             except Exception:
                 daily = []
 
@@ -258,6 +254,7 @@ async def get_market_context(force: bool = False) -> dict[str, Any]:
             [row.timestamp for rows in (h1, h4, daily, futures_h1) for row in rows[-1:]],
             default=datetime.now(timezone.utc),
         ).isoformat()
+        data["refresh_pending"] = False
         bias = data.get("bias") or {}
         flow = data.get("cash_flow") or {}
         smart = data.get("smart_money") or {}
@@ -277,6 +274,29 @@ async def get_market_context(force: bool = False) -> dict[str, Any]:
         )
         _market_context_cache = (time.monotonic(), data)
         return data
+
+
+async def get_market_context(force: bool = False) -> dict[str, Any]:
+    """Cached HTF context with stale-while-revalidate behavior.
+
+    Slow 1h/4h/daily and futures research never blocks the fast intraday loop
+    once a valid context snapshot exists.
+    """
+    global _market_context_refresh_task
+    now = time.monotonic()
+    if not force and _market_context_cache and now - _market_context_cache[0] < _MARKET_CONTEXT_TTL:
+        return _market_context_cache[1]
+
+    if force or not _market_context_cache:
+        return await _refresh_market_context()
+
+    if _market_context_refresh_task is None or _market_context_refresh_task.done():
+        _market_context_refresh_task = asyncio.create_task(_refresh_market_context())
+
+    stale = dict(_market_context_cache[1])
+    stale["refresh_pending"] = True
+    stale["cache_age_seconds"] = round(max(0.0, now - _market_context_cache[0]), 3)
+    return stale
 
 
 async def get_chart_series(
