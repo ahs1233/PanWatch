@@ -1,0 +1,159 @@
+"""Canonical validation models for engine-neutral trading research."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any
+
+
+class ValidationVerdict(str, Enum):
+    PASS = "pass"
+    FAIL = "fail"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+@dataclass(frozen=True)
+class TradeRecord:
+    """Normalized completed trade emitted by any backtest engine.
+
+    pnl is net strategy PnL before validation stress costs. mae/mfe use the same
+    monetary or R-multiple unit as pnl so aggregate comparisons remain coherent.
+    """
+
+    trade_id: str
+    opened_at: datetime
+    closed_at: datetime
+    pnl: float
+    mae: float | None = None
+    mfe: float | None = None
+    session: str | None = None
+    regime: str | None = None
+    news_window: bool | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.trade_id:
+            raise ValueError("trade_id is required")
+        if self.closed_at < self.opened_at:
+            raise ValueError("closed_at cannot precede opened_at")
+        if self.mae is not None and self.mae > 0:
+            raise ValueError("mae must be <= 0 when supplied")
+        if self.mfe is not None and self.mfe < 0:
+            raise ValueError("mfe must be >= 0 when supplied")
+
+
+@dataclass(frozen=True)
+class PerformanceMetrics:
+    trade_count: int
+    net_pnl: float
+    win_rate: float | None
+    expectancy: float | None
+    profit_factor: float | None
+    max_drawdown: float
+    sharpe_per_trade: float | None
+    sortino_per_trade: float | None
+    avg_mae: float | None
+    avg_mfe: float | None
+    avg_holding_seconds: float | None
+
+
+@dataclass(frozen=True)
+class DatasetManifest:
+    dataset_id: str
+    fingerprint: str
+    symbol: str
+    start: datetime
+    end: datetime
+    source: str
+    bar_count: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.dataset_id or not self.fingerprint:
+            raise ValueError("dataset identity and fingerprint are required")
+        if self.end <= self.start:
+            raise ValueError("dataset end must be after start")
+
+
+@dataclass(frozen=True)
+class ValidationPolicy:
+    """Explicit evidence gates. No hidden 'AI thinks it looks good' verdict."""
+
+    min_oos_trades: int = 30
+    min_oos_expectancy: float = 0.0
+    min_oos_profit_factor: float = 1.0
+    max_oos_drawdown: float | None = None
+    min_walk_forward_positive_fraction: float = 0.5
+    min_parameter_stability_score: float = 0.5
+    max_monte_carlo_loss_probability: float = 0.35
+
+    def __post_init__(self) -> None:
+        if self.min_oos_trades < 1:
+            raise ValueError("min_oos_trades must be >= 1")
+        if not 0 <= self.min_walk_forward_positive_fraction <= 1:
+            raise ValueError("walk-forward fraction must be within [0,1]")
+        if not 0 <= self.min_parameter_stability_score <= 1:
+            raise ValueError("stability score must be within [0,1]")
+        if not 0 <= self.max_monte_carlo_loss_probability <= 1:
+            raise ValueError("Monte Carlo probability must be within [0,1]")
+
+
+@dataclass(frozen=True)
+class ExperimentSpec:
+    experiment_id: str
+    strategy_fingerprint: str
+    dataset: DatasetManifest
+    in_sample_fraction: float = 0.6
+    out_of_sample_fraction: float = 0.4
+    walk_forward_train: int = 60
+    walk_forward_test: int = 20
+    walk_forward_step: int = 20
+    monte_carlo_iterations: int = 1000
+    monte_carlo_seed: int = 1729
+    policy: ValidationPolicy = field(default_factory=ValidationPolicy)
+
+    def __post_init__(self) -> None:
+        if not self.experiment_id or not self.strategy_fingerprint:
+            raise ValueError("experiment_id and strategy_fingerprint are required")
+        if abs((self.in_sample_fraction + self.out_of_sample_fraction) - 1.0) > 1e-9:
+            raise ValueError("IS and OOS fractions must sum to 1")
+        if not 0 < self.in_sample_fraction < 1:
+            raise ValueError("in_sample_fraction must be within (0,1)")
+        if min(self.walk_forward_train, self.walk_forward_test, self.walk_forward_step) < 1:
+            raise ValueError("walk-forward windows must be positive")
+        if self.monte_carlo_iterations < 100:
+            raise ValueError("monte_carlo_iterations must be >= 100")
+
+
+@dataclass(frozen=True)
+class ParameterPoint:
+    parameters: dict[str, float | int | str | bool]
+    objective: float
+    trade_count: int = 0
+
+
+@dataclass(frozen=True)
+class GateResult:
+    name: str
+    passed: bool | None
+    observed: float | int | None
+    threshold: float | int | None
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    experiment_id: str
+    strategy_fingerprint: str
+    dataset_fingerprint: str
+    in_sample: PerformanceMetrics
+    out_of_sample: PerformanceMetrics
+    walk_forward: dict[str, Any]
+    monte_carlo: dict[str, Any]
+    parameter_stability: dict[str, Any]
+    segmentation: dict[str, Any]
+    cost_stress: dict[str, Any]
+    gates: tuple[GateResult, ...]
+    verdict: ValidationVerdict
+    limitations: tuple[str, ...] = ()
