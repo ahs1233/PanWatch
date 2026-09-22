@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-COGNITION_VERSION = "5.1.0"
+COGNITION_VERSION = "5.2.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -758,6 +758,29 @@ def _hypotheses(
         elif edge_direction == "bearish":
             setup_dir = -1
     edge_strength = _number(edge.get("strength"), 0.0)
+    context = technical.get("market_context") or {}
+    bias_context = context.get("bias") or {}
+    htf_score = _clip(
+        _number(
+            bias_context.get("today_score"),
+            _number(bias_context.get("composite_score"), 0.0),
+        ),
+        -1.0,
+        1.0,
+    )
+    if setup_dir == 0:
+        if htf_score >= 0.18:
+            setup_dir = 1
+        elif htf_score <= -0.18:
+            setup_dir = -1
+    smart_money = context.get("smart_money") or {}
+    smart_score = _clip(_number(smart_money.get("score"), 0.0), -1.0, 1.0)
+    sweep_state = str(smart_money.get("liquidity_sweep") or "none")
+    displacement = str(smart_money.get("displacement") or "none")
+    profile = context.get("volume_profile") or {}
+    profile_location = str(profile.get("location") or "unknown")
+    flow_context = context.get("cash_flow") or {}
+    flow_score = _clip(_number(flow_context.get("score"), 0.0), -1.0, 1.0)
     macro_bias = int(max(-1, min(1, _number(macro.get("bias"), 0.0))))
     macro_conf = _clip(_number(macro.get("confidence"), 0.0))
     pressure = _number(perception.get("directional_pressure"))
@@ -767,13 +790,21 @@ def _hypotheses(
     probs = regime.get("probabilities") or {}
     session = _market_session(technical.get("observed_at"))
 
+    htf_alignment = htf_score * setup_dir if setup_dir else 0.0
+    smart_alignment = smart_score * setup_dir if setup_dir else 0.0
+    flow_alignment = flow_score * setup_dir if setup_dir else 0.0
+
     continuation = (
         0.25
         + (0.55 if setup_dir else -0.30)
-        + 0.85 * edge_strength
-        + 0.80 * abs(pressure)
-        + 1.20 * _number(probs.get("trend_bull" if setup_dir > 0 else "trend_bear"))
-        + 0.70 * _number(probs.get("breakout_expansion"))
+        + 0.75 * edge_strength
+        + 0.65 * abs(pressure)
+        + 0.85 * max(0.0, htf_alignment)
+        - 0.65 * max(0.0, -htf_alignment)
+        + 0.40 * max(0.0, smart_alignment)
+        + 0.25 * max(0.0, flow_alignment)
+        + 1.00 * _number(probs.get("trend_bull" if setup_dir > 0 else "trend_bear"))
+        + 0.65 * _number(probs.get("breakout_expansion"))
     )
     if setup_dir and macro_bias == setup_dir:
         continuation += 0.50 * max(0.30, macro_conf)
@@ -782,30 +813,35 @@ def _hypotheses(
 
     mean_reversion = (
         0.15
-        + 1.20 * _number(probs.get("range_rotation"))
-        + 0.90 * _number(probs.get("compression_range"))
+        + 1.10 * _number(probs.get("range_rotation"))
+        + 0.80 * _number(probs.get("compression_range"))
         + (0.70 if rsi5 >= 70 or rsi5 <= 30 else 0.0)
+        + (0.45 if profile_location in {"above_value", "below_value"} else 0.0)
         + (0.35 if setup_dir and acceleration * setup_dir < 0 else 0.0)
+        + (0.30 if setup_dir and flow_alignment < -0.12 else 0.0)
     )
 
     liquidity_sweep = (
         0.10
-        + (0.65 if breakout in {"up", "down"} else 0.0)
-        + 0.70 * _number(probs.get("transition"))
-        + (0.40 if rsi5 >= 75 or rsi5 <= 25 else 0.0)
+        + (0.90 if sweep_state in {"buy_side_sweep", "sell_side_sweep"} else 0.0)
+        + (0.50 if breakout in {"up", "down"} else 0.0)
+        + 0.60 * _number(probs.get("transition"))
+        + (0.35 if rsi5 >= 75 or rsi5 <= 25 else 0.0)
     )
 
     failed_breakout = (
         0.05
-        + (0.75 if breakout in {"up", "down"} else 0.0)
-        + 0.80 * _number(probs.get("transition"))
+        + (0.65 if breakout in {"up", "down"} else 0.0)
+        + (0.45 if sweep_state in {"buy_side_sweep", "sell_side_sweep"} else 0.0)
+        + 0.70 * _number(probs.get("transition"))
         + (0.45 if setup_dir and acceleration * setup_dir < 0 else 0.0)
     )
 
     volatility_expansion = (
         0.05
-        + 1.45 * _number(probs.get("breakout_expansion"))
-        + (0.35 if breakout in {"up", "down"} else 0.0)
+        + 1.35 * _number(probs.get("breakout_expansion"))
+        + (0.45 if displacement in {"bullish", "bearish"} else 0.0)
+        + (0.30 if breakout in {"up", "down"} else 0.0)
     )
 
     news_repricing = (
