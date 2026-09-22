@@ -30,6 +30,7 @@ from src.platform.ai.ai_failover import build_failover_client
 from src.platform.persistence.models import (
     ResearchAcquisitionRunRecord,
     ResearchClaimCandidateRecord,
+    ResearchClaimResolutionRecord,
 )
 from src.platform.runtime.config import Settings
 
@@ -43,6 +44,7 @@ from .claim_graph import (
     ClaimGraph,
     ClaimKind,
     ClaimNode,
+    ClaimRelation,
     build_claim,
 )
 from .evidence import (
@@ -55,6 +57,10 @@ from .evidence import (
     utc,
 )
 from .evidence_store import load_full_ledger, persist_ledger
+from .claim_resolution import (
+    ConservativeClaimResolver,
+    SemanticClaimRelation,
+)
 from .falsification import (
     FalsificationEngine,
     FalsificationRuleType,
@@ -571,11 +577,13 @@ class GeneralClaimAcquisition:
         falsification: FalsificationEngine,
         extractor: ClaimCandidateExtractor,
         max_claims_per_document: int = 3,
+        resolver: ConservativeClaimResolver | None = None,
     ) -> None:
         self.graph = graph
         self.ledger = ledger
         self.falsification = falsification
         self.extractor = extractor
+        self.resolver = resolver or ConservativeClaimResolver()
         self.max_claims_per_document = max(
             1,
             int(max_claims_per_document),
@@ -701,6 +709,7 @@ class GeneralClaimAcquisition:
         db.commit()
 
         audits: list[dict[str, Any]] = []
+        resolution_audits: list[dict[str, Any]] = []
         accepted_ids: set[str] = set()
         seen_source_fingerprints: set[tuple[str, str]] = set()
         extracted = accepted = duplicates = rejected = superseded = 0
@@ -819,39 +828,60 @@ class GeneralClaimAcquisition:
                         decision = "rejected"
                         reason = "question_not_claim"
 
+                    candidate_id = _stable_id(
+                        "cand",
+                        run_id,
+                        source.source_id,
+                        fingerprint,
+                    )
+                    resolution = None
                     if decision == "rejected":
                         rejected += 1
                     else:
-                        existing = _exact_claim(
-                            self.graph,
-                            candidate.statement,
+                        resolution = self.resolver.resolve(
+                            statement=candidate.statement,
+                            claim_key=claim_key,
+                            graph=self.graph,
+                            supersedes_previous=candidate.supersedes_previous,
+                            revision_explicit=bool(
+                                _REVISION_CUE_RE.search(candidate.quote)
+                            ),
                         )
-                        if existing is not None:
-                            claim = existing
+                        matched_claim = (
+                            self.graph.get_claim(resolution.matched_claim_id)
+                            if resolution.matched_claim_id
+                            else None
+                        )
+                        if resolution.relation in {
+                            SemanticClaimRelation.EXACT,
+                            SemanticClaimRelation.PARAPHRASE,
+                        } and matched_claim is not None:
+                            claim = matched_claim
                             decision = "duplicate"
-                            reason = "exact_statement_existing_claim"
+                            reason = (
+                                "semantic_"
+                                + resolution.relation.value
+                                + "_existing_claim:"
+                                + matched_claim.claim_id
+                            )
                             duplicates += 1
                         else:
-                            previous = _latest_active_for_key(
-                                self.graph,
-                                claim_key,
-                            )
                             supersedes_id = None
                             supersede_denied = False
                             if (
-                                candidate.supersedes_previous
-                                and previous is not None
+                                resolution.relation
+                                is SemanticClaimRelation.REVISION
+                                and matched_claim is not None
                             ):
-                                if _REVISION_CUE_RE.search(candidate.quote):
-                                    supersedes_id = previous.claim_id
-                                    decision = "superseded"
-                                    reason = (
-                                        "explicit_revision_supersedes:"
-                                        + previous.claim_id
-                                    )
-                                    superseded += 1
-                                else:
-                                    supersede_denied = True
+                                supersedes_id = matched_claim.claim_id
+                                decision = "superseded"
+                                reason = (
+                                    "semantic_revision_supersedes:"
+                                    + matched_claim.claim_id
+                                )
+                                superseded += 1
+                            elif candidate.supersedes_previous:
+                                supersede_denied = True
 
                             claim = build_claim(
                                 claim_key=claim_key,
@@ -874,11 +904,64 @@ class GeneralClaimAcquisition:
                                     "source_id": source.source_id,
                                     "source_url": document.url,
                                     "supersede_denied": supersede_denied,
+                                    "semantic_resolution": resolution.relation.value,
+                                    "semantic_resolution_score": resolution.score,
+                                    "semantic_match_claim_id": resolution.matched_claim_id,
                                     **candidate.metadata,
                                 },
                             )
                             self.graph.register_claim(claim)
                             accepted += 1
+
+                            if (
+                                resolution.relation
+                                is SemanticClaimRelation.CONTRADICTION
+                                and matched_claim is not None
+                            ):
+                                edge_meta = {
+                                    "generated_by": "semantic_claim_resolution",
+                                    "resolution_score": resolution.score,
+                                    "resolution_reason": resolution.reason,
+                                }
+                                self.graph.connect(
+                                    claim.claim_id,
+                                    matched_claim.claim_id,
+                                    ClaimRelation.CONTRADICTS,
+                                    weight=min(0.9, max(0.55, resolution.score)),
+                                    created_at=started,
+                                    metadata=edge_meta,
+                                )
+                                self.graph.connect(
+                                    matched_claim.claim_id,
+                                    claim.claim_id,
+                                    ClaimRelation.CONTRADICTS,
+                                    weight=min(0.9, max(0.55, resolution.score)),
+                                    created_at=started,
+                                    metadata=edge_meta,
+                                )
+                                accepted_ids.add(matched_claim.claim_id)
+
+                        resolution_audits.append(
+                            {
+                                "resolution_id": _stable_id(
+                                    "res",
+                                    candidate_id,
+                                    resolution.relation.value,
+                                    resolution.matched_claim_id or "",
+                                ),
+                                "candidate_id": candidate_id,
+                                "matched_claim_id": resolution.matched_claim_id,
+                                "relation": resolution.relation.value,
+                                "score": resolution.score,
+                                "lexical_score": resolution.lexical_score,
+                                "key_match": resolution.key_match,
+                                "numeric_match": resolution.numeric_match,
+                                "period_match": resolution.period_match,
+                                "polarity_match": resolution.polarity_match,
+                                "reason": resolution.reason,
+                                "signals": resolution.signals,
+                            }
+                        )
 
                         if claim is not None:
                             evidence = build_evidence(
@@ -927,12 +1010,7 @@ class GeneralClaimAcquisition:
 
                     audits.append(
                         {
-                            "candidate_id": _stable_id(
-                                "cand",
-                                run_id,
-                                source.source_id,
-                                fingerprint,
-                            ),
+                            "candidate_id": candidate_id,
                             "source_id": source.source_id,
                             "fingerprint": fingerprint,
                             "quote": candidate.quote,
@@ -958,6 +1036,21 @@ class GeneralClaimAcquisition:
                                 "time_sensitive": candidate.time_sensitive,
                                 "freshness_seconds": (
                                     candidate.freshness_seconds
+                                ),
+                                "semantic_resolution": (
+                                    resolution.relation.value
+                                    if resolution is not None
+                                    else None
+                                ),
+                                "semantic_resolution_score": (
+                                    resolution.score
+                                    if resolution is not None
+                                    else None
+                                ),
+                                "semantic_match_claim_id": (
+                                    resolution.matched_claim_id
+                                    if resolution is not None
+                                    else None
                                 ),
                             },
                         }
@@ -995,6 +1088,30 @@ class GeneralClaimAcquisition:
                         reason=audit["reason"],
                         accepted_claim_id=audit["accepted_claim_id"],
                         meta=audit["meta"],
+                    )
+                )
+
+            db.flush()
+            for resolution in resolution_audits:
+                if db.get(
+                    ResearchClaimResolutionRecord,
+                    resolution["resolution_id"],
+                ) is not None:
+                    continue
+                db.add(
+                    ResearchClaimResolutionRecord(
+                        resolution_id=resolution["resolution_id"],
+                        candidate_id=resolution["candidate_id"],
+                        matched_claim_id=resolution["matched_claim_id"],
+                        relation=resolution["relation"],
+                        score=resolution["score"],
+                        lexical_score=resolution["lexical_score"],
+                        key_match=resolution["key_match"],
+                        numeric_match=resolution["numeric_match"],
+                        period_match=resolution["period_match"],
+                        polarity_match=resolution["polarity_match"],
+                        reason=resolution["reason"],
+                        signals=resolution["signals"],
                     )
                 )
 
