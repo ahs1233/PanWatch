@@ -206,7 +206,11 @@ async def test_explicit_revision_supersedes_previous_claim():
             falsification=falsification,
             extractor=_Extractor({d1.url: [c1], d2.url: [c2]}),
         )
-        first = await engine.run(db=db, documents=[d1])
+        first = await engine.run(
+            db=db,
+            documents=[d1],
+            evaluated_at=T0,
+        )
         second = await engine.run(
             db=db,
             documents=[d2],
@@ -247,7 +251,11 @@ async def test_supersede_flag_without_revision_cue_is_denied():
             falsification=falsification,
             extractor=_Extractor({d1.url: [c1], d2.url: [c2]}),
         )
-        await engine.run(db=db, documents=[d1])
+        await engine.run(
+            db=db,
+            documents=[d1],
+            evaluated_at=T0,
+        )
         result = await engine.run(
             db=db,
             documents=[d2],
