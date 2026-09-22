@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-COGNITION_VERSION = "4.0.0"
+COGNITION_VERSION = "5.0.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -1167,18 +1167,81 @@ def _scenario_paths(
     context = technical.get("market_context") or {}
     bias_context = context.get("bias") or {}
     smart_money = context.get("smart_money") or {}
-    context_direction = str(
+    profile = context.get("volume_profile") or {}
+    flow = context.get("cash_flow") or {}
+    frames = technical.get("frames") or {}
+    five = frames.get("5m") or {}
+    fifteen = frames.get("15m") or {}
+
+    top_down_direction = str(
         bias_context.get("today_direction")
         or bias_context.get("composite_direction")
-        or smart_money.get("bias")
         or "neutral"
     )
-    continuation_direction = edge_direction if edge_direction != "neutral" else context_direction
-    reversal_direction = (
-        "bearish" if continuation_direction == "bullish"
-        else "bullish" if continuation_direction == "bearish"
+    smart_direction = str(smart_money.get("bias") or "neutral")
+    continuation_direction = (
+        top_down_direction
+        if top_down_direction in {"bullish", "bearish"}
+        else edge_direction
+        if edge_direction in {"bullish", "bearish"}
+        else smart_direction
+        if smart_direction in {"bullish", "bearish"}
         else "neutral"
     )
+    continuation_basis = (
+        "top_down_bias"
+        if top_down_direction in {"bullish", "bearish"}
+        else "directional_edge"
+        if edge_direction in {"bullish", "bearish"}
+        else "smart_money_structure"
+        if smart_direction in {"bullish", "bearish"}
+        else "unresolved"
+    )
+
+    sweep_signal = str(smart_money.get("liquidity_sweep") or "none")
+    flow_direction = str(flow.get("direction") or "balanced")
+    profile_location = str(profile.get("location") or "unknown")
+    rsi5 = _number(five.get("rsi14"), 50.0)
+    rsi15 = _number(fifteen.get("rsi14"), 50.0)
+
+    reversal_direction = "neutral"
+    reversal_basis = "unresolved"
+    if sweep_signal == "buy_side_sweep":
+        reversal_direction = "bearish"
+        reversal_basis = "confirmed_buy_side_sweep"
+    elif sweep_signal == "sell_side_sweep":
+        reversal_direction = "bullish"
+        reversal_basis = "confirmed_sell_side_sweep"
+    elif profile_location == "above_value" and flow_direction == "outflow":
+        reversal_direction = "bearish"
+        reversal_basis = "above_value_with_outflow"
+    elif profile_location == "below_value" and flow_direction == "inflow":
+        reversal_direction = "bullish"
+        reversal_basis = "below_value_with_inflow"
+    elif rsi5 >= 68 and rsi15 >= 55:
+        reversal_direction = "bearish"
+        reversal_basis = "intraday_overextension"
+    elif rsi5 <= 32 and rsi15 <= 45:
+        reversal_direction = "bullish"
+        reversal_basis = "intraday_underextension"
+    elif continuation_direction == "bullish":
+        reversal_direction = "bearish"
+        reversal_basis = "countertrend_conditional"
+    elif continuation_direction == "bearish":
+        reversal_direction = "bullish"
+        reversal_basis = "countertrend_conditional"
+
+    sweep_direction = "neutral"
+    sweep_basis = "unresolved"
+    if sweep_signal == "buy_side_sweep":
+        sweep_direction = "bearish"
+        sweep_basis = "observed_buy_side_sweep"
+    elif sweep_signal == "sell_side_sweep":
+        sweep_direction = "bullish"
+        sweep_basis = "observed_sell_side_sweep"
+    elif reversal_direction in {"bullish", "bearish"}:
+        sweep_direction = reversal_direction
+        sweep_basis = "conditional_liquidity_path"
 
     def directional_target(trigger: float | None, direction: str, atr_multiple: float) -> float | None:
         if trigger is None or trigger <= 0 or atr <= 0 or direction == "neutral":
@@ -1200,20 +1263,24 @@ def _scenario_paths(
     if reversal_direction == "bearish":
         reversal_trigger = swing_low_n or (price if price > 0 else None)
         reversal_invalidation = swing_high_n or None
-        sweep_trigger = swing_high_n or (price if price > 0 else None)
     elif reversal_direction == "bullish":
         reversal_trigger = swing_high_n or (price if price > 0 else None)
         reversal_invalidation = swing_low_n or None
-        sweep_trigger = swing_low_n or (price if price > 0 else None)
     else:
         reversal_trigger = None
         reversal_invalidation = None
+
+    if sweep_direction == "bearish":
+        sweep_trigger = swing_high_n or (price if price > 0 else None)
+    elif sweep_direction == "bullish":
+        sweep_trigger = swing_low_n or (price if price > 0 else None)
+    else:
         sweep_trigger = None
 
-    sweep_target = directional_target(sweep_trigger, reversal_direction, 0.80)
+    sweep_target = directional_target(sweep_trigger, sweep_direction, 0.80)
     sweep_invalidation = None
-    if sweep_trigger and atr > 0 and reversal_direction != "neutral":
-        sign = 1.0 if reversal_direction == "bearish" else -1.0
+    if sweep_trigger and atr > 0 and sweep_direction != "neutral":
+        sign = 1.0 if sweep_direction == "bearish" else -1.0
         sweep_invalidation = round(sweep_trigger + sign * atr * 0.30, 4)
 
     scenarios = [
@@ -1224,6 +1291,8 @@ def _scenario_paths(
             "target": directional_target(continuation_trigger, continuation_direction, 0.85),
             "trigger": round(continuation_trigger, 4) if continuation_trigger else None,
             "trigger_kind": "breakout",
+            "direction_basis": continuation_basis,
+            "weight_type": "relative_hypothesis_weight",
             "invalidation": round(continuation_invalidation, 4) if continuation_invalidation else None,
         },
         {
@@ -1233,15 +1302,19 @@ def _scenario_paths(
             "target": directional_target(reversal_trigger, reversal_direction, 0.75),
             "trigger": round(reversal_trigger, 4) if reversal_trigger else None,
             "trigger_kind": "structure_break",
+            "direction_basis": reversal_basis,
+            "weight_type": "relative_hypothesis_weight",
             "invalidation": round(reversal_invalidation, 4) if reversal_invalidation else None,
         },
         {
             "name": "liquidity_sweep",
-            "direction": reversal_direction,
+            "direction": sweep_direction,
             "weight": round(sweep / total, 4),
             "target": sweep_target,
             "trigger": round(sweep_trigger, 4) if sweep_trigger else None,
             "trigger_kind": "sweep_then_reclaim",
+            "direction_basis": sweep_basis,
+            "weight_type": "relative_hypothesis_weight",
             "invalidation": sweep_invalidation,
         },
     ]
