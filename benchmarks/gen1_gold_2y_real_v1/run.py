@@ -620,12 +620,24 @@ def run_replay_horizons(
         context_cache[key] = value
         return value
 
+    replay_started = time.monotonic()
+    processed_evaluations = 0
+    candidate_count = 0
     for evaluation_time in m1_available:
         if evaluation_time < START or evaluation_time >= END:
             continue
         if last_eval is not None and evaluation_time - last_eval < timedelta(minutes=STEP_MINUTES):
             continue
         last_eval = evaluation_time
+        processed_evaluations += 1
+        if processed_evaluations % 10000 == 0:
+            print(json.dumps({
+                "phase": "replay_progress",
+                "processed_evaluations": processed_evaluations,
+                "candidate_count": candidate_count,
+                "elapsed_seconds": round(time.monotonic() - replay_started, 2),
+                "evaluation_time": evaluation_time.isoformat(),
+            }), flush=True)
 
         intraday_window = {
             XAUTimeframe.M1: bars_window(m1, m1_available, evaluation_time, 300),
@@ -647,9 +659,11 @@ def run_replay_horizons(
             event_risk=False,
             macro_bias=0,
             now=evaluation_time,
+            assume_sorted=True,
         )
         if pre.blocked or pre.candidate not in {"long_setup", "short_setup"}:
             continue
+        candidate_count += 1
 
         window = {
             **intraday_window,
@@ -678,6 +692,7 @@ def run_replay_horizons(
             evaluation_time,
             macro_bias=int(macro.get("bias", 0) or 0),
             market_context_builder=cached_market_context,
+            intraday_assessment=pre,
         )
         candidate = str(technical.get("candidate") or "none")
         if technical.get("blocked") or candidate not in {"long_setup", "short_setup"}:
