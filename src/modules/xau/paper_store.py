@@ -32,6 +32,11 @@ _external_engine = None
 _external_replay_available = False
 _replay_provisioning_error = None
 _local_writer_lock = threading.Lock()
+
+# v2 key: the legacy key (782341905) was used with session-level advisory locks.
+# On transaction-pooled PostgreSQL those locks can outlive an application
+# deployment. The v2 key is used exclusively with transaction-scoped locks.
+PAPER_WRITER_ADVISORY_LOCK_KEY = 782341906
 XAUPaperSessionLocal = SessionLocal
 XAUReplaySessionLocal = SessionLocal
 
@@ -61,7 +66,7 @@ def paper_writer_guard(*, timeout_seconds: float = 0.0):
     acquired = False
     try:
         while True:
-            acquired = bool(conn.execute(text("SELECT pg_try_advisory_xact_lock(782341905)")).scalar())
+            acquired = bool(conn.execute(text("SELECT pg_try_advisory_xact_lock(782341906)")).scalar())
             if acquired or time.monotonic() >= deadline:
                 break
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
@@ -93,7 +98,7 @@ def acquire_paper_writer_transaction(db, *, timeout_seconds: float = 0.0) -> tup
     deadline = started + timeout_seconds
     while True:
         acquired = bool(
-            db.execute(text("SELECT pg_try_advisory_xact_lock(782341905)")).scalar()
+            db.execute(text("SELECT pg_try_advisory_xact_lock(782341906)")).scalar()
         )
         if acquired or time.monotonic() >= deadline:
             return acquired, round((time.monotonic() - started) * 1000.0, 2)
