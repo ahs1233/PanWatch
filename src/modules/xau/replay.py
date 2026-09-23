@@ -184,6 +184,10 @@ def build_replay_technical_state(
     *,
     macro_bias: int = 0,
     availability_by_timeframe: dict[XAUTimeframe, list[datetime]] | None = None,
+    market_context_builder: Callable[
+        [list[XAUBar], list[XAUBar], list[XAUBar]],
+        dict[str, Any],
+    ] | None = None,
 ) -> dict[str, Any]:
     """Build a live-shaped technical snapshot using only closed historical bars."""
     evaluation_time = _utc(evaluation_time)
@@ -272,8 +276,9 @@ def build_replay_technical_state(
     h1 = available.get(XAUTimeframe.H1) or []
     h4 = available.get(XAUTimeframe.H4) or []
     daily = available.get(XAUTimeframe.D1) or []
+    context_builder = market_context_builder or build_market_context
     market_context = (
-        build_market_context(h1, h4, daily)
+        context_builder(h1, h4, daily)
         if h1 or h4 or daily
         else {}
     )

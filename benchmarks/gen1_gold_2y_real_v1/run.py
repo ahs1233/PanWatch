@@ -48,6 +48,7 @@ import httpx
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
 from src.modules.xau.evidence_fusion import build_gen1_evidence_fusion
+from src.modules.xau.market_context import build_market_context
 from src.modules.xau.replay import ReplayEpisode, build_replay_technical_state
 from src.modules.xau.service import build_decision_fusion
 from src.modules.xau.validation import evaluate_gen1_replay
@@ -597,6 +598,27 @@ def run_replay_horizons(
     episodes: dict[int, list[ReplayEpisode]] = {horizon: [] for horizon in horizons}
     last_eval = None
     prefilter = XAUIntradayEngine(require_execution_data=False)
+    context_cache: dict[
+        tuple[datetime | None, datetime | None, datetime | None],
+        dict[str, Any],
+    ] = {}
+
+    def cached_market_context(
+        hourly: list[XAUBar],
+        h4: list[XAUBar],
+        daily: list[XAUBar],
+    ) -> dict[str, Any]:
+        key = (
+            hourly[-1].timestamp if hourly else None,
+            h4[-1].timestamp if h4 else None,
+            daily[-1].timestamp if daily else None,
+        )
+        cached = context_cache.get(key)
+        if cached is not None:
+            return cached
+        value = build_market_context(hourly, h4, daily)
+        context_cache[key] = value
+        return value
 
     for evaluation_time in m1_available:
         if evaluation_time < START or evaluation_time >= END:
@@ -655,6 +677,7 @@ def run_replay_horizons(
             window,
             evaluation_time,
             macro_bias=int(macro.get("bias", 0) or 0),
+            market_context_builder=cached_market_context,
         )
         candidate = str(technical.get("candidate") or "none")
         if technical.get("blocked") or candidate not in {"long_setup", "short_setup"}:
