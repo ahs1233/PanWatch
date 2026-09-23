@@ -154,12 +154,15 @@ def test_reversal_state_survives_engine_recreation_but_expires(runtime):
 
 
 @pytest.mark.parametrize('acquired',[False,True])
-def test_postgres_writer_lock_releases_same_connection_on_failure(monkeypatch, acquired):
+def test_postgres_writer_lock_uses_transaction_scope_and_rolls_back_on_failure(monkeypatch, acquired):
     calls=[]
+    tx_calls=[]
+    class Transaction:
+        def commit(self): tx_calls.append('commit')
+        def rollback(self): tx_calls.append('rollback')
     class Connection:
-        def __enter__(self): return self
-        def __exit__(self,*args): pass
-        def execution_options(self,**kwargs): return self
+        def begin(self): return Transaction()
+        def close(self): calls.append('close')
         def execute(self,stmt):
             calls.append(str(stmt))
             return SimpleNamespace(scalar=lambda:acquired)
@@ -169,8 +172,10 @@ def test_postgres_writer_lock_releases_same_connection_on_failure(monkeypatch, a
         with paper_store.paper_writer_guard() as allowed:
             assert allowed is acquired
             raise RuntimeError('worker failed')
-    assert len(calls)==(2 if acquired else 1)
-    if acquired: assert 'pg_advisory_unlock' in calls[-1]
+    assert any('pg_try_advisory_xact_lock' in call for call in calls)
+    assert not any('pg_advisory_unlock' in call for call in calls)
+    assert tx_calls == ['rollback']
+    assert calls[-1] == 'close'
 
 
 def test_deferred_autopsy_runs_after_protective_commit(runtime):
