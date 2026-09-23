@@ -124,7 +124,14 @@ async def run_gen1_trade_gold_pipeline(
         and int(gold_fusion.get("independent_source_count") or 0) >= 2
         and not technical.get("gold_market_fusion_error")
     )
-    if not gold_fusion_ready:
+    legacy_xaut_ready = bool(
+        xaut
+        and not technical.get("xaut_order_flow_error")
+        and footprint.get("available")
+        and profile.get("status") == "ready"
+        and raw_book
+    )
+    if not gold_fusion_ready and not legacy_xaut_ready:
         missing_layers.append("gold_market_fusion_independent_venues")
         if not xaut or technical.get("xaut_order_flow_error"):
             missing_layers.append("xaut_order_flow")
@@ -157,6 +164,7 @@ async def run_gen1_trade_gold_pipeline(
         ),
         "xaut_ready": bool(xaut) and not technical.get("xaut_order_flow_error"),
         "gold_market_fusion_ready": gold_fusion_ready,
+        "legacy_xaut_fallback_ready": legacy_xaut_ready,
         "gold_market_venue_count": int(gold_fusion.get("venue_count") or 0),
         "gold_market_independent_source_count": int(gold_fusion.get("independent_source_count") or 0),
         "market_agreement_score": gold_fusion.get("market_agreement_score"),

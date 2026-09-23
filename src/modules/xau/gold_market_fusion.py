@@ -752,7 +752,8 @@ def build_gold_market_fusion(
         "evidence_policy": {
             "never_sum_cross_venue_raw_volume": True,
             "venue_volume_remains_venue_scoped": True,
-            "signals_are_liquidity_weighted": True,+            "tokenized_gold_is_not_otc_xauusd": True,
+            "signals_are_liquidity_weighted": True,
+            "tokenized_gold_is_not_otc_xauusd": True,
             "perpetual_gold_is_not_otc_xauusd": True,
             "execution_allowed": False,
         },
