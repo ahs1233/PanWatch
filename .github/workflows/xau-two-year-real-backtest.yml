@@ -1,0 +1,145 @@
+name: XAU Two-Year Real GEN1 Backtest
+
+on:
+  push:
+    branches:
+      - feat/ahmed-toolbox-xau
+    paths:
+      - "src/modules/xau/replay.py"
+      - "benchmarks/xau_two_year_real_v1/**"
+      - ".github/workflows/xau-two-year-real-backtest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acquire:
+    name: Acquire XAUUSD ${{ matrix.month }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        month:
+          - "2024-09"
+          - "2024-10"
+          - "2024-11"
+          - "2024-12"
+          - "2025-01"
+          - "2025-02"
+          - "2025-03"
+          - "2025-04"
+          - "2025-05"
+          - "2025-06"
+          - "2025-07"
+          - "2025-08"
+          - "2025-09"
+          - "2025-10"
+          - "2025-11"
+          - "2025-12"
+          - "2026-01"
+          - "2026-02"
+          - "2026-03"
+          - "2026-04"
+          - "2026-05"
+          - "2026-06"
+          - "2026-07"
+          - "2026-08"
+          - "2026-09"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install acquisition dependency
+        run: python -m pip install --disable-pip-version-check httpx
+
+      - name: Acquire real Dukascopy XAUUSD M1 chunk
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python benchmarks/xau_two_year_real_v1/acquire.py \
+            --month "${{ matrix.month }}" \
+            --global-start "2024-09-23T00:00:00Z" \
+            --global-end "2026-09-23T00:00:00Z" \
+            --workers 6 \
+            --output-dir chunk
+
+      - name: Upload monthly real-data chunk
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xau-two-year-chunk-${{ matrix.month }}
+          path: chunk/*
+          retention-days: 5
+          if-no-files-found: error
+
+  backtest:
+    name: GEN1 two-year walk-forward
+    needs: acquire
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            "httpx>=0.25" \
+            "numpy>=2.0,<2.3" \
+            "pandas>=2.2,<3.0" \
+            "matplotlib>=3.9" \
+            "yfinance>=0.2.54" \
+            "sqlalchemy>=2.0" \
+            "psycopg[binary]>=3.2" \
+            "apscheduler>=3.10" \
+            "pydantic>=2.0" \
+            "pydantic-settings>=2.0" \
+            "pyyaml>=6.0" \
+            "openai>=1.0"
+
+      - name: Download all monthly chunks
+        uses: actions/download-artifact@v4
+        with:
+          pattern: xau-two-year-chunk-*
+          path: dataset
+          merge-multiple: true
+
+      - name: Run real two-year GEN1 walk-forward
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          python benchmarks/xau_two_year_real_v1/run.py \
+            --input-dir dataset \
+            --output-dir results \
+            --start "2024-09-23T00:00:00Z" \
+            --end "2026-09-23T00:00:00Z" \
+            --step-minutes 15 \
+            --horizon-minutes 60 \
+            | tee results-console.json
+
+      - name: Upload complete two-year evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xau-two-year-real-gen1-v1
+          path: |
+            results/**
+            results-console.json
+          retention-days: 30
+          if-no-files-found: warn
