@@ -1221,6 +1221,20 @@ def _record_gen1_live_observation_sync(db, payload: dict) -> dict:
     evidence = payload.get("evidence_fusion") or {}
     fusion = payload.get("fusion") or {}
     memory = payload.get("memory") or {}
+    evidence_score = _number(evidence.get("score"), 0.0) or 0.0
+    evidence_coverage = _number(evidence.get("coverage"), 0.0) or 0.0
+    missing_layers = list(payload.get("missing_layers") or [])
+    shadow_direction = None
+    shadow_reason = None
+    if (
+        decision == "WAIT"
+        and payload.get("pipeline_status") == "ready"
+        and not missing_layers
+        and evidence_coverage >= 0.65
+        and abs(evidence_score) >= 0.18
+    ):
+        shadow_direction = "LONG" if evidence_score > 0 else "SHORT"
+        shadow_reason = "evidence_direction_without_trade_candidate"
     levels = {}
     for distance in (10, 20, 30):
         levels[f"pm{distance}"] = {
@@ -1255,10 +1269,18 @@ def _record_gen1_live_observation_sync(db, payload: dict) -> dict:
             "price_source": reference.get("source") or spot.get("source"),
             "evidence_score": evidence.get("score"),
             "evidence_coverage": evidence.get("coverage"),
+            "shadow_direction": shadow_direction,
+            "shadow_confidence": payload.get("confidence") if shadow_direction else None,
+            "shadow_reason": shadow_reason,
+            "shadow_execution_allowed": False,
+            "shadow_thresholds": {
+                "minimum_abs_evidence_score": 0.18,
+                "minimum_evidence_coverage": 0.65,
+            },
             "confidence_kind": evidence.get("confidence_kind"),
             "calibration": evidence.get("calibration"),
             "evidence_reasons": list(evidence.get("reasons") or []),
-            "missing_layers": list(payload.get("missing_layers") or []),
+            "missing_layers": missing_layers,
             "regime": fusion.get("regime"),
             "meta_decision": fusion.get("meta_decision"),
             "memory_samples": max(
@@ -1334,6 +1356,9 @@ def _update_gen1_live_outcomes(
         decision = str(meta.get("decision") or "").upper()
         if decision not in {"LONG", "SHORT", "WAIT"}:
             decision = "WAIT"
+        shadow_direction = str(meta.get("shadow_direction") or "").upper()
+        if shadow_direction not in {"LONG", "SHORT"}:
+            shadow_direction = None
 
         live_range = deepcopy(meta.get("live_range_outcomes") or {})
         levels = deepcopy(live_range.get("levels") or {})
@@ -1382,6 +1407,13 @@ def _update_gen1_live_outcomes(
                     if decision == "SHORT"
                     else None
                 )
+                shadow_directional_bps = (
+                    raw_return_bps
+                    if shadow_direction == "LONG"
+                    else -raw_return_bps
+                    if shadow_direction == "SHORT"
+                    else None
+                )
                 horizons[key] = {
                     "observed_price": round(float(reference_price), 6),
                     "observed_at": now_utc.replace(tzinfo=timezone.utc).isoformat(),
@@ -1391,6 +1423,16 @@ def _update_gen1_live_outcomes(
                         round(directional_bps, 4) if directional_bps is not None else None
                     ),
                     "positive": directional_bps > 0 if directional_bps is not None else None,
+                    "shadow_directional_return_bps": (
+                        round(shadow_directional_bps, 4)
+                        if shadow_directional_bps is not None
+                        else None
+                    ),
+                    "shadow_positive": (
+                        shadow_directional_bps > 0
+                        if shadow_directional_bps is not None
+                        else None
+                    ),
                     "method": "first_sample_at_or_after_horizon",
                     "reference_source": reference_source,
                 }
