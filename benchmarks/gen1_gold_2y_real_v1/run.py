@@ -771,6 +771,12 @@ def run_replay_horizons(
     replay_started = time.monotonic()
     processed_evaluations = 0
     candidate_count = 0
+    profile_enabled = os.getenv("GEN1_2Y_PROFILE", "0") == "1"
+    profile_seconds: dict[str, float] = defaultdict(float)
+
+    def profile_add(name: str, started: float) -> None:
+        if profile_enabled:
+            profile_seconds[name] += time.perf_counter() - started
     for evaluation_time in m1_available:
         if evaluation_time < START or evaluation_time >= END:
             continue
@@ -785,8 +791,13 @@ def run_replay_horizons(
                 "candidate_count": candidate_count,
                 "elapsed_seconds": round(time.monotonic() - replay_started, 2),
                 "evaluation_time": evaluation_time.isoformat(),
+                "profile_seconds": {
+                    key: round(value, 3)
+                    for key, value in sorted(profile_seconds.items())
+                },
             }), flush=True)
 
+        stage_started = time.perf_counter()
         intraday_window = {
             XAUTimeframe.M1: bars_window(m1, m1_available, evaluation_time, 300),
             XAUTimeframe.M5: bars_window(
@@ -802,6 +813,8 @@ def run_replay_horizons(
                 300,
             ),
         }
+        profile_add("intraday_windows", stage_started)
+        stage_started = time.perf_counter()
         pre = prefilter.analyze(
             intraday_window,
             event_risk=False,
@@ -809,10 +822,12 @@ def run_replay_horizons(
             now=evaluation_time,
             assume_sorted=True,
         )
+        profile_add("prefilter", stage_started)
         if pre.blocked or pre.candidate not in {"long_setup", "short_setup"}:
             continue
         candidate_count += 1
 
+        stage_started = time.perf_counter()
         window = {
             **intraday_window,
             XAUTimeframe.H1: bars_window(
@@ -834,7 +849,11 @@ def run_replay_horizons(
                 1100,
             ),
         }
+        profile_add("candidate_windows", stage_started)
+        stage_started = time.perf_counter()
         macro = macro_provider(evaluation_time)
+        profile_add("macro", stage_started)
+        stage_started = time.perf_counter()
         technical = build_replay_technical_state(
             window,
             evaluation_time,
@@ -842,16 +861,20 @@ def run_replay_horizons(
             market_context_builder=cached_market_context,
             intraday_assessment=pre,
         )
+        profile_add("technical_state", stage_started)
         candidate = str(technical.get("candidate") or "none")
         if technical.get("blocked") or candidate not in {"long_setup", "short_setup"}:
             continue
 
+        stage_started = time.perf_counter()
         cognition = build_cognitive_state(
             technical,
             macro,
             memory=None,
             min_confidence=0.58,
         )
+        profile_add("cognition", stage_started)
+        stage_started = time.perf_counter()
         fusion = build_decision_fusion(
             technical,
             macro,
@@ -859,6 +882,8 @@ def run_replay_horizons(
             min_confidence=0.58,
             as_of=evaluation_time,
         )
+        profile_add("fusion", stage_started)
+        stage_started = time.perf_counter()
         evidence = build_gen1_evidence_fusion(
             technical,
             macro,
@@ -866,6 +891,7 @@ def run_replay_horizons(
             memory=None,
             require_xaut=False,
         )
+        profile_add("evidence", stage_started)
         entry = float(technical["analysis_reference"]["price"])
         side = 1.0 if candidate == "long_setup" else -1.0
         regime = str((cognition.get("regime") or {}).get("label") or "unknown")
@@ -897,6 +923,7 @@ def run_replay_horizons(
             ),
         }
 
+        stage_started = time.perf_counter()
         for horizon_minutes in horizons:
             future = future_close(
                 m1,
@@ -950,6 +977,18 @@ def run_replay_horizons(
                     meta=meta,
                 )
             )
+        profile_add("labeling", stage_started)
+
+    print(json.dumps({
+        "phase": "replay_complete",
+        "processed_evaluations": processed_evaluations,
+        "candidate_count": candidate_count,
+        "elapsed_seconds": round(time.monotonic() - replay_started, 2),
+        "profile_seconds": {
+            key: round(value, 3)
+            for key, value in sorted(profile_seconds.items())
+        },
+    }), flush=True)
     return episodes
 
 
