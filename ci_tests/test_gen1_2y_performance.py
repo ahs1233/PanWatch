@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import gzip
+import json
 import pickle
+
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from benchmarks.gen1_gold_2y_real_v1 import run as bench
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
+from src.platform.marketdata.xau_dukascopy import DukascopyTick
 
 
 UTC = timezone.utc
@@ -214,3 +218,197 @@ def test_download_day_results_retries_transient_day_without_aborting_pool(monkey
     ]
     assert attempts[start.date()] == 2
     assert sum(attempts.values()) == 4
+
+
+
+def test_download_day_results_reuses_existing_days_and_checkpoints_new_days(
+    monkeypatch,
+    tmp_path,
+):
+    start = datetime(2026, 9, 20, tzinfo=UTC)
+    end = datetime(2026, 9, 23, tzinfo=UTC)
+    existing = {
+        "2026-09-20": {
+            "day": "2026-09-20",
+            "status": "no_data",
+            "rows": [],
+            "provenance": bench._provenance(
+                "dukascopy_native_m1_bid_ask_candles",
+                fallback=False,
+            ),
+        },
+    }
+    fetched = []
+
+    def fake_fetch_day(day):
+        fetched.append(day.isoformat())
+        return {
+            "day": day.isoformat(),
+            "status": "no_data",
+            "rows": [],
+            "provenance": bench._provenance(
+                "dukascopy_native_m1_bid_ask_candles",
+                fallback=False,
+            ),
+        }
+
+    monkeypatch.setattr(bench, "WORKERS", 1)
+    monkeypatch.setattr(bench, "fetch_day", fake_fetch_day)
+    results = bench.download_day_results(
+        start,
+        end,
+        existing_results=existing,
+        checkpoint_dir=tmp_path,
+        progress_label="resume-test",
+    )
+
+    assert [row["day"] for row in results] == [
+        "2026-09-20",
+        "2026-09-21",
+        "2026-09-22",
+    ]
+    assert fetched == ["2026-09-21", "2026-09-22"]
+    assert (tmp_path / "2026-09-21.pkl.gz").exists()
+    assert (tmp_path / "2026-09-22.pkl.gz").exists()
+
+
+def test_tick_fallback_builds_m1_bid_ask_rows(monkeypatch):
+    day = datetime(2026, 9, 20, tzinfo=UTC).date()
+    base = datetime(2026, 9, 20, 0, 0, tzinfo=UTC)
+
+    def fake_fetch_bytes(url, retries=5):
+        return "data", b"payload"
+
+    def fake_decode(payload, hour):
+        return (
+            DukascopyTick(
+                timestamp=hour + timedelta(seconds=10),
+                bid=2600.0,
+                ask=2600.4,
+                bid_volume=1.0,
+                ask_volume=2.0,
+            ),
+            DukascopyTick(
+                timestamp=hour + timedelta(seconds=50),
+                bid=2600.2,
+                ask=2600.6,
+                bid_volume=2.0,
+                ask_volume=3.0,
+            ),
+        )
+
+    monkeypatch.setattr(bench, "fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr(bench, "decode_dukascopy_xau_bi5", fake_decode)
+    result = bench.fetch_day_tick_fallback(day)
+
+    assert result["status"] == "data"
+    assert result["fallback_attempted_hours"] == 24
+    assert result["provenance"]["used_fallback"] is True
+    assert result["provenance"]["acquisition"] == "dukascopy_tick_derived_m1"
+    assert len(result["rows"]) == 24
+    first = result["rows"][0]
+    assert first[0] == base
+    assert first[6] == 2600.2
+    assert first[7] == 2600.6
+
+
+def test_save_dataset_shard_persists_partial_payload_before_raising(
+    monkeypatch,
+    tmp_path,
+):
+    start = datetime(2026, 9, 20, tzinfo=UTC)
+    end = datetime(2026, 9, 22, tzinfo=UTC)
+    partial = [
+        {
+            "day": "2026-09-20",
+            "status": "no_data",
+            "rows": [],
+            "provenance": bench._provenance(
+                "dukascopy_native_m1_bid_ask_candles",
+                fallback=False,
+            ),
+        },
+    ]
+
+    def fail_download(*args, **kwargs):
+        raise bench.IncompleteDatasetShard(
+            "one day still missing",
+            partial_results=partial,
+            failed_days={"2026-09-21": "ConnectTimeout"},
+        )
+
+    monkeypatch.setattr(bench, "download_day_results", fail_download)
+    output = tmp_path / "m01.pkl.gz"
+
+    with pytest.raises(bench.IncompleteDatasetShard):
+        bench.save_dataset_shard(start, end, output)
+
+    assert output.exists()
+    manifest_path = tmp_path / "m01.manifest.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["complete"] is False
+    assert manifest["result_day_count"] == 1
+    assert manifest["failed_day_count"] == 1
+    with gzip.open(output, "rb") as fh:
+        payload = pickle.load(fh)
+    assert payload["format"] == "gen1_gold_2y_day_results_v2"
+    assert payload["complete"] is False
+    assert payload["results"][0]["day"] == "2026-09-20"
+
+
+def test_dataset_manifest_detects_checksum_tampering(tmp_path):
+    start = datetime(2026, 9, 20, tzinfo=UTC)
+    end = datetime(2026, 9, 22, tzinfo=UTC)
+    shard = tmp_path / "m01.pkl.gz"
+    results = []
+    for offset in range(2):
+        day = (start + timedelta(days=offset)).date()
+        ts = datetime(day.year, day.month, day.day, tzinfo=UTC)
+        results.append({
+            "day": day.isoformat(),
+            "status": "data",
+            "rows": [
+                (ts, 2600.0, 2601.0, 2599.0, 2600.2, 10.0, 2600.0, 2600.4),
+            ],
+            "bid_rows": 1,
+            "ask_rows": 1,
+            "matched_rows": 1,
+            "crossed_rows": 0,
+            "provenance": bench._provenance(
+                "dukascopy_native_m1_bid_ask_candles",
+                fallback=False,
+            ),
+        })
+    bench._write_shard_payload(
+        shard,
+        start=start,
+        end=end,
+        results=results,
+        failed_days={},
+    )
+    manifest_path = tmp_path / "dataset-manifest.json"
+    manifest = bench.build_dataset_manifest(
+        str(tmp_path / "m*.pkl.gz"),
+        start,
+        end,
+        manifest_path,
+    )
+    assert manifest["complete"] is True
+    assert manifest["shard_count"] == 1
+    assert manifest["day_count"] == 2
+    bench.validate_dataset_manifest(
+        str(tmp_path / "m*.pkl.gz"),
+        manifest_path,
+        start,
+        end,
+    )
+
+    shard.write_bytes(shard.read_bytes() + b"tamper")
+    with pytest.raises(bench.FetchError, match="checksum"):
+        bench.validate_dataset_manifest(
+            str(tmp_path / "m*.pkl.gz"),
+            manifest_path,
+            start,
+            end,
+        )
