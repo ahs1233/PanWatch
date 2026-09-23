@@ -36,7 +36,7 @@ from src.modules.xau.paper_store import (
     open_xau_replay_session,
     paper_store_is_external,
     replay_store_is_external,
-    paper_writer_guard,
+    acquire_paper_writer_transaction,
 )
 from src.platform.persistence.models import (
     XAUPaperAccount,
@@ -2403,6 +2403,19 @@ class XAUPaperTradingEngine:
 
         db = open_xau_paper_session()
         try:
+            acquired, lock_ms = acquire_paper_writer_transaction(
+                db,
+                timeout_seconds=0.75,
+            )
+            if not acquired:
+                db.rollback()
+                return {
+                    "status": "busy",
+                    "reason": "paper_writer_advisory_lock_busy",
+                    "paper_writer_busy_reason": "paper_writer_advisory_lock_busy",
+                    "lock_acquire_ms": lock_ms,
+                    "execution_allowed": False,
+                }
             account = self._active_account(db)
             memory = self._memory_snapshot(db, technical, macro) if account else {}
             fusion = build_decision_fusion(
@@ -2529,22 +2542,14 @@ class XAUPaperTradingEngine:
 
     def _protect_serialized(self, spot: dict, now: datetime | None) -> dict:
         if not _paper_scan_lock.acquire(blocking=False):
-            return {"status": "busy", "execution_allowed": False}
+            return {
+                "status": "busy",
+                "reason": "paper_scan_in_progress",
+                "paper_writer_busy_reason": "paper_scan_in_progress",
+                "execution_allowed": False,
+            }
         try:
-            lock_started = time.monotonic()
-            with paper_writer_guard(timeout_seconds=0.75) as acquired:
-                lock_ms = round((time.monotonic() - lock_started) * 1000.0, 2)
-                if not acquired:
-                    return {
-                        "status": "busy",
-                        "reason": "paper_writer_advisory_lock_busy",
-                        "paper_writer_busy_reason": "paper_writer_advisory_lock_busy",
-                        "lock_acquire_ms": lock_ms,
-                        "execution_allowed": False,
-                    }
-                result = self._protect_sync(spot, now)
-                result["lock_acquire_ms"] = lock_ms
-                return result
+            return self._protect_sync(spot, now)
         finally:
             _paper_scan_lock.release()
 
@@ -2583,7 +2588,7 @@ class XAUPaperTradingEngine:
                     "week_key": account.week_key if account else None,
                     "account": _serialize_account(account), "position": _serialize_position(position),
                     "closed_trade": _serialize_trade(trade) if trade else None,
-                    "opened": False, "execution_allowed": False}
+                    "opened": False, "lock_acquire_ms": lock_ms, "execution_allowed": False}
         except Exception:
             db.rollback()
             self._invalidate_memory()
@@ -2594,22 +2599,14 @@ class XAUPaperTradingEngine:
 
     def _scan_serialized(self, technical: dict, macro: dict, now: datetime | None) -> dict:
         if not _paper_scan_lock.acquire(blocking=False):
-            return {"status": "busy", "reason": "paper_scan_in_progress", "execution_allowed": False}
+            return {
+                "status": "busy",
+                "reason": "paper_scan_in_progress",
+                "paper_writer_busy_reason": "paper_scan_in_progress",
+                "execution_allowed": False,
+            }
         try:
-            lock_started = time.monotonic()
-            with paper_writer_guard(timeout_seconds=0.75) as acquired:
-                lock_ms = round((time.monotonic() - lock_started) * 1000.0, 2)
-                if not acquired:
-                    return {
-                        "status": "busy",
-                        "reason": "paper_writer_advisory_lock_busy",
-                        "paper_writer_busy_reason": "paper_writer_advisory_lock_busy",
-                        "lock_acquire_ms": lock_ms,
-                        "execution_allowed": False,
-                    }
-                result = self._scan_sync(technical, macro, now)
-                result["lock_acquire_ms"] = lock_ms
-                return result
+            return self._scan_sync(technical, macro, now)
         finally:
             _paper_scan_lock.release()
 
@@ -2620,7 +2617,25 @@ class XAUPaperTradingEngine:
 
         db = open_xau_paper_session()
         try:
-            account = self._ensure_week(db, spot, now=now)
+            # Keep week/account rollover under a short critical transaction.
+            ensured, ensure_lock_ms = acquire_paper_writer_transaction(
+                db,
+                timeout_seconds=0.75,
+            )
+            if not ensured:
+                db.rollback()
+                return {
+                    "status": "busy",
+                    "reason": "paper_writer_advisory_lock_busy",
+                    "paper_writer_busy_reason": "paper_writer_advisory_lock_busy",
+                    "lock_acquire_ms": ensure_lock_ms,
+                    "execution_allowed": False,
+                }
+            self._ensure_week(db, spot, now=now)
+            db.commit()
+
+            # Research-only maintenance is deliberately outside the paper-writer
+            # critical transaction. These writes cannot open/close positions.
             self._backfill_protective_autopsies(db)
             analysis_reference = technical.get("analysis_reference") or {}
             shadow_updates = self._update_shadow_outcomes(
@@ -2642,6 +2657,29 @@ class XAUPaperTradingEngine:
                 memory=memory,
                 min_confidence=float(self.settings.xau_cognition_min_confidence),
             )
+            db.commit()
+
+            # Reacquire only for the critical account/position/trade mutation.
+            acquired, critical_lock_ms = acquire_paper_writer_transaction(
+                db,
+                timeout_seconds=0.75,
+            )
+            lock_acquire_ms = round(ensure_lock_ms + critical_lock_ms, 2)
+            if not acquired:
+                db.rollback()
+                return {
+                    "status": "busy",
+                    "reason": "paper_writer_advisory_lock_busy",
+                    "paper_writer_busy_reason": "paper_writer_advisory_lock_busy",
+                    "lock_acquire_ms": lock_acquire_ms,
+                    "fusion": fusion,
+                    "memory": memory,
+                    "shadow_updates": shadow_updates,
+                    "gen1_live_outcome_updates": gen1_live_updates,
+                    "execution_allowed": False,
+                }
+
+            account = self._ensure_week(db, spot, now=now)
             position = self._open_position(db, account.id)
             closed_trade = None
 
@@ -2788,6 +2826,7 @@ class XAUPaperTradingEngine:
                 "shadow_updates": shadow_updates,
                 "gen1_live_outcome_updates": gen1_live_updates,
                 "position_management": position_management,
+                "lock_acquire_ms": lock_acquire_ms,
                 "execution_allowed": False,
             }
         except Exception:
