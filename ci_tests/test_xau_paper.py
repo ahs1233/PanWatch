@@ -1639,3 +1639,122 @@ def test_gen1_wait_observation_can_record_research_only_shadow_direction():
         assert horizon["shadow_positive"] is True
     finally:
         db.close()
+
+
+
+def test_gen1_live_observation_atomic_dedupe_under_concurrency(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from src.platform.persistence.models import Base, XAUPaperAccount, XAUPaperSignal
+
+    sql_engine = create_engine(
+        f"sqlite:///{tmp_path / 'gen1-concurrency.db'}",
+        connect_args={"check_same_thread": False, "timeout": 15},
+    )
+    Base.metadata.create_all(
+        bind=sql_engine,
+        tables=[XAUPaperAccount.__table__, XAUPaperSignal.__table__],
+    )
+    Session = sessionmaker(bind=sql_engine, expire_on_commit=False)
+    seed = Session()
+    now = datetime(2026, 9, 23, 10, 0)
+    seed.add(XAUPaperAccount(
+        week_key="2026-W39", initial_capital=10000.0, realized_pnl=0.0,
+        current_equity=10000.0, peak_equity=10000.0, max_drawdown_pct=0.0,
+        total_trades=0, winning_trades=0, losing_trades=0, status="active",
+        started_at=now,
+    ))
+    seed.commit()
+    seed.close()
+
+    payload = {
+        "contract": "gen1-trade-gold-v2",
+        "strategy_revision": "atomic-race-test",
+        "decision": "WAIT",
+        "confidence": 0.5,
+        "technical": {
+            "analysis_reference": {
+                "price": 4500.0,
+                "source": "test",
+                "observed_at": now.replace(tzinfo=timezone.utc).isoformat(),
+            },
+            "indicative_spot": {"price": 4500.0},
+        },
+        "fusion": {"state": "no_setup"},
+        "evidence_fusion": {"score": 0.0, "coverage": 1.0, "reasons": []},
+        "memory": {},
+        "missing_layers": [],
+    }
+    barrier = threading.Barrier(8)
+
+    def worker():
+        db = Session()
+        try:
+            barrier.wait(timeout=5)
+            result = _record_gen1_live_observation_sync(db, payload)
+            db.commit()
+            return result["status"]
+        finally:
+            db.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            statuses = list(pool.map(lambda _: worker(), range(8)))
+        verify = Session()
+        try:
+            rows = verify.query(XAUPaperSignal).filter(
+                XAUPaperSignal.rejection_reason == GEN1_LIVE_OBSERVATION_REASON
+            ).all()
+            assert len(rows) == 1
+        finally:
+            verify.close()
+        assert statuses.count("recorded") == 1
+        assert statuses.count("deduplicated") == 7
+    finally:
+        sql_engine.dispose()
+
+
+def test_gen1_live_outcomes_do_not_rewrite_metadata_without_transition():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from src.platform.persistence.models import Base, XAUPaperAccount, XAUPaperSignal
+
+    sql_engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        bind=sql_engine,
+        tables=[XAUPaperAccount.__table__, XAUPaperSignal.__table__],
+    )
+    Session = sessionmaker(bind=sql_engine)
+    db = Session()
+    try:
+        now = datetime(2026, 9, 23, 10, 0)
+        db.add(XAUPaperAccount(
+            week_key="2026-W39", initial_capital=10000.0, realized_pnl=0.0,
+            current_equity=10000.0, peak_equity=10000.0, max_drawdown_pct=0.0,
+            total_trades=0, winning_trades=0, losing_trades=0, status="active",
+            started_at=now,
+        ))
+        db.commit()
+        payload = {
+            "strategy_revision": "no-write-test", "decision": "WAIT", "confidence": 0.5,
+            "technical": {"analysis_reference": {
+                "price": 4500.0, "source": "test",
+                "observed_at": now.replace(tzinfo=timezone.utc).isoformat(),
+            }},
+            "fusion": {}, "evidence_fusion": {"score": 0.0, "coverage": 1.0},
+            "memory": {}, "missing_layers": [],
+        }
+        _record_gen1_live_observation_sync(db, payload)
+        db.commit()
+        row = db.query(XAUPaperSignal).one()
+        before = dict(row.meta or {})
+        assert _update_gen1_live_outcomes(
+            db, reference_price=4501.0, now_utc=now + timedelta(minutes=10),
+            reference_source="test",
+        ) == 0
+        db.commit()
+        db.refresh(row)
+        assert row.meta == before
+    finally:
+        db.close()
