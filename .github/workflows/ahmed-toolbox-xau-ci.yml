@@ -72,6 +72,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The next step compares HEAD^..HEAD. actions/checkout defaults to a
+          # depth-1 shallow clone, where HEAD^ is unavailable and git exits 128.
+          fetch-depth: 2
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
