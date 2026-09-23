@@ -1758,3 +1758,15 @@ def test_gen1_live_outcomes_do_not_rewrite_metadata_without_transition():
         assert row.meta == before
     finally:
         db.close()
+
+
+def test_paper_writer_guard_local_is_released_after_context(monkeypatch):
+    import src.modules.xau.paper_store as store
+
+    monkeypatch.setattr(store, "_external_engine", None)
+    with store.paper_writer_guard(timeout_seconds=0.0) as first:
+        assert first is True
+        with store.paper_writer_guard(timeout_seconds=0.0) as nested:
+            assert nested is False
+    with store.paper_writer_guard(timeout_seconds=0.0) as after:
+        assert after is True
