@@ -1158,6 +1158,245 @@ def _serialize_signal(signal: XAUPaperSignal) -> dict:
     }
 
 
+GEN1_LIVE_OBSERVATION_REASON = "gen1_live_observation"
+GEN1_LIVE_MAX_TRACK_MINUTES = 300
+
+
+def _gen1_observed_at(payload: dict) -> datetime:
+    technical = payload.get("technical") or {}
+    value = (
+        (technical.get("analysis_reference") or {}).get("observed_at")
+        or technical.get("observed_at")
+    )
+    if value:
+        text = str(value).replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(text)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _record_gen1_live_observation_sync(db, payload: dict) -> dict:
+    """Persist one full live GEN1 observation without changing paper positions."""
+    decision = str(payload.get("decision") or "WAIT").upper()
+    if decision not in {"LONG", "SHORT", "WAIT"}:
+        decision = "WAIT"
+    technical = payload.get("technical") or {}
+    reference = technical.get("analysis_reference") or {}
+    spot = technical.get("indicative_spot") or {}
+    entry_price = _number(reference.get("price"), _number(spot.get("price")))
+    if entry_price is None:
+        return {"status": "skipped", "reason": "reference_price_unavailable"}
+
+    account = (
+        db.query(XAUPaperAccount)
+        .filter(XAUPaperAccount.status == "active")
+        .order_by(XAUPaperAccount.id.desc())
+        .first()
+    )
+    if account is None:
+        return {"status": "skipped", "reason": "paper_account_unavailable"}
+
+    observed = _gen1_observed_at(payload)
+    minute_bucket = int(observed.timestamp() // 60)
+    setup_key = f"gen1live:{minute_bucket}:{decision.lower()}"
+    existing = (
+        db.query(XAUPaperSignal)
+        .filter(XAUPaperSignal.setup_key == setup_key)
+        .first()
+    )
+    if existing is not None:
+        return {
+            "status": "deduplicated",
+            "signal_id": existing.id,
+            "setup_key": setup_key,
+        }
+
+    evidence = payload.get("evidence_fusion") or {}
+    fusion = payload.get("fusion") or {}
+    memory = payload.get("memory") or {}
+    levels = {}
+    for distance in (10, 20, 30):
+        levels[f"pm{distance}"] = {
+            "distance_usd": distance,
+            "up_level": round(float(entry_price) + distance, 4),
+            "down_level": round(float(entry_price) - distance, 4),
+            "first_hit": "none",
+            "first_observed_hit_at": None,
+        }
+
+    row = XAUPaperSignal(
+        account_id=account.id,
+        setup_key=setup_key,
+        candidate=f"gen1_live_{decision.lower()}",
+        fusion_state=str(fusion.get("state") or ""),
+        macro_relation=str(fusion.get("macro_relation") or ""),
+        event_risk=bool(fusion.get("event_risk")),
+        price=float(entry_price),
+        accepted=False,
+        rejection_reason=GEN1_LIVE_OBSERVATION_REASON,
+        observed_at=observed.replace(tzinfo=None),
+        meta={
+            "contract": payload.get("contract"),
+            "decision": decision,
+            "decision_confidence": payload.get("confidence"),
+            "entry_price": round(float(entry_price), 6),
+            "price_source": reference.get("source") or spot.get("source"),
+            "evidence_score": evidence.get("score"),
+            "evidence_coverage": evidence.get("coverage"),
+            "confidence_kind": evidence.get("confidence_kind"),
+            "calibration": evidence.get("calibration"),
+            "evidence_reasons": list(evidence.get("reasons") or []),
+            "missing_layers": list(payload.get("missing_layers") or []),
+            "memory_samples": max(
+                int(memory.get("similar_samples") or 0),
+                int(memory.get("calibration_sample_count") or 0),
+                int(memory.get("trade_count") or 0),
+            ),
+            "live_range_outcomes": {
+                "method": "sampled_reference_first_touch",
+                "exact_intrabar_order_known": False,
+                "levels": levels,
+                "max_up_usd": 0.0,
+                "max_down_usd": 0.0,
+            },
+            "horizon_outcomes": {},
+            "last_observed_price": round(float(entry_price), 6),
+            "last_observed_at": observed.isoformat(),
+            "research_only": True,
+            "execution_allowed": False,
+        },
+    )
+    db.add(row)
+    db.flush()
+    return {"status": "recorded", "signal_id": row.id, "setup_key": setup_key}
+
+
+def record_gen1_live_observation(payload: dict) -> dict:
+    """Best-effort durable ledger entry for the complete live GEN1 pipeline."""
+    with paper_writer_guard() as acquired:
+        if not acquired:
+            return {"status": "busy", "reason": "paper_writer_busy"}
+        db = open_xau_paper_session()
+        try:
+            result = _record_gen1_live_observation_sync(db, payload)
+            db.commit()
+            return result
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            logger.warning("[GEN1 live ledger] record failed type=%s", type(exc).__name__)
+            return {"status": "error", "error": type(exc).__name__}
+        finally:
+            db.close()
+
+
+def _update_gen1_live_outcomes(
+    db,
+    *,
+    reference_price: float | None,
+    now_utc: datetime,
+    reference_source: str,
+) -> int:
+    """Update sampled first-touch + 60m/240m outcomes for live GEN1 observations."""
+    if reference_price is None or reference_price <= 0:
+        return 0
+    cutoff = now_utc - timedelta(minutes=GEN1_LIVE_MAX_TRACK_MINUTES)
+    rows = (
+        db.query(XAUPaperSignal)
+        .filter(
+            XAUPaperSignal.rejection_reason == GEN1_LIVE_OBSERVATION_REASON,
+            XAUPaperSignal.observed_at >= cutoff,
+        )
+        .order_by(XAUPaperSignal.observed_at.asc())
+        .all()
+    )
+    updates = 0
+    for row in rows:
+        meta = deepcopy(row.meta or {})
+        entry = _number(meta.get("entry_price"), _number(row.price))
+        if entry is None or entry <= 0:
+            continue
+        observed = row.observed_at or now_utc
+        age_minutes = max(0.0, (now_utc - observed).total_seconds() / 60.0)
+        decision = str(meta.get("decision") or "").upper()
+        if decision not in {"LONG", "SHORT", "WAIT"}:
+            decision = "WAIT"
+
+        live_range = deepcopy(meta.get("live_range_outcomes") or {})
+        levels = deepcopy(live_range.get("levels") or {})
+        changed = False
+        live_range["method"] = "sampled_reference_first_touch"
+        live_range["exact_intrabar_order_known"] = False
+        live_range["max_up_usd"] = round(
+            max(_number(live_range.get("max_up_usd"), 0.0) or 0.0, float(reference_price) - entry),
+            4,
+        )
+        live_range["max_down_usd"] = round(
+            max(_number(live_range.get("max_down_usd"), 0.0) or 0.0, entry - float(reference_price)),
+            4,
+        )
+
+        for distance in (10, 20, 30):
+            key = f"pm{distance}"
+            level = deepcopy(levels.get(key) or {
+                "distance_usd": distance,
+                "up_level": round(entry + distance, 4),
+                "down_level": round(entry - distance, 4),
+                "first_hit": "none",
+                "first_observed_hit_at": None,
+            })
+            if str(level.get("first_hit") or "none") == "none":
+                if float(reference_price) >= entry + distance:
+                    level["first_hit"] = "up"
+                    level["first_observed_hit_at"] = now_utc.replace(tzinfo=timezone.utc).isoformat()
+                    changed = True
+                elif float(reference_price) <= entry - distance:
+                    level["first_hit"] = "down"
+                    level["first_observed_hit_at"] = now_utc.replace(tzinfo=timezone.utc).isoformat()
+                    changed = True
+            levels[key] = level
+        live_range["levels"] = levels
+
+        horizons = deepcopy(meta.get("horizon_outcomes") or {})
+        for horizon in (60, 240):
+            key = f"{horizon}m"
+            if age_minutes >= horizon and key not in horizons:
+                raw_return_bps = ((float(reference_price) - entry) / entry) * 10_000.0
+                directional_bps = (
+                    raw_return_bps
+                    if decision == "LONG"
+                    else -raw_return_bps
+                    if decision == "SHORT"
+                    else None
+                )
+                horizons[key] = {
+                    "observed_price": round(float(reference_price), 6),
+                    "observed_at": now_utc.replace(tzinfo=timezone.utc).isoformat(),
+                    "age_minutes": round(age_minutes, 2),
+                    "raw_return_bps": round(raw_return_bps, 4),
+                    "directional_return_bps": (
+                        round(directional_bps, 4) if directional_bps is not None else None
+                    ),
+                    "positive": directional_bps > 0 if directional_bps is not None else None,
+                    "method": "first_sample_at_or_after_horizon",
+                    "reference_source": reference_source,
+                }
+                changed = True
+
+        meta["live_range_outcomes"] = live_range
+        meta["horizon_outcomes"] = horizons
+        meta["last_observed_price"] = round(float(reference_price), 6)
+        meta["last_observed_at"] = now_utc.replace(tzinfo=timezone.utc).isoformat()
+        meta["last_observation_age_minutes"] = round(age_minutes, 2)
+        row.meta = meta
+        updates += 1 if changed else 0
+    return updates
+
+
 class XAUPaperTradingEngine:
     """Single-position, weekly-reset XAU paper league."""
 
@@ -2281,6 +2520,12 @@ class XAUPaperTradingEngine:
                 now_utc=now_utc,
                 reference_source=str(analysis_reference.get("source") or ""),
             )
+            gen1_live_updates = _update_gen1_live_outcomes(
+                db,
+                reference_price=_number(analysis_reference.get("price")),
+                now_utc=now_utc,
+                reference_source=str(analysis_reference.get("source") or ""),
+            )
             memory = self._memory_snapshot(db, technical, macro)
             fusion = build_decision_fusion(
                 technical,
@@ -2432,6 +2677,7 @@ class XAUPaperTradingEngine:
                 "fusion": fusion,
                 "memory": memory,
                 "shadow_updates": shadow_updates,
+                "gen1_live_outcome_updates": gen1_live_updates,
                 "position_management": position_management,
                 "execution_allowed": False,
             }

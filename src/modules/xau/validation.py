@@ -195,8 +195,109 @@ def load_gen1_validation_summary(*, limit:int=2000)->dict[str,Any]:
             payload=dict((signal.meta or {}).get("replay_episode") or {})
             if not payload:
                 continue
-            payload["meta"]=dict(signal.meta or {})
+            episode_meta=dict(payload.get("meta") or {})
+            episode_meta["storage_mode"]="paper_signal_compat"
+            payload["meta"]=episode_meta
             episodes.append(payload)
         return evaluate_gen1_replay(episodes)
+    finally:
+        db.close()
+
+
+
+def evaluate_gen1_live_observations(signals: Iterable[Any]) -> dict[str, Any]:
+    """Evaluate the complete live pipeline from sampled outcome observations."""
+    rows=list(signals)
+    decisions={"LONG":0,"SHORT":0,"WAIT":0,"UNKNOWN":0}
+    completed=[]
+    predictions=[]
+    ranges={10:{"favorable_first":0,"adverse_first":0,"unresolved":0},
+            20:{"favorable_first":0,"adverse_first":0,"unresolved":0},
+            30:{"favorable_first":0,"adverse_first":0,"unresolved":0}}
+    for row in rows:
+        meta=_meta(row)
+        decision=str(meta.get("decision") or "UNKNOWN").upper()
+        if decision not in decisions:
+            decision="UNKNOWN"
+        decisions[decision]+=1
+        if decision in {"LONG","SHORT"}:
+            horizon=(meta.get("horizon_outcomes") or {}).get("60m") or {}
+            directional=_number(horizon.get("directional_return_bps"))
+            confidence=_number(meta.get("decision_confidence"))
+            if directional is not None:
+                completed.append(float(directional))
+                if confidence is not None:
+                    predictions.append((float(confidence),1 if directional>0 else 0))
+
+            levels=(meta.get("live_range_outcomes") or {}).get("levels") or {}
+            for distance in (10,20,30):
+                first=str((levels.get(f"pm{distance}") or {}).get("first_hit") or "none")
+                favorable="up" if decision=="LONG" else "down"
+                adverse="down" if decision=="LONG" else "up"
+                if first==favorable:
+                    ranges[distance]["favorable_first"]+=1
+                elif first==adverse:
+                    ranges[distance]["adverse_first"]+=1
+                else:
+                    ranges[distance]["unresolved"]+=1
+
+    positive=sum(1 for value in completed if value>0)
+    rate=positive/len(completed) if completed else None
+    avg=sum(completed)/len(completed) if completed else None
+    calibration=_calibration(predictions)
+    range_summary={}
+    for distance,bucket in ranges.items():
+        resolved=bucket["favorable_first"]+bucket["adverse_first"]
+        range_summary[f"pm{distance}"]={
+            **bucket,
+            "resolved_first_touch_count":resolved,
+            "favorable_first_rate":round(bucket["favorable_first"]/resolved,4) if resolved else None,
+            "method":"sampled_reference_first_touch",
+            "exact_intrabar_order_known":False,
+        }
+
+    enough=len(completed)>=100
+    exploratory=bool(
+        enough and rate is not None and rate>=0.55 and avg is not None and avg>0
+        and calibration["brier_score"] is not None and calibration["brier_score"]<0.25
+    )
+    return {
+        "version":"gen1-live-validation-v1",
+        "observation_count":len(rows),
+        "decision_counts":decisions,
+        "completed_60m_directional_count":len(completed),
+        "directional_positive_rate_60m":round(rate,4) if rate is not None else None,
+        "average_directional_return_bps_60m":round(avg,4) if avg is not None else None,
+        "calibration":calibration,
+        "range_outcomes":range_summary,
+        "validation_status":(
+            "exploratory_live_edge_candidate_requires_out_of_sample_confirmation"
+            if exploratory else
+            "insufficient_completed_live_sample"
+            if not enough else
+            "no_exploratory_live_edge_detected"
+        ),
+        "exploratory_edge_candidate":exploratory,
+        "edge_proven":False,
+        "full_live_pipeline_including_xaut":True,
+        "first_touch_precision":"sampled_not_intrabar_exact",
+        "limitations":[
+            "First-touch ordering is based on scheduler observations, not tick-perfect intrabar reconstruction.",
+            "60m outcomes use the first observed reference price at or after the horizon.",
+            "An exploratory positive result is not proof of a persistent trading edge.",
+        ],
+        "execution_allowed":False,
+    }
+
+
+def load_gen1_live_validation_summary(*, limit:int=2000)->dict[str,Any]:
+    limit=max(10,min(int(limit),10000))
+    db=open_xau_paper_session()
+    try:
+        rows=(db.query(XAUPaperSignal)
+              .filter(XAUPaperSignal.rejection_reason=="gen1_live_observation")
+              .order_by(XAUPaperSignal.observed_at.desc(),XAUPaperSignal.id.desc())
+              .limit(limit).all())
+        return evaluate_gen1_live_observations(rows)
     finally:
         db.close()

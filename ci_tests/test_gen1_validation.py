@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from src.modules.xau.validation import evaluate_gen1_replay
+from src.modules.xau.validation import evaluate_gen1_live_observations, evaluate_gen1_replay
 
 
 def _episode(decision, confidence, directional_bps, first="up"):
@@ -45,3 +45,37 @@ def test_validation_requires_large_sample_before_edge_candidate_label():
     assert result["validation_status"] == "insufficient_directional_sample"
     assert result["exploratory_edge_candidate"] is False
     assert result["edge_proven"] is False
+
+
+
+def test_live_validation_uses_full_pipeline_observations_and_sampled_first_touch():
+    rows = [
+        SimpleNamespace(meta={
+            "decision": "LONG",
+            "decision_confidence": 0.7,
+            "horizon_outcomes": {"60m": {"directional_return_bps": 10.0}},
+            "live_range_outcomes": {"levels": {
+                "pm10": {"first_hit": "up"},
+                "pm20": {"first_hit": "none"},
+                "pm30": {"first_hit": "none"},
+            }},
+        }),
+        SimpleNamespace(meta={
+            "decision": "SHORT",
+            "decision_confidence": 0.65,
+            "horizon_outcomes": {"60m": {"directional_return_bps": -5.0}},
+            "live_range_outcomes": {"levels": {
+                "pm10": {"first_hit": "up"},
+                "pm20": {"first_hit": "none"},
+                "pm30": {"first_hit": "none"},
+            }},
+        }),
+    ]
+    result = evaluate_gen1_live_observations(rows)
+    assert result["full_live_pipeline_including_xaut"] is True
+    assert result["completed_60m_directional_count"] == 2
+    assert result["directional_positive_rate_60m"] == 0.5
+    assert result["range_outcomes"]["pm10"]["favorable_first"] == 1
+    assert result["range_outcomes"]["pm10"]["adverse_first"] == 1
+    assert result["edge_proven"] is False
+    assert result["first_touch_precision"] == "sampled_not_intrabar_exact"

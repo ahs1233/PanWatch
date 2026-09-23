@@ -13,7 +13,7 @@ import asyncio
 from typing import Any
 
 from src.modules.xau.evidence_fusion import build_gen1_evidence_fusion
-from src.modules.xau.paper import load_gen1_memory_snapshot
+from src.modules.xau.paper import load_gen1_memory_snapshot, record_gen1_live_observation
 from src.modules.xau.service import build_decision_fusion, get_macro_context, get_xau_snapshot
 
 
@@ -151,7 +151,7 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
     }
     pipeline_status = "ready" if not missing_layers and not stage_errors else "degraded"
 
-    return {
+    result = {
         "contract": "gen1-trade-gold-v2",
         "trigger": "Gen1 trade gold",
         "pipeline_order": ["ahmed_toolbox", "panwatch", "gen1"],
@@ -177,3 +177,6 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
             "execution_allowed": False,
         },
     }
+    observation = await asyncio.to_thread(record_gen1_live_observation, result)
+    result["live_observation"] = observation
+    return result

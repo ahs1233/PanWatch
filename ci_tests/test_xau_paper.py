@@ -1486,3 +1486,69 @@ def test_calibration_metrics_expose_empirical_bins_for_gen1_shrinkage():
     high = metrics["calibration_bins"][3]
     assert high["count"] == 14
     assert high["observed_rate"] == pytest.approx(10 / 14, abs=1e-4)
+
+
+
+def test_gen1_live_observation_updates_sampled_ranges_and_60m_outcome():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[XAUPaperAccount.__table__, XAUPaperSignal.__table__],
+    )
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        now = datetime(2026, 9, 23, 10, 0)
+        account = XAUPaperAccount(
+            week_key="2026-W39",
+            initial_capital=10000.0,
+            realized_pnl=0.0,
+            current_equity=10000.0,
+            peak_equity=10000.0,
+            max_drawdown_pct=0.0,
+            total_trades=0,
+            winning_trades=0,
+            losing_trades=0,
+            status="active",
+            started_at=now,
+        )
+        db.add(account)
+        db.commit()
+        payload = {
+            "contract": "gen1-trade-gold-v2",
+            "decision": "LONG",
+            "confidence": 0.72,
+            "technical": {
+                "analysis_reference": {
+                    "price": 4500.0,
+                    "source": "test",
+                    "observed_at": now.replace(tzinfo=timezone.utc).isoformat(),
+                },
+                "indicative_spot": {"price": 4500.0},
+            },
+            "fusion": {"state": "setup_macro_support", "macro_relation": "support"},
+            "evidence_fusion": {"score": 0.3, "coverage": 0.9, "reasons": []},
+            "memory": {},
+            "missing_layers": [],
+        }
+        recorded = _record_gen1_live_observation_sync(db, payload)
+        db.commit()
+        assert recorded["status"] == "recorded"
+
+        updated = _update_gen1_live_outcomes(
+            db,
+            reference_price=4512.0,
+            now_utc=now + timedelta(minutes=61),
+            reference_source="test",
+        )
+        db.commit()
+        assert updated == 1
+        row = db.query(XAUPaperSignal).filter(
+            XAUPaperSignal.rejection_reason == GEN1_LIVE_OBSERVATION_REASON
+        ).one()
+        meta = row.meta or {}
+        assert meta["live_range_outcomes"]["levels"]["pm10"]["first_hit"] == "up"
+        assert meta["horizon_outcomes"]["60m"]["directional_return_bps"] > 0
+        assert meta["horizon_outcomes"]["60m"]["method"] == "first_sample_at_or_after_horizon"
+    finally:
+        db.close()

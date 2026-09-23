@@ -11,6 +11,11 @@ type Gen1GoldPayload = {
   macro:AnyMap; technical:AnyMap; fusion:AnyMap; memory?:AnyMap; evidence_fusion?:AnyMap
   confidence?:number|null; forward_range_map?:AnyMap|null
 }
+type LiveValidationPayload = {
+  validation_status:string; observation_count:number; completed_60m_directional_count:number
+  directional_positive_rate_60m?:number|null; average_directional_return_bps_60m?:number|null
+  calibration?:AnyMap; range_outcomes?:AnyMap; edge_proven:boolean
+}
 type ValidationPayload = {
   validation_status:string; episode_count:number; directional_decision_count:number
   directional_positive_rate?:number|null; average_directional_return_bps?:number|null
@@ -41,15 +46,18 @@ export default function Gen1GoldPage(){
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
   const [validation,setValidation]=useState<ValidationPayload|null>(null)
+  const [liveValidation,setLiveValidation]=useState<LiveValidationPayload|null>(null)
   const load=useCallback(async()=>{
     setLoading(true);setError('')
     try{
-      const [live, validationResult] = await Promise.all([
+      const [live, validationResult, liveValidationResult] = await Promise.all([
         fetchAPI<Gen1GoldPayload>('/xau/gen1-gold',{timeoutMs:120000}),
         fetchAPI<ValidationPayload>('/xau/gen1-gold/validation',{timeoutMs:120000}).catch(()=>null),
+        fetchAPI<LiveValidationPayload>('/xau/gen1-gold/live-validation',{timeoutMs:120000}).catch(()=>null),
       ])
       setData(live)
       setValidation(validationResult)
+      setLiveValidation(liveValidationResult)
     }
     catch(err:any){setError(err?.message||'GEN1 GOLD unavailable')}
     finally{setLoading(false)}
@@ -132,7 +140,7 @@ export default function Gen1GoldPage(){
         </section>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid gap-4 xl:grid-cols-4">
         <section className="card p-4">
           <div className="mb-3 text-sm font-semibold">Evidence Fusion</div>
           <div className="grid grid-cols-2 gap-2">
@@ -168,6 +176,17 @@ export default function Gen1GoldPage(){
           </div>
           <div className="mt-3 text-[10px] text-muted-foreground">{validation?.validation_status||'No validation data yet'} · edge proven: No</div>
           {!!validation?.sensor_gaps?.length&&<div className="mt-2 text-[10px] text-amber-600">Gaps: {validation.sensor_gaps.join(' · ')}</div>}
+        </section>
+        <section className="card p-4">
+          <div className="mb-3 text-sm font-semibold">Live Full-Pipeline Outcomes</div>
+          <div className="grid grid-cols-2 gap-2">
+            <Metric label="Observations" value={liveValidation?.observation_count??0}/>
+            <Metric label="Completed 60m" value={liveValidation?.completed_60m_directional_count??0}/>
+            <Metric label="60m positive" value={liveValidation?.directional_positive_rate_60m==null?'—':`${Math.round(Number(liveValidation.directional_positive_rate_60m)*100)}%`}/>
+            <Metric label="Live Brier" value={fmt(liveValidation?.calibration?.brier_score,3)}/>
+          </div>
+          <div className="mt-3 text-[10px] text-muted-foreground">{liveValidation?.validation_status||'Collecting full-pipeline observations'} · edge proven: No</div>
+          <div className="mt-2 text-[10px] text-muted-foreground">Includes live XAUT; first-touch is sampled by scheduler, not intrabar-exact.</div>
         </section>
       </div>
 
