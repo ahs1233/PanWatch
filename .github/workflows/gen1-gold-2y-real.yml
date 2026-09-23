@@ -59,6 +59,7 @@ jobs:
             apscheduler websockets matplotlib
           python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
           python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
 
       - name: Run two-year real XAUUSD walk-forward benchmark
         run: |
