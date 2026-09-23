@@ -65,6 +65,7 @@ _MACRO_TTL = 180.0
 _CONSENSUS_TTL = 60.0
 _CONTEXT_TTL = 300.0
 _MARKET_CONTEXT_TTL = 120.0
+_MARKET_CONTEXT_SNAPSHOT_WAIT_SECONDS = 3.0
 _bars_cache = None
 _spot_cache = None
 _consensus_cache = None
@@ -427,26 +428,43 @@ async def _refresh_market_context() -> dict[str, Any]:
 
 
 async def get_market_context(force: bool = False) -> dict[str, Any]:
-    """Cached HTF context with stale-while-revalidate behavior.
+    """Cached HTF context with single-flight stale-while-revalidate behavior.
 
-    Slow 1h/4h/daily and futures research never blocks the fast intraday loop
-    once a valid context snapshot exists.
+    A cold/forced refresh is shared by all callers. Once a valid snapshot exists,
+    non-forced callers receive stale data immediately while one background task
+    refreshes it. This prevents concurrent HTTP/scheduler callers from queueing
+    behind the expensive HTF provider/library stack.
     """
     global _market_context_refresh_task
     now = time.monotonic()
-    if not force and _market_context_cache and now - _market_context_cache[0] < _MARKET_CONTEXT_TTL:
+    if (
+        not force
+        and _market_context_cache
+        and now - _market_context_cache[0] < _MARKET_CONTEXT_TTL
+    ):
         return _market_context_cache[1]
-
-    if force or not _market_context_cache:
-        return await _refresh_market_context()
 
     if _market_context_refresh_task is None or _market_context_refresh_task.done():
         _market_context_refresh_task = asyncio.create_task(_refresh_market_context())
+
+    refresh_task = _market_context_refresh_task
+    if force or not _market_context_cache:
+        return await refresh_task
 
     stale = dict(_market_context_cache[1])
     stale["refresh_pending"] = True
     stale["cache_age_seconds"] = round(max(0.0, now - _market_context_cache[0]), 3)
     return stale
+
+
+def _consume_background_task_result(task: asyncio.Task) -> None:
+    """Consume a detached task exception so fail-soft refreshes stay observable."""
+    if task.cancelled():
+        return
+    try:
+        task.exception()
+    except Exception as exc:  # pragma: no cover - defensive event-loop boundary
+        logger.warning("XAU background market-context task failed: %s", type(exc).__name__)
 
 
 async def get_library_validation(force: bool = False) -> dict[str, Any]:
@@ -914,7 +932,18 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     market_context = None
     market_context_error = None
     try:
-        market_context = await market_context_task
+        market_context = await asyncio.wait_for(
+            asyncio.shield(market_context_task),
+            timeout=_MARKET_CONTEXT_SNAPSHOT_WAIT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        market_context_error = "refresh_pending"
+        market_context_task.add_done_callback(_consume_background_task_result)
+        logger.warning(
+            "XAU higher-timeframe context refresh still pending after %.1fs; "
+            "snapshot continues fail-soft without HTF context",
+            _MARKET_CONTEXT_SNAPSHOT_WAIT_SECONDS,
+        )
     except Exception as exc:
         market_context_error = type(exc).__name__
         logger.warning("XAU higher-timeframe context unavailable: %s", market_context_error)
