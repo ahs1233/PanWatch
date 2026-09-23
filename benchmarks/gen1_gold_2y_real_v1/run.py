@@ -1253,6 +1253,130 @@ def spread_net_bps(
     return None
 
 
+
+def extract_research_features(
+    technical: dict[str, Any],
+    cognition: dict[str, Any],
+    fusion: dict[str, Any],
+    evidence: dict[str, Any],
+    macro: dict[str, Any],
+    evaluation_time: datetime,
+    candidate: str,
+) -> dict[str, Any]:
+    """Flatten decision-time-only features for conditional-edge research."""
+    price = float((technical.get("analysis_reference") or {}).get("price") or technical.get("price") or 0.0)
+    side = 1.0 if candidate == "long_setup" else -1.0
+    context = technical.get("market_context") or {}
+    bias = context.get("bias") or {}
+    regime = cognition.get("regime") or {}
+    directional = evidence.get("directional_evidence") or {}
+    market_state = cognition.get("market_state") or {}
+    features: dict[str, Any] = {
+        "direction": "LONG" if side > 0 else "SHORT",
+        "session": session_name(evaluation_time),
+        "hour_utc": evaluation_time.hour,
+        "day_of_week": evaluation_time.strftime("%a"),
+        "month": evaluation_time.month,
+        "regime": str(regime.get("label") or "unknown"),
+        "regime_confidence": regime.get("confidence"),
+        "cognitive_confidence": (cognition.get("confidence") or {}).get("calibrated_confidence"),
+        "fusion_state": fusion.get("state"),
+        "gen1_decision": evidence.get("decision"),
+        "gen1_confidence": evidence.get("decision_confidence"),
+        "evidence_score": evidence.get("score"),
+        "evidence_coverage": evidence.get("coverage"),
+        "evidence_agreement": evidence.get("agreement_ratio"),
+        "evidence_long_support": directional.get("long_support"),
+        "evidence_short_support": directional.get("short_support"),
+        "evidence_conflict_score": directional.get("conflict_score"),
+        "evidence_dominant_side": directional.get("dominant_side"),
+        "macro_bias": macro.get("bias"),
+        "macro_bias_label": macro.get("bias_label"),
+        "macro_confidence": macro.get("confidence"),
+        "macro_proxy_score": macro.get("proxy_score"),
+        "htf_composite_score": bias.get("composite_score"),
+        "htf_composite_direction": bias.get("composite_direction"),
+        "today_score": bias.get("today_score"),
+        "today_direction": bias.get("today_direction"),
+    }
+    frames = technical.get("frames") or {}
+    for frame_name in ("1m", "5m", "15m"):
+        frame = frames.get(frame_name) or {}
+        atr = float(frame.get("atr14") or 0.0)
+        fast = frame.get("ema_fast")
+        slow = frame.get("ema_slow")
+        features.update({
+            f"{frame_name}_direction": frame.get("direction"),
+            f"{frame_name}_rsi14": frame.get("rsi14"),
+            f"{frame_name}_atr14": frame.get("atr14"),
+            f"{frame_name}_atr_pct": frame.get("atr_pct"),
+            f"{frame_name}_ema_fast": fast,
+            f"{frame_name}_ema_slow": slow,
+            f"{frame_name}_breakout": frame.get("breakout"),
+            f"{frame_name}_recent_swing_high": frame.get("recent_swing_high"),
+            f"{frame_name}_recent_swing_low": frame.get("recent_swing_low"),
+            f"{frame_name}_ema_gap_atr": (
+                (float(fast) - float(slow)) / atr
+                if atr > 0 and fast is not None and slow is not None else None
+            ),
+            f"{frame_name}_price_fast_atr": (
+                (price - float(fast)) / atr if atr > 0 and fast is not None else None
+            ),
+        })
+    weighted_alignment = 0.0
+    active_weight = 0.0
+    weights = {"monthly": 0.34, "weekly": 0.30, "daily": 0.24, "h4": 0.08, "h1": 0.04}
+    for name, weight in weights.items():
+        state = bias.get(name) or {}
+        features[f"{name}_direction"] = state.get("direction")
+        features[f"{name}_score"] = state.get("score")
+        features[f"{name}_slope20"] = state.get("slope_20")
+        ema = state.get("ema") or {}
+        close = float(state.get("close") or price or 0.0)
+        for period in (9, 21, 50, 200, 1000):
+            value = ema.get(str(period))
+            features[f"{name}_ema{period}"] = value
+            features[f"{name}_price_to_ema{period}_bps"] = (
+                ((close - float(value)) / float(value)) * 10000.0
+                if value not in (None, 0) else None
+            )
+        score = state.get("score")
+        if score is not None:
+            weighted_alignment += weight * float(score) * side
+            active_weight += weight
+    alignment = weighted_alignment / active_weight if active_weight else 0.0
+    features["htf_alignment_score"] = alignment
+    features["htf_alignment"] = "aligned" if alignment >= 0.15 else "conflict" if alignment <= -0.15 else "mixed"
+    features["trend_strength"] = abs(float(bias.get("composite_score") or 0.0))
+
+    flow = context.get("cash_flow") or {}
+    smart = context.get("smart_money") or {}
+    profile = context.get("volume_profile") or {}
+    features.update({
+        "cash_flow_score": flow.get("score"),
+        "cash_flow_direction": flow.get("direction"),
+        "smart_money_score": smart.get("score"),
+        "smart_money_bias": smart.get("bias"),
+        "break_of_structure": smart.get("break_of_structure"),
+        "liquidity_sweep": smart.get("liquidity_sweep"),
+        "displacement": smart.get("displacement"),
+        "dealing_zone": (smart.get("dealing_range") or {}).get("zone"),
+        "volume_profile_location": profile.get("location"),
+        "volume_profile_poc": profile.get("poc"),
+        "volume_profile_vah": profile.get("vah"),
+        "volume_profile_val": profile.get("val"),
+    })
+    for key in ("directional_edge", "intraday_ema_structure", "long_ema_structure", "rsi_impulse"):
+        if key in market_state:
+            features[f"cognition_{key}"] = market_state.get(key)
+    for driver in macro.get("drivers") or []:
+        name = str(driver.get("name") or "").replace("-", "_")
+        if name:
+            features[f"macro_{name}_value"] = driver.get("value")
+            features[f"macro_{name}_gold_score"] = driver.get("gold_score")
+    return features
+
+
 def run_replay_horizons(
     bars_by_tf: dict[XAUTimeframe, list[XAUBar]],
     quotes: dict[datetime, tuple[float, float]],
@@ -1425,8 +1549,18 @@ def run_replay_horizons(
         confidence = float(
             (cognition.get("confidence") or {}).get("calibrated_confidence") or 0.0
         )
+        research_features = extract_research_features(
+            technical,
+            cognition,
+            fusion,
+            evidence,
+            macro,
+            evaluation_time,
+            candidate,
+        )
         shared_meta = {
             "research_only": True,
+            "research_features": research_features,
             "lookahead_protected": True,
             "gen1_decision": str(evidence.get("decision") or "WAIT"),
             "gen1_decision_confidence": evidence.get("decision_confidence"),
@@ -1665,6 +1799,45 @@ def write_csv(path: Path, episodes: list[ReplayEpisode]) -> None:
             ])
 
 
+
+def write_research_features_csv(path: Path, episodes: list[ReplayEpisode]) -> None:
+    """Persist flattened point-in-time features without changing replay semantics."""
+    feature_keys = sorted({
+        key
+        for ep in episodes
+        for key in ((ep.meta or {}).get("research_features") or {}).keys()
+    })
+    fixed = [
+        "observed_at", "outcome_at", "horizon_minutes", "candidate",
+        "net_spread_directional_bps", "gross_directional_bps",
+        "pm10_first", "pm20_first", "pm30_first",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fixed + feature_keys)
+        writer.writeheader()
+        for ep in episodes:
+            row = {
+                "observed_at": ep.observed_at.isoformat(),
+                "outcome_at": ep.outcome_at.isoformat(),
+                "horizon_minutes": ep.horizon_minutes,
+                "candidate": ep.candidate,
+                "net_spread_directional_bps": (ep.meta or {}).get("net_spread_directional_return_bps"),
+                "gross_directional_bps": ep.directional_return_bps,
+            }
+            side = "up" if ep.candidate == "long_setup" else "down"
+            adverse = "down" if side == "up" else "up"
+            levels = (((ep.meta or {}).get("range_outcomes") or {}).get("levels") or {})
+            for distance in (10, 20, 30):
+                first = str((levels.get(f"pm{distance}") or {}).get("first_hit") or "none")
+                row[f"pm{distance}_first"] = (
+                    "favorable" if first == side else
+                    "adverse" if first == adverse else
+                    "unresolved"
+                )
+            row.update((ep.meta or {}).get("research_features") or {})
+            writer.writerow(row)
+
+
 def make_charts(daily: list[XAUBar], episodes60: list[ReplayEpisode]) -> list[str]:
     import matplotlib.pyplot as plt
 
@@ -1836,6 +2009,7 @@ def main() -> None:
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     write_csv(OUT / "episodes_60m.csv", episodes60)
     write_csv(OUT / "episodes_240m.csv", episodes240)
+    write_research_features_csv(OUT / "episodes_240m_features.csv", episodes240)
     make_charts(bars_by_tf[XAUTimeframe.D1], episodes60)
 
     summary = [
