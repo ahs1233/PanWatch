@@ -57,6 +57,10 @@ from src.modules.xau.market_context import build_market_context
 from src.modules.xau.replay import ReplayEpisode, build_replay_technical_state
 from src.modules.xau.service import build_decision_fusion
 from src.modules.xau.validation import evaluate_gen1_replay
+from benchmarks.gen1_gold_2y_real_v1.gen11_features import (
+    build_gen11_feature_snapshot,
+    write_gen11_feature_csv,
+)
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
 from src.platform.marketdata.xau_dukascopy import (
     DukascopyTick,
@@ -1300,6 +1304,7 @@ def run_replay_horizons(
     candidate_count = 0
     profile_enabled = os.getenv("GEN1_2Y_PROFILE", "0") == "1"
     profile_seconds: dict[str, float] = defaultdict(float)
+    previous_candidate_session: str | None = None
 
     def profile_add(name: str, started: float) -> None:
         if profile_enabled:
@@ -1419,6 +1424,16 @@ def run_replay_horizons(
             require_xaut=False,
         )
         profile_add("evidence", stage_started)
+        gen11_features = build_gen11_feature_snapshot(
+            technical,
+            cognition,
+            fusion,
+            evidence,
+            macro,
+            observed_at=evaluation_time,
+            previous_session=previous_candidate_session,
+        )
+        previous_candidate_session = str(gen11_features.get("session") or "") or previous_candidate_session
         entry = float(technical["analysis_reference"]["price"])
         side = 1.0 if candidate == "long_setup" else -1.0
         regime = str((cognition.get("regime") or {}).get("label") or "unknown")
@@ -1444,6 +1459,7 @@ def run_replay_horizons(
                 "proxy_score": macro.get("proxy_score"),
                 "drivers": macro.get("drivers"),
             },
+            "gen11_features": gen11_features,
             "replay_scope": (
                 "real_xau_price_htf_structure_volume_spread_plus_point_in_time_"
                 "macro_proxy_without_historical_xaut_microstructure_or_live_news"
@@ -1836,6 +1852,7 @@ def main() -> None:
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     write_csv(OUT / "episodes_60m.csv", episodes60)
     write_csv(OUT / "episodes_240m.csv", episodes240)
+    write_gen11_feature_csv(OUT / "episodes_240m_gen11_features.csv", episodes240)
     make_charts(bars_by_tf[XAUTimeframe.D1], episodes60)
 
     summary = [
