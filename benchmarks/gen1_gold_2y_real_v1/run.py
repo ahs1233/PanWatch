@@ -58,6 +58,11 @@ from src.modules.xau.replay import ReplayEpisode, build_replay_technical_state
 from src.modules.xau.service import build_decision_fusion
 from src.modules.xau.validation import evaluate_gen1_replay
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
+from src.platform.marketdata.xau_dukascopy import (
+    DukascopyTick,
+    decode_dukascopy_xau_bi5,
+    dukascopy_hour_url,
+)
 
 
 UTC = timezone.utc
@@ -101,6 +106,19 @@ MACRO_SYMBOLS = {
 
 class FetchError(RuntimeError):
     pass
+
+
+class IncompleteDatasetShard(FetchError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial_results: list[dict[str, Any]],
+        failed_days: dict[str, str],
+    ) -> None:
+        super().__init__(message)
+        self.partial_results = partial_results
+        self.failed_days = failed_days
 
 
 def candle_url(day: date, side: str) -> str:
@@ -166,13 +184,35 @@ def decode_candles(payload: bytes, day: date) -> list[tuple[datetime, float, flo
     return rows
 
 
+def _provenance(acquisition: str, *, fallback: bool) -> dict[str, Any]:
+    return {
+        "vendor": "Dukascopy",
+        "symbol": "XAUUSD",
+        "acquisition": acquisition,
+        "used_fallback": bool(fallback),
+        "price_basis": "mid_from_bid_ask",
+        "spread_basis": "bid_ask_close",
+    }
+
+
 def fetch_day(day: date) -> dict[str, Any]:
     bid_status, bid_payload = fetch_bytes(candle_url(day, "BID"))
     ask_status, ask_payload = fetch_bytes(candle_url(day, "ASK"))
     if bid_status == "notfound" and ask_status == "notfound":
-        return {"day": day.isoformat(), "status": "no_data", "rows": []}
+        return {
+            "day": day.isoformat(),
+            "status": "no_data",
+            "rows": [],
+            "provenance": _provenance(
+                "dukascopy_native_m1_bid_ask_candles",
+                fallback=False,
+            ),
+        }
     if bid_status != "data" or ask_status != "data":
-        raise FetchError(f"one-sided candle availability on {day}: bid={bid_status} ask={ask_status}")
+        raise FetchError(
+            f"one-sided candle availability on {day}: "
+            f"bid={bid_status} ask={ask_status}"
+        )
     bid = decode_candles(bid_payload, day)
     ask = decode_candles(ask_payload, day)
     bid_map = {row[0]: row for row in bid}
@@ -206,8 +246,85 @@ def fetch_day(day: date) -> dict[str, Any]:
         "ask_rows": len(ask),
         "matched_rows": len(rows),
         "crossed_rows": crossed,
+        "provenance": _provenance(
+            "dukascopy_native_m1_bid_ask_candles",
+            fallback=False,
+        ),
     }
 
+
+def fetch_day_tick_fallback(day: date) -> dict[str, Any]:
+    """Reconstruct one UTC day from Dukascopy hourly ticks.
+
+    This is a source-path fallback, not a different market proxy: the symbol
+    remains XAUUSD and BID/ASK ticks are aggregated into M1 midpoint bars while
+    retaining the last observed BID/ASK spread for each minute.
+    """
+
+    start = datetime.combine(day, dtime.min, tzinfo=UTC)
+    buckets: dict[datetime, list[DukascopyTick]] = defaultdict(list)
+    attempted_hours = 0
+    for hour_index in range(24):
+        hour = start + timedelta(hours=hour_index)
+        status, payload = fetch_bytes(
+            dukascopy_hour_url(hour),
+            retries=3,
+        )
+        attempted_hours += 1
+        if status == "notfound":
+            continue
+        if status != "data":
+            raise FetchError(
+                f"tick fallback unavailable for {day} hour={hour_index}: "
+                f"status={status}"
+            )
+        for tick in decode_dukascopy_xau_bi5(payload, hour):
+            minute = tick.timestamp.replace(second=0, microsecond=0)
+            buckets[minute].append(tick)
+
+    if not buckets:
+        return {
+            "day": day.isoformat(),
+            "status": "no_data",
+            "rows": [],
+            "fallback_attempted_hours": attempted_hours,
+            "provenance": _provenance(
+                "dukascopy_tick_derived_m1",
+                fallback=True,
+            ),
+        }
+
+    rows = []
+    for minute in sorted(buckets):
+        ticks = buckets[minute]
+        mids = [tick.mid for tick in ticks]
+        last = ticks[-1]
+        rows.append(
+            (
+                minute,
+                mids[0],
+                max(mids),
+                min(mids),
+                mids[-1],
+                sum(tick.quoted_volume for tick in ticks),
+                float(last.bid),
+                float(last.ask),
+            )
+        )
+    return {
+        "day": day.isoformat(),
+        "status": "data",
+        "rows": rows,
+        "bid_rows": len(rows),
+        "ask_rows": len(rows),
+        "matched_rows": len(rows),
+        "crossed_rows": 0,
+        "fallback_attempted_hours": attempted_hours,
+        "provenance": _provenance(
+            "dukascopy_tick_derived_m1",
+            fallback=True,
+        ),
+    }
 
 def date_range(start: datetime, end: datetime) -> list[date]:
     out = []
@@ -218,39 +335,130 @@ def date_range(start: datetime, end: datetime) -> list[date]:
     return out
 
 
+def _checkpoint_file(checkpoint_dir: Path, day_text: str) -> Path:
+    return checkpoint_dir / f"{day_text}.pkl.gz"
+
+
+def _write_day_checkpoint(
+    checkpoint_dir: Path | None,
+    result: dict[str, Any],
+) -> None:
+    if checkpoint_dir is None:
+        return
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    target = _checkpoint_file(checkpoint_dir, str(result["day"]))
+    temporary = target.with_name(target.name + ".tmp")
+    with gzip.open(temporary, "wb", compresslevel=6) as fh:
+        pickle.dump(result, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    temporary.replace(target)
+
+
+def _load_day_checkpoints(
+    checkpoint_dir: Path | None,
+    expected_days: set[str],
+) -> dict[str, dict[str, Any]]:
+    if checkpoint_dir is None or not checkpoint_dir.exists():
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for path in sorted(checkpoint_dir.glob("*.pkl.gz")):
+        try:
+            with gzip.open(path, "rb") as fh:
+                result = pickle.load(fh)
+        except (OSError, EOFError, pickle.PickleError):
+            continue
+        day_text = str((result or {}).get("day") or "")
+        if (
+            day_text in expected_days
+            and (result or {}).get("status") in {"data", "no_data"}
+        ):
+            out[day_text] = result
+    return out
+
+
+def _load_existing_shard_results(
+    path: Path | None,
+    expected_days: set[str],
+) -> dict[str, dict[str, Any]]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        with gzip.open(path, "rb") as fh:
+            payload = pickle.load(fh)
+    except (OSError, EOFError, pickle.PickleError):
+        return {}
+    if payload.get("format") not in {
+        "gen1_gold_2y_day_results_v1",
+        "gen1_gold_2y_day_results_v2",
+    }:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for result in payload.get("results") or []:
+        day_text = str(result.get("day") or "")
+        if day_text in expected_days and result.get("status") in {"data", "no_data"}:
+            out[day_text] = result
+    return out
+
+
 def download_day_results(
     start: datetime,
     end: datetime,
     *,
     progress_label: str = "dataset",
+    existing_results: dict[str, dict[str, Any]] | None = None,
+    checkpoint_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     days = date_range(start, end)
-    results: list[dict[str, Any]] = []
+    expected_days = {day.isoformat() for day in days}
+    results_by_day: dict[str, dict[str, Any]] = {}
+    for day_text, result in (existing_results or {}).items():
+        if day_text in expected_days and result.get("status") in {"data", "no_data"}:
+            results_by_day[day_text] = result
+    results_by_day.update(
+        _load_day_checkpoints(checkpoint_dir, expected_days)
+    )
+
+    pending_days = [
+        day for day in days
+        if day.isoformat() not in results_by_day
+    ]
     failed_days: dict[date, str] = {}
     started = time.monotonic()
 
+    if results_by_day:
+        print(json.dumps({
+            "phase": "dataset_resume",
+            "label": progress_label,
+            "reused_days": len(results_by_day),
+            "remaining_days": len(pending_days),
+            "requested_days": len(days),
+        }), flush=True)
+
     def collect(day: date, future) -> None:
         try:
-            results.append(future.result())
+            result = future.result()
+            results_by_day[day.isoformat()] = result
+            _write_day_checkpoint(checkpoint_dir, result)
             failed_days.pop(day, None)
         except Exception as exc:
             failed_days[day] = f"{type(exc).__name__}: {exc}"
 
-    with ThreadPoolExecutor(max_workers=max(2, WORKERS)) as pool:
-        futures = {pool.submit(fetch_day, day): day for day in days}
-        for completed, future in enumerate(as_completed(futures), start=1):
-            day = futures[future]
-            collect(day, future)
-            if completed % 25 == 0 or completed == len(days):
-                print(json.dumps({
-                    "phase": "dataset_download_progress",
-                    "label": progress_label,
-                    "completed_days": completed,
-                    "successful_days": len(results),
-                    "failed_days_pending_retry": len(failed_days),
-                    "requested_days": len(days),
-                    "elapsed_seconds": round(time.monotonic() - started, 2),
-                }), flush=True)
+    if pending_days:
+        with ThreadPoolExecutor(max_workers=max(1, WORKERS)) as pool:
+            futures = {pool.submit(fetch_day, day): day for day in pending_days}
+            for completed, future in enumerate(as_completed(futures), start=1):
+                day = futures[future]
+                collect(day, future)
+                if completed % 25 == 0 or completed == len(pending_days):
+                    print(json.dumps({
+                        "phase": "dataset_download_progress",
+                        "label": progress_label,
+                        "completed_days": completed,
+                        "reused_days": len(days) - len(pending_days),
+                        "successful_days": len(results_by_day),
+                        "failed_days_pending_retry": len(failed_days),
+                        "requested_days": len(days),
+                        "elapsed_seconds": round(time.monotonic() - started, 2),
+                    }), flush=True)
 
     for retry_round in range(1, 4):
         if not failed_days:
@@ -258,7 +466,7 @@ def download_day_results(
         retry_days = sorted(failed_days)
         failed_days = {}
         time.sleep(0.5 * retry_round + random.uniform(0.0, 0.5))
-        retry_workers = max(1, min(4, max(1, WORKERS // 2)))
+        retry_workers = max(1, min(2, max(1, WORKERS // 2)))
         with ThreadPoolExecutor(max_workers=retry_workers) as pool:
             futures = {pool.submit(fetch_day, day): day for day in retry_days}
             for future in as_completed(futures):
@@ -272,16 +480,56 @@ def download_day_results(
             "elapsed_seconds": round(time.monotonic() - started, 2),
         }), flush=True)
 
+    # Independent acquisition path for persistent failures: derive M1 from
+    # Dukascopy hourly BID/ASK ticks instead of re-hitting the candle endpoint.
     if failed_days:
+        fallback_days = sorted(failed_days)
+        failed_days = {}
+        fallback_workers = max(1, min(2, WORKERS))
+        with ThreadPoolExecutor(max_workers=fallback_workers) as pool:
+            futures = {
+                pool.submit(fetch_day_tick_fallback, day): day
+                for day in fallback_days
+            }
+            for future in as_completed(futures):
+                collect(futures[future], future)
+        print(json.dumps({
+            "phase": "dataset_fallback_round",
+            "label": progress_label,
+            "fallback": "dukascopy_tick_derived_m1",
+            "attempted_days": len(fallback_days),
+            "remaining_failed_days": len(failed_days),
+            "elapsed_seconds": round(time.monotonic() - started, 2),
+        }), flush=True)
+
+    results = [
+        results_by_day[day_text]
+        for day_text in sorted(results_by_day)
+        if day_text in expected_days
+    ]
+    if failed_days:
+        failed_text = {
+            day.isoformat(): failed_days[day]
+            for day in sorted(failed_days)
+        }
         sample = [
-            {"day": day.isoformat(), "error": failed_days[day]}
-            for day in sorted(failed_days)[:10]
+            {"day": day, "error": error}
+            for day, error in list(failed_text.items())[:10]
         ]
-        raise FetchError(
-            f"dataset shard has {len(failed_days)} unrecoverable days after retries: {sample}"
+        raise IncompleteDatasetShard(
+            f"dataset shard has {len(failed_days)} unrecoverable days "
+            f"after primary retries and tick fallback: {sample}",
+            partial_results=results,
+            failed_days=failed_text,
         )
 
-    results.sort(key=lambda item: item["day"])
+    if len(results) != len(days):
+        missing = sorted(expected_days.difference(results_by_day))
+        raise IncompleteDatasetShard(
+            f"dataset shard is missing {len(missing)} days: {missing[:10]}",
+            partial_results=results,
+            failed_days={day: "missing" for day in missing},
+        )
     return results
 
 def build_dataset_from_results(
@@ -369,29 +617,139 @@ def build_dataset_from_results(
     return bars, quote_closes, diag
 
 
+def _sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _shard_manifest_path(output_path: Path) -> Path:
+    name = output_path.name
+    if name.endswith(".pkl.gz"):
+        name = name[:-7] + ".manifest.json"
+    else:
+        name = name + ".manifest.json"
+    return output_path.with_name(name)
+
+
+def _write_shard_payload(
+    output_path: Path,
+    *,
+    start: datetime,
+    end: datetime,
+    results: list[dict[str, Any]],
+    failed_days: dict[str, str],
+) -> dict[str, Any]:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    expected_days = {day.isoformat() for day in date_range(start, end)}
+    result_days = {
+        str(result.get("day"))
+        for result in results
+        if result.get("status") in {"data", "no_data"}
+    }
+    complete = not failed_days and result_days == expected_days
+    payload = {
+        "format": "gen1_gold_2y_day_results_v2",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "complete": complete,
+        "results": sorted(results, key=lambda item: item["day"]),
+        "failed_days": dict(sorted(failed_days.items())),
+        "source": SOURCE,
+        "generated_at": datetime.now(tz=UTC).isoformat(),
+    }
+    temporary = output_path.with_name(output_path.name + ".tmp")
+    with gzip.open(temporary, "wb", compresslevel=6) as fh:
+        pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    temporary.replace(output_path)
+
+    source_counts: Counter[str] = Counter()
+    fallback_days = []
+    for result in results:
+        provenance = result.get("provenance") or {}
+        acquisition = str(provenance.get("acquisition") or "legacy_unknown")
+        source_counts[acquisition] += 1
+        if provenance.get("used_fallback"):
+            fallback_days.append(str(result["day"]))
+    manifest = {
+        "format": "gen1_gold_2y_shard_manifest_v1",
+        "payload_format": payload["format"],
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "complete": complete,
+        "expected_day_count": len(expected_days),
+        "result_day_count": len(result_days),
+        "failed_day_count": len(failed_days),
+        "failed_days": dict(sorted(failed_days.items())),
+        "fallback_day_count": len(fallback_days),
+        "fallback_days": sorted(fallback_days),
+        "source_counts": dict(sorted(source_counts.items())),
+        "payload_file": output_path.name,
+        "payload_sha256": _sha256_file(output_path),
+        "size_bytes": output_path.stat().st_size,
+    }
+    manifest_path = _shard_manifest_path(output_path)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return manifest
+
+
 def save_dataset_shard(start: datetime, end: datetime, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    results = download_day_results(
-        start,
-        end,
-        progress_label=f"{start.date()}..{end.date()}",
+    expected_days = {day.isoformat() for day in date_range(start, end)}
+    existing_path_raw = os.getenv("GEN1_2Y_EXISTING_SHARD")
+    existing_path = Path(existing_path_raw) if existing_path_raw else None
+    checkpoint_raw = os.getenv("GEN1_2Y_DAY_CACHE_DIR")
+    checkpoint_dir = Path(checkpoint_raw) if checkpoint_raw else None
+
+    existing = _load_existing_shard_results(existing_path, expected_days)
+    existing.update(_load_day_checkpoints(checkpoint_dir, expected_days))
+
+    error: IncompleteDatasetShard | None = None
+    failed_days: dict[str, str] = {}
+    try:
+        results = download_day_results(
+            start,
+            end,
+            progress_label=f"{start.date()}..{end.date()}",
+            existing_results=existing,
+            checkpoint_dir=checkpoint_dir,
+        )
+    except IncompleteDatasetShard as exc:
+        results = exc.partial_results
+        failed_days = exc.failed_days
+        error = exc
+
+    manifest = _write_shard_payload(
+        output_path,
+        start=start,
+        end=end,
+        results=results,
+        failed_days=failed_days,
     )
-    payload = {
-        "format": "gen1_gold_2y_day_results_v1",
-        "start": start.isoformat(),
-        "end": end.isoformat(),
-        "results": results,
-    }
-    with gzip.open(output_path, "wb", compresslevel=6) as fh:
-        pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
     print(json.dumps({
-        "phase": "dataset_shard_complete",
+        "phase": (
+            "dataset_shard_complete"
+            if manifest["complete"]
+            else "dataset_shard_partial"
+        ),
         "start": start.isoformat(),
         "end": end.isoformat(),
-        "day_count": len(results),
+        "day_count": manifest["result_day_count"],
+        "expected_day_count": manifest["expected_day_count"],
+        "failed_day_count": manifest["failed_day_count"],
+        "fallback_day_count": manifest["fallback_day_count"],
         "output_path": str(output_path),
+        "manifest_path": str(_shard_manifest_path(output_path)),
+        "payload_sha256": manifest["payload_sha256"],
         "size_bytes": output_path.stat().st_size,
     }), flush=True)
+    if error is not None:
+        raise error
 
 
 def load_dataset_shards(
@@ -408,7 +766,10 @@ def load_dataset_shards(
         path = Path(raw_path)
         with gzip.open(path, "rb") as fh:
             payload = pickle.load(fh)
-        if payload.get("format") != "gen1_gold_2y_day_results_v1":
+        if payload.get("format") not in {
+            "gen1_gold_2y_day_results_v1",
+            "gen1_gold_2y_day_results_v2",
+        }:
             raise FetchError(f"unsupported dataset shard format: {path}")
         for result in payload.get("results") or []:
             day = str(result["day"])
@@ -432,13 +793,135 @@ def load_dataset_shards(
     return build_dataset_from_results(selected, start, end)
 
 
+def build_dataset_manifest(
+    pattern: str,
+    start: datetime,
+    end: datetime,
+    output_path: Path,
+) -> dict[str, Any]:
+    paths = sorted(Path(path) for path in glob.glob(pattern))
+    if not paths:
+        raise FetchError(f"no dataset shards matched: {pattern}")
+
+    shard_records = []
+    source_counts: Counter[str] = Counter()
+    fallback_days: list[str] = []
+    for path in paths:
+        manifest_path = _shard_manifest_path(path)
+        if not manifest_path.exists():
+            raise FetchError(f"missing shard manifest: {manifest_path}")
+        shard_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        actual_sha = _sha256_file(path)
+        if actual_sha != shard_manifest.get("payload_sha256"):
+            raise FetchError(f"shard checksum mismatch: {path}")
+        if not shard_manifest.get("complete"):
+            raise FetchError(f"incomplete dataset shard: {path}")
+        source_counts.update(shard_manifest.get("source_counts") or {})
+        fallback_days.extend(shard_manifest.get("fallback_days") or [])
+        shard_records.append({
+            "file": path.name,
+            "manifest_file": manifest_path.name,
+            "sha256": actual_sha,
+            "start": shard_manifest.get("start"),
+            "end": shard_manifest.get("end"),
+            "fallback_day_count": shard_manifest.get("fallback_day_count", 0),
+        })
+
+    _, _, diag = load_dataset_shards(pattern, start, end)
+    combined = hashlib.sha256()
+    for record in sorted(shard_records, key=lambda item: item["file"]):
+        combined.update(
+            f"{record['file']}:{record['sha256']}\n".encode("utf-8")
+        )
+    manifest = {
+        "format": "gen1_gold_2y_dataset_manifest_v1",
+        "complete": True,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "source": SOURCE,
+        "shard_count": len(shard_records),
+        "day_count": len(date_range(start, end)),
+        "m1_bar_count": diag["m1_bar_count"],
+        "dataset_sha256": diag["dataset_sha256"],
+        "bundle_sha256": combined.hexdigest(),
+        "source_counts": dict(sorted(source_counts.items())),
+        "fallback_day_count": len(set(fallback_days)),
+        "fallback_days": sorted(set(fallback_days)),
+        "shards": sorted(shard_records, key=lambda item: item["file"]),
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    print(json.dumps({
+        "phase": "dataset_manifest_complete",
+        "manifest": str(output_path),
+        "shard_count": manifest["shard_count"],
+        "day_count": manifest["day_count"],
+        "m1_bar_count": manifest["m1_bar_count"],
+        "dataset_sha256": manifest["dataset_sha256"],
+        "bundle_sha256": manifest["bundle_sha256"],
+        "fallback_day_count": manifest["fallback_day_count"],
+    }), flush=True)
+    return manifest
+
+
+def validate_dataset_manifest(
+    pattern: str,
+    manifest_path: Path,
+    start: datetime,
+    end: datetime,
+) -> dict[str, Any]:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("format") != "gen1_gold_2y_dataset_manifest_v1":
+        raise FetchError("unsupported dataset manifest format")
+    if not manifest.get("complete"):
+        raise FetchError("dataset manifest is not complete")
+    if manifest.get("start") != start.isoformat():
+        raise FetchError("dataset manifest start mismatch")
+    if manifest.get("end") != end.isoformat():
+        raise FetchError("dataset manifest end mismatch")
+
+    paths = {Path(path).name: Path(path) for path in glob.glob(pattern)}
+    records = manifest.get("shards") or []
+    if len(records) != manifest.get("shard_count"):
+        raise FetchError("dataset manifest shard count mismatch")
+    for record in records:
+        name = str(record["file"])
+        path = paths.get(name)
+        if path is None:
+            raise FetchError(f"manifest shard missing locally: {name}")
+        if _sha256_file(path) != record.get("sha256"):
+            raise FetchError(f"manifest shard checksum mismatch: {name}")
+    return manifest
+
+
 def download_dataset(
     start: datetime,
     end: datetime,
 ) -> tuple[list[XAUBar], dict[datetime, tuple[float, float]], dict[str, Any]]:
     shard_glob = os.getenv("GEN1_2Y_SHARD_GLOB")
+    manifest_raw = os.getenv("GEN1_2Y_MANIFEST")
+    manifest = None
+    if shard_glob and manifest_raw:
+        manifest = validate_dataset_manifest(
+            shard_glob,
+            Path(manifest_raw),
+            start,
+            end,
+        )
     if shard_glob:
-        return load_dataset_shards(shard_glob, start, end)
+        bars, quotes, diag = load_dataset_shards(shard_glob, start, end)
+        if manifest is not None:
+            if diag["dataset_sha256"] != manifest.get("dataset_sha256"):
+                raise FetchError("dataset content checksum mismatch")
+            diag["dataset_manifest"] = str(manifest_raw)
+            diag["dataset_bundle_sha256"] = manifest.get("bundle_sha256")
+            diag["fallback_day_count"] = manifest.get("fallback_day_count", 0)
+            diag["fallback_days"] = manifest.get("fallback_days", [])
+            diag["source_counts"] = manifest.get("source_counts", {})
+        return bars, quotes, diag
     return build_dataset_from_results(
         download_day_results(start, end),
         start,
@@ -1396,6 +1879,20 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if os.getenv("GEN1_2Y_BUILD_MANIFEST") == "1":
+        manifest_out = Path(
+            os.getenv(
+                "GEN1_2Y_MANIFEST_OUT",
+                "artifacts/gen1_gold_2y_dataset_manifest.json",
+            )
+        )
+        build_dataset_manifest(
+            os.environ["GEN1_2Y_SHARD_GLOB"],
+            START,
+            END,
+            manifest_out,
+        )
+        sys.exit(0)
     if os.getenv("GEN1_2Y_PREPARE_ONLY") == "1":
         shard_start = datetime.fromisoformat(
             os.environ["GEN1_2Y_SHARD_START"]
