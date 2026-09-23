@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+import threading
+import time
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -29,31 +31,50 @@ logger = logging.getLogger(__name__)
 _external_engine = None
 _external_replay_available = False
 _replay_provisioning_error = None
+_local_writer_lock = threading.Lock()
 XAUPaperSessionLocal = SessionLocal
 XAUReplaySessionLocal = SessionLocal
 
 
 @contextmanager
-def paper_writer_guard():
-    """One paper writer across PostgreSQL replicas, held across commits.
+def paper_writer_guard(*, timeout_seconds: float = 0.0):
+    """Serialize critical paper writers across replicas without stale session locks.
 
-    The dedicated autocommit connection owns the advisory lock; it is never
-    returned to the pool while locked. SQLite deployments use the process lock.
+    PostgreSQL uses transaction-scoped advisory locks, so a killed/cancelled
+    request cannot strand a session-level lock in the connection pool. A short
+    bounded wait absorbs normal commit overlap while keeping hard protection
+    responsive. SQLite/local deployments use a process lock.
     """
+    timeout_seconds = max(0.0, float(timeout_seconds))
     if _external_engine is None or _external_engine.dialect.name != "postgresql":
-        yield True
-        return
-    with _external_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        acquired = bool(conn.execute(text("SELECT pg_try_advisory_lock(782341905)")).scalar())
+        acquired = _local_writer_lock.acquire(timeout=timeout_seconds) if timeout_seconds else _local_writer_lock.acquire(blocking=False)
         try:
             yield acquired
         finally:
             if acquired:
-                try:
-                    conn.execute(text("SELECT pg_advisory_unlock(782341905)"))
-                except Exception:
-                    conn.invalidate()
-                    raise
+                _local_writer_lock.release()
+        return
+
+    deadline = time.monotonic() + timeout_seconds
+    conn = _external_engine.connect()
+    tx = conn.begin()
+    acquired = False
+    try:
+        while True:
+            acquired = bool(conn.execute(text("SELECT pg_try_advisory_xact_lock(782341905)")).scalar())
+            if acquired or time.monotonic() >= deadline:
+                break
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        yield acquired
+        if acquired:
+            tx.commit()
+        else:
+            tx.rollback()
+    except Exception:
+        tx.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _sqlalchemy_url(url: str) -> str:
