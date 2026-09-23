@@ -124,3 +124,45 @@ def test_evidence_fusion_refuses_empirical_calibration_on_small_history():
     result = build_gen1_evidence_fusion(technical, macro, fusion, memory=memory)
     assert result["calibration"]["applied"] is False
     assert result["confidence_kind"] == "heuristic_unvalidated_score"
+
+
+def test_evidence_fusion_exposes_directional_support_and_opposition():
+    technical, macro, fusion, memory = _base()
+    result = build_gen1_evidence_fusion(technical, macro, fusion, memory=memory)
+    directional = result["directional_evidence"]
+    assert directional["long_support"] > directional["short_support"]
+    assert 0.0 <= directional["conflict_score"] <= 1.0
+    assert directional["dominant_side"] == "long"
+
+
+def test_counter_flow_is_classification_not_entry_signal():
+    technical, macro, fusion, memory = _base(candidate="short_setup")
+    technical["gold_market_fusion"] = {
+        "status": "ready",
+        "venue_count": 3,
+        "independent_source_count": 2,
+        "composite_flow_score": 0.40,
+        "composite_footprint_score": 0.35,
+        "composite_liquidity_score": 0.25,
+        "composite_microstructure_score": 0.34,
+        "market_agreement_score": 82.0,
+    }
+    fusion["paper_entry_allowed"] = False
+    fusion["cognition"] = {
+        "directional_edge": {"score": -0.30, "strength": 0.30, "direction": "bearish"},
+        "directional_state": {
+            "classification": "bearish_pullback_inside_bullish_structure",
+            "counter_flow_short": True,
+            "counter_flow_long": False,
+            "source_conflicts": ["htf_vs_intraday"],
+        },
+        "execution_plan": {
+            "side": "short",
+            "action": "WAIT_CONFIRMATION",
+            "setup_type": "counter_flow_short",
+        },
+    }
+    result = build_gen1_evidence_fusion(technical, macro, fusion, memory=memory)
+    assert result["decision"] == "COUNTER_FLOW_SHORT"
+    assert "counter_flow_short_is_classification_not_entry" in result["reasons"]
+    assert result["execution_allowed"] is False

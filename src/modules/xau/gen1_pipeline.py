@@ -172,6 +172,8 @@ async def run_gen1_trade_gold_pipeline(
         "volume_profile_ready": profile.get("status") == "ready",
         "raw_book_ready": bool(raw_book),
     }
+    directional_state = ((fusion.get("cognition") or {}).get("directional_state") or {})
+    execution_plan = ((fusion.get("cognition") or {}).get("execution_plan") or {})
     gen1_stage = {
         "status": fusion.get("state"),
         "candidate": fusion.get("technical_candidate"),
@@ -181,6 +183,13 @@ async def run_gen1_trade_gold_pipeline(
         "evidence_score": evidence.get("score"),
         "evidence_coverage": evidence.get("coverage"),
         "meta_decision": fusion.get("meta_decision"),
+        "directional_classification": directional_state.get("classification"),
+        "agreement_scope": directional_state.get("agreement_scope"),
+        "microstructure_agreement_score": directional_state.get("microstructure_agreement_score"),
+        "timeframe_agreement_score": directional_state.get("timeframe_agreement_score"),
+        "setup_type": execution_plan.get("setup_type"),
+        "counter_flow": execution_plan.get("counter_flow"),
+        "flow_opposition": execution_plan.get("flow_opposition"),
         "research_ready": bool(fusion.get("research_ready")),
         "paper_entry_allowed": bool(fusion.get("paper_entry_allowed")),
         "execution_allowed": False,
@@ -208,7 +217,7 @@ async def run_gen1_trade_gold_pipeline(
         "forward_range_map": xaut.get("forward_range_map"),
         "answer_contract": {
             "required": [
-                "LONG_SHORT_WAIT", "confidence", "primary_scenario", "alternative_scenario",
+                "directional_state", "decision_classification", "confidence", "primary_scenario", "alternative_scenario",
                 "invalidation", "plus_minus_10_20_30", "confirmations", "missing_layers",
             ],
             "never_hide_missing_layer": True,

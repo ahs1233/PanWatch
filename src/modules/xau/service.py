@@ -1367,6 +1367,8 @@ def build_decision_fusion(
         "event_source_url": macro.get("event_source_url"),
         "research_ready": research_ready,
         "cognition": cognition,
+        "directional_state": cognition.get("directional_state") or {},
+        "directional_classification": (cognition.get("directional_state") or {}).get("classification"),
         "cognition_active": cognition_active,
         "regime": (cognition.get("regime") or {}).get("label"),
         "cognitive_confidence": (

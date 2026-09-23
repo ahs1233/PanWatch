@@ -657,6 +657,46 @@ def build_gold_market_fusion(
         + 0.25 * float(profile_score)
     )
 
+    timeframe_weights = {
+        "5m": 0.10, "15m": 0.15, "30m": 0.15,
+        "1h": 0.20, "4h": 0.20, "1d": 0.12, "1w": 0.08,
+    }
+    ready_timeframes = [
+        (tf, flows[tf], timeframe_weights[tf])
+        for tf in WINDOWS_MINUTES
+        if flows.get(tf) and flows[tf].get("decision_eligible")
+    ]
+    directional_timeframes = [
+        (tf, row, weight)
+        for tf, row, weight in ready_timeframes
+        if abs(float(row.get("score") or 0.0)) >= 0.05
+    ]
+    if directional_timeframes:
+        positive_weight = sum(
+            weight for _, row, weight in directional_timeframes
+            if float(row.get("score") or 0.0) > 0
+        )
+        negative_weight = sum(
+            weight for _, row, weight in directional_timeframes
+            if float(row.get("score") or 0.0) < 0
+        )
+        directional_weight = positive_weight + negative_weight
+        timeframe_agreement_score = (
+            100.0 * max(positive_weight, negative_weight) / directional_weight
+            if directional_weight else 50.0
+        )
+    else:
+        timeframe_agreement_score = 50.0
+    ready_names = {tf for tf, _, _ in ready_timeframes}
+    if ready_names & {"1d", "1w"}:
+        agreement_scope = "multi_timeframe"
+    elif ready_names & {"1h", "4h"}:
+        agreement_scope = "intraday_multiframe"
+    elif ready_names:
+        agreement_scope = "short_term_only"
+    else:
+        agreement_scope = "collecting"
+
     flow_horizon_weights = {"5m": 0.35, "15m": 0.20, "30m": 0.15, "1h": 0.15, "4h": 0.10, "1d": 0.04, "1w": 0.01}
     eligible_flows = [
         (tf, row, flow_horizon_weights[tf])
@@ -744,6 +784,10 @@ def build_gold_market_fusion(
         },
         "volume_profile_map": profiles,
         "market_agreement_score": round(max(0.0, min(100.0, agreement_score)), 2),
+        "microstructure_agreement_score": round(max(0.0, min(100.0, agreement_score)), 2),
+        "timeframe_agreement_score": round(max(0.0, min(100.0, timeframe_agreement_score)), 2),
+        "agreement_scope": agreement_scope,
+        "ready_directional_timeframes": sorted(ready_names),
         "composite_flow_score": round(composite_flow, 4),
         "composite_footprint_score": round(composite_footprint, 4),
         "composite_liquidity_score": round(composite_liquidity, 4),

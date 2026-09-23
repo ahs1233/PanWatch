@@ -132,7 +132,7 @@ export default function Gen1GoldPage(){
           </div>
           <div className="mt-3 grid gap-2 sm:grid-cols-3">
             <Metric label="Fusion 5m" value={fmt(fusionFlow5?.score,3)} hint={fusionFlow5?.direction||'—'}/>
-            <Metric label="Market Agreement" value={goldFusion?.market_agreement_score==null?'—':`${Math.round(Number(goldFusion.market_agreement_score))}%`} hint={`${goldFusion?.venue_count||0} venues`}/>
+            <Metric label="Microstructure Agreement" value={goldFusion?.market_agreement_score==null?'—':`${Math.round(Number(goldFusion.market_agreement_score))}%`} hint={`${goldFusion?.venue_count||0} venues`}/>
             <Metric label="Fusion Microstructure" value={fmt(goldFusion?.composite_microstructure_score,3)} hint={goldFusion?.direction||'—'}/>
           </div>
         </section>

@@ -352,6 +352,29 @@ def build_gen1_evidence_fusion(
     ]
 
     evidence_direction = "bullish" if score >= 0.10 else "bearish" if score <= -0.10 else "neutral"
+    long_support = (
+        sum(max(0.0, item["score"]) * item["weight"] for item in available) / weight_sum
+        if weight_sum > 0 else 0.0
+    )
+    short_support = (
+        sum(max(0.0, -item["score"]) * item["weight"] for item in available) / weight_sum
+        if weight_sum > 0 else 0.0
+    )
+    directional_total = long_support + short_support
+    conflict_score = (
+        2.0 * min(long_support, short_support) / directional_total
+        if directional_total > 0 else 0.0
+    )
+    dominant_side = (
+        "long" if long_support - short_support >= 0.10
+        else "short" if short_support - long_support >= 0.10
+        else "neutral"
+    )
+    directional_confidence = (
+        abs(long_support - short_support) / directional_total
+        if directional_total > 0 else 0.0
+    )
+    directional_state = cognition.get("directional_state") or {}
     cognitive_confidence = _clip(_num(fusion.get("cognitive_confidence"), 0.5), 0.05, 0.95)
     calibrated_cognitive, calibration = _empirical_cognitive_calibration(
         cognitive_confidence,
@@ -396,6 +419,23 @@ def build_gen1_evidence_fusion(
     ):
         decision = "LONG" if candidate_sign > 0 else "SHORT"
         reasons.append("independent_evidence_confirms_candidate")
+    elif directional_state:
+        plan = cognition.get("execution_plan") or {}
+        side = str(plan.get("side") or "")
+        if side == "short" and directional_state.get("counter_flow_short"):
+            decision = "COUNTER_FLOW_SHORT"
+            reasons.append("counter_flow_short_is_classification_not_entry")
+        elif side == "long" and directional_state.get("counter_flow_long"):
+            decision = "COUNTER_FLOW_LONG"
+            reasons.append("counter_flow_long_is_classification_not_entry")
+        elif plan.get("action") == "WAIT_CONFIRMATION":
+            decision = "WAIT_CONFIRMATION"
+        elif plan.get("action") in {"BIAS_ONLY", "WAIT_TRIGGER"} and side == "long":
+            decision = "BIAS_LONG"
+        elif plan.get("action") in {"BIAS_ONLY", "WAIT_TRIGGER"} and side == "short":
+            decision = "BIAS_SHORT"
+        elif candidate_sign != 0 and candidate_evidence < 0.10:
+            reasons.append("evidence_confirmation_below_threshold")
     elif candidate_sign != 0 and candidate_evidence < 0.10:
         reasons.append("evidence_confirmation_below_threshold")
 
@@ -417,6 +457,15 @@ def build_gen1_evidence_fusion(
         "calibration": calibration,
         "families": families,
         "conflicts": conflicts,
+        "directional_evidence": {
+            "long_support": round(long_support, 4),
+            "short_support": round(short_support, 4),
+            "conflict_score": round(conflict_score, 4),
+            "dominant_side": dominant_side,
+            "confidence": round(directional_confidence, 4),
+            "unresolved_conflicts": list(directional_state.get("source_conflicts") or []),
+            "classification": directional_state.get("classification"),
+        },
         "reasons": list(dict.fromkeys(reasons)),
         "xaut": xaut,
         "gold_microstructure": xaut,

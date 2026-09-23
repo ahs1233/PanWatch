@@ -117,6 +117,9 @@ def test_long_timeframe_flow_is_collecting_until_tape_is_complete():
     assert fused["flow"]["1d"]["status"] == "partial"
     assert fused["flow"]["1d"]["decision_eligible"] is False
     assert fused["flow"]["1d"]["direction"] == "collecting"
+    assert fused["agreement_scope"] == "short_term_only"
+    assert fused["microstructure_agreement_score"] == fused["market_agreement_score"]
+    assert fused["timeframe_agreement_score"] >= 0
 
 
 def test_profile_summary_has_buy_sell_delta_and_partial_guardrail():
