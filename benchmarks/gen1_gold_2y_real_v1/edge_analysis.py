@@ -214,8 +214,8 @@ def _bootstrap_mean_ci(values: np.ndarray, iterations: int = 4000) -> list[float
         return [None, None]
     rng = np.random.default_rng(RNG_SEED)
     means = []
-    for _ in range(0, iterations, 500):
-        n = min(500, iterations - len(means) * 500)
+    for offset in range(0, iterations, 500):
+        n = min(500, iterations - offset)
         means.extend(rng.choice(values, size=(n, len(values)), replace=True).mean(axis=1).tolist())
     return [float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))]
 
