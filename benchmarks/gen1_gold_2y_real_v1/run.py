@@ -25,13 +25,17 @@ Methodology
 from __future__ import annotations
 
 import csv
+import glob
+import gzip
 import hashlib
 import json
 import lzma
 import math
 import os
+import pickle
 import random
 import struct
+import sys
 import time
 from bisect import bisect_left, bisect_right
 from urllib.parse import quote
@@ -197,21 +201,56 @@ def date_range(start: datetime, end: datetime) -> list[date]:
     return out
 
 
-def download_dataset(start: datetime, end: datetime) -> tuple[list[XAUBar], dict[datetime, tuple[float, float]], dict[str, Any]]:
+def download_day_results(
+    start: datetime,
+    end: datetime,
+    *,
+    progress_label: str = "dataset",
+) -> list[dict[str, Any]]:
     days = date_range(start, end)
-    results = []
+    results: list[dict[str, Any]] = []
+    started = time.monotonic()
     with ThreadPoolExecutor(max_workers=max(2, WORKERS)) as pool:
         futures = {pool.submit(fetch_day, day): day for day in days}
-        for future in as_completed(futures):
-            results.append(future.result())
-    results.sort(key=lambda x: x["day"])
+        for completed, future in enumerate(as_completed(futures), start=1):
+            day = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                print(json.dumps({
+                    "phase": "dataset_day_failed",
+                    "label": progress_label,
+                    "day": day.isoformat(),
+                    "completed_days": completed - 1,
+                    "requested_days": len(days),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "elapsed_seconds": round(time.monotonic() - started, 2),
+                }), flush=True)
+                raise
+            if completed % 25 == 0 or completed == len(days):
+                print(json.dumps({
+                    "phase": "dataset_download_progress",
+                    "label": progress_label,
+                    "completed_days": completed,
+                    "requested_days": len(days),
+                    "elapsed_seconds": round(time.monotonic() - started, 2),
+                }), flush=True)
+    results.sort(key=lambda item: item["day"])
+    return results
 
+
+def build_dataset_from_results(
+    results: list[dict[str, Any]],
+    start: datetime,
+    end: datetime,
+) -> tuple[list[XAUBar], dict[datetime, tuple[float, float]], dict[str, Any]]:
     raw_rows = []
     quote_closes: dict[datetime, tuple[float, float]] = {}
     data_days = 0
     no_data_days = 0
     crossed = 0
-    for result in results:
+    for result in sorted(results, key=lambda item: item["day"]):
         if result["status"] != "data":
             no_data_days += 1
             continue
@@ -267,7 +306,7 @@ def download_dataset(start: datetime, end: datetime) -> tuple[list[XAUBar], dict
             spreads.append(((ask_close - bid_close) / mid) * 10000.0)
 
     diag = {
-        "requested_days": len(days),
+        "requested_days": len(date_range(start, end)),
         "data_days": data_days,
         "no_data_days": no_data_days,
         "m1_bar_count": len(bars),
@@ -285,6 +324,82 @@ def download_dataset(start: datetime, end: datetime) -> tuple[list[XAUBar], dict
     }
     return bars, quote_closes, diag
 
+
+def save_dataset_shard(start: datetime, end: datetime, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    results = download_day_results(
+        start,
+        end,
+        progress_label=f"{start.date()}..{end.date()}",
+    )
+    payload = {
+        "format": "gen1_gold_2y_day_results_v1",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "results": results,
+    }
+    with gzip.open(output_path, "wb", compresslevel=6) as fh:
+        pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    print(json.dumps({
+        "phase": "dataset_shard_complete",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "day_count": len(results),
+        "output_path": str(output_path),
+        "size_bytes": output_path.stat().st_size,
+    }), flush=True)
+
+
+def load_dataset_shards(
+    pattern: str,
+    start: datetime,
+    end: datetime,
+) -> tuple[list[XAUBar], dict[datetime, tuple[float, float]], dict[str, Any]]:
+    paths = sorted(glob.glob(pattern))
+    if not paths:
+        raise FetchError(f"no dataset shards matched: {pattern}")
+
+    by_day: dict[str, dict[str, Any]] = {}
+    for raw_path in paths:
+        path = Path(raw_path)
+        with gzip.open(path, "rb") as fh:
+            payload = pickle.load(fh)
+        if payload.get("format") != "gen1_gold_2y_day_results_v1":
+            raise FetchError(f"unsupported dataset shard format: {path}")
+        for result in payload.get("results") or []:
+            day = str(result["day"])
+            if day in by_day and by_day[day] != result:
+                raise FetchError(f"conflicting duplicate dataset day: {day}")
+            by_day[day] = result
+
+    expected = {day.isoformat() for day in date_range(start, end)}
+    missing = sorted(expected.difference(by_day))
+    if missing:
+        raise FetchError(
+            f"dataset shards missing {len(missing)} days; first={missing[:5]}"
+        )
+    selected = [by_day[day] for day in sorted(expected)]
+    print(json.dumps({
+        "phase": "dataset_shards_loaded",
+        "shard_count": len(paths),
+        "day_count": len(selected),
+        "paths": paths,
+    }), flush=True)
+    return build_dataset_from_results(selected, start, end)
+
+
+def download_dataset(
+    start: datetime,
+    end: datetime,
+) -> tuple[list[XAUBar], dict[datetime, tuple[float, float]], dict[str, Any]]:
+    shard_glob = os.getenv("GEN1_2Y_SHARD_GLOB")
+    if shard_glob:
+        return load_dataset_shards(shard_glob, start, end)
+    return build_dataset_from_results(
+        download_day_results(start, end),
+        start,
+        end,
+    )
 
 def bucket_start(ts: datetime, timeframe: XAUTimeframe) -> datetime:
     if timeframe is XAUTimeframe.M5:
@@ -404,9 +519,18 @@ def build_historical_macro_proxy(start: datetime, end: datetime):
     usable = {name: rows for name, rows in raw.items() if len(rows) >= 10}
     if len(usable) < 3:
         raise FetchError("fewer than three historical macro proxy series are usable")
+    usable_times = {
+        name: [item[0] for item in rows]
+        for name, rows in usable.items()
+    }
 
-    def value_at(rows: list[tuple[datetime, float]], at: datetime, lag: int = 0):
-        times = [item[0] for item in rows]
+    def value_at(
+        name: str,
+        rows: list[tuple[datetime, float]],
+        at: datetime,
+        lag: int = 0,
+    ):
+        times = usable_times[name]
         idx = bisect_right(times, at) - 1 - lag
         if idx < 0:
             return None
@@ -420,8 +544,8 @@ def build_historical_macro_proxy(start: datetime, end: datetime):
             rows = usable.get(name)
             if not rows:
                 return 0.0
-            now_pair = value_at(rows, at, 0)
-            prev_pair = value_at(rows, at, 5)
+            now_pair = value_at(name, rows, at, 0)
+            prev_pair = value_at(name, rows, at, 5)
             if not now_pair or not prev_pair or not prev_pair[0]:
                 return 0.0
             change = (now_pair[0] - prev_pair[0]) / prev_pair[0]
@@ -444,8 +568,8 @@ def build_historical_macro_proxy(start: datetime, end: datetime):
 
         rows = usable.get("us10y")
         if rows:
-            now_pair = value_at(rows, at, 0)
-            prev_pair = value_at(rows, at, 5)
+            now_pair = value_at("us10y", rows, at, 0)
+            prev_pair = value_at("us10y", rows, at, 5)
             if now_pair and prev_pair:
                 delta = now_pair[0] - prev_pair[0]
                 score = max(-1.0, min(1.0, -delta / 0.35))
@@ -519,8 +643,12 @@ def range_outcomes(
     horizon_minutes: int,
 ) -> dict[str, Any]:
     start = bisect_right(m1_available, evaluation_time)
-    end = bisect_right(m1_available, evaluation_time + timedelta(minutes=horizon_minutes))
+    end = bisect_right(
+        m1_available,
+        evaluation_time + timedelta(minutes=horizon_minutes),
+    )
     future = m1[start:end]
+    distances = (10, 20, 30)
     result: dict[str, Any] = {
         "horizon_minutes": horizon_minutes,
         "bar_count": len(future),
@@ -529,31 +657,51 @@ def range_outcomes(
     }
     if not future:
         return result
-    result["max_up_usd"] = round(max(r.high - entry for r in future), 4)
-    result["max_down_usd"] = round(max(entry - r.low for r in future), 4)
-    for distance in (10, 20, 30):
-        first = "none"
-        first_at = None
-        up = down = False
-        for bar in future:
-            hu = bar.high >= entry + distance
-            hd = bar.low <= entry - distance
-            up = up or hu
-            down = down or hd
-            if first == "none" and (hu or hd):
-                first_at = (bar.timestamp + timedelta(minutes=1)).isoformat()
-                first = "ambiguous_same_bar" if hu and hd else "up" if hu else "down"
+
+    max_up = float("-inf")
+    max_down = float("-inf")
+    level_state = {
+        distance: {
+            "up_hit": False,
+            "down_hit": False,
+            "first_hit": "none",
+            "first_hit_at": None,
+        }
+        for distance in distances
+    }
+    for bar in future:
+        max_up = max(max_up, float(bar.high) - entry)
+        max_down = max(max_down, entry - float(bar.low))
+        available_at = None
+        for distance in distances:
+            state = level_state[distance]
+            hu = float(bar.high) >= entry + distance
+            hd = float(bar.low) <= entry - distance
+            state["up_hit"] = state["up_hit"] or hu
+            state["down_hit"] = state["down_hit"] or hd
+            if state["first_hit"] == "none" and (hu or hd):
+                if available_at is None:
+                    available_at = (bar.timestamp + timedelta(minutes=1)).isoformat()
+                state["first_hit_at"] = available_at
+                state["first_hit"] = (
+                    "ambiguous_same_bar"
+                    if hu and hd
+                    else "up"
+                    if hu
+                    else "down"
+                )
+
+    result["max_up_usd"] = round(max_up, 4)
+    result["max_down_usd"] = round(max_down, 4)
+    for distance in distances:
+        state = level_state[distance]
         result["levels"][f"pm{distance}"] = {
             "distance_usd": distance,
             "up_level": round(entry + distance, 4),
             "down_level": round(entry - distance, 4),
-            "up_hit": up,
-            "down_hit": down,
-            "first_hit": first,
-            "first_hit_at": first_at,
+            **state,
         }
     return result
-
 
 def spread_net_bps(
     candidate: str,
@@ -1165,4 +1313,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if os.getenv("GEN1_2Y_PREPARE_ONLY") == "1":
+        shard_start = datetime.fromisoformat(
+            os.environ["GEN1_2Y_SHARD_START"]
+        ).replace(tzinfo=UTC)
+        shard_end = datetime.fromisoformat(
+            os.environ["GEN1_2Y_SHARD_END"]
+        ).replace(tzinfo=UTC)
+        shard_out = Path(os.environ["GEN1_2Y_SHARD_OUT"])
+        save_dataset_shard(shard_start, shard_end, shard_out)
+        sys.exit(0)
     main()
