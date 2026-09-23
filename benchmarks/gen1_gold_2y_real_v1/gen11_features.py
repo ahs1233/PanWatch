@@ -140,3 +140,109 @@ def build_gen11_feature_snapshot(
             "dominant_side": directional.get("dominant_side"),
         },
     }
+
+
+
+def flatten_gen11_episode(ep) -> dict[str, Any]:
+    meta = dict(ep.meta or {})
+    snap = dict(meta.get("gen11_features") or {})
+    row: dict[str, Any] = {
+        "observed_at": ep.observed_at.isoformat(),
+        "outcome_at": ep.outcome_at.isoformat(),
+        "candidate": ep.candidate,
+        "regime": ep.regime,
+        "cognitive_confidence": ep.confidence,
+        "gen1_decision": meta.get("gen1_decision"),
+        "gen1_confidence": meta.get("gen1_decision_confidence"),
+        "fusion_state": meta.get("gen1_fusion_state"),
+        "entry_price": ep.entry_price,
+        "outcome_price": ep.outcome_price,
+        "gross_directional_bps": ep.directional_return_bps,
+        "net_spread_directional_bps": meta.get("net_spread_directional_return_bps"),
+        "session": snap.get("session"),
+        "session_transition": snap.get("session_transition"),
+        "alignment": snap.get("alignment"),
+    }
+    for tf in ("1m", "5m", "15m"):
+        frame = dict((snap.get("frames") or {}).get(tf) or {})
+        for key in ("direction", "rsi14", "atr14", "atr_pct", "breakout"):
+            row[f"{tf}_{key}"] = frame.get(key)
+        close, fast, slow, atr = frame.get("close"), frame.get("ema_fast"), frame.get("ema_slow"), frame.get("atr14")
+        try:
+            row[f"{tf}_fast_distance_atr"] = (float(close) - float(fast)) / float(atr) if float(atr) else None
+            row[f"{tf}_slow_distance_atr"] = (float(close) - float(slow)) / float(atr) if float(atr) else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            row[f"{tf}_fast_distance_atr"] = None
+            row[f"{tf}_slow_distance_atr"] = None
+    htf = dict(snap.get("htf_bias") or {})
+    for tf in ("monthly", "weekly", "daily", "h4", "h1"):
+        state = dict(htf.get(tf) or {})
+        row[f"{tf}_direction"] = state.get("direction")
+        row[f"{tf}_score"] = state.get("score")
+        row[f"{tf}_slope20"] = state.get("slope_20")
+        close = state.get("close")
+        emas = dict(state.get("ema") or {})
+        for period in (9, 21, 50, 200, 1000):
+            ema = emas.get(str(period))
+            try:
+                row[f"{tf}_ema{period}_distance_pct"] = (float(close) - float(ema)) / float(ema) if float(ema) else None
+            except (TypeError, ValueError, ZeroDivisionError):
+                row[f"{tf}_ema{period}_distance_pct"] = None
+    for key in ("composite_score", "composite_direction", "today_score", "today_direction"):
+        row[f"htf_{key}"] = htf.get(key)
+    flow = dict(snap.get("flow") or {})
+    for key in ("direction", "score", "agreement", "cmf20", "signed_tick_volume_imbalance", "obv_slope_proxy"):
+        row[f"flow_{key}"] = flow.get(key)
+    profile = dict(snap.get("volume_profile") or {})
+    for key in ("poc", "vah", "val", "location", "range_low", "range_high", "total_tick_volume"):
+        row[f"volume_{key}"] = profile.get(key)
+    smart = dict(snap.get("smart_money") or {})
+    for key in ("bias", "score", "break_of_structure", "liquidity_sweep", "displacement", "dealing_zone"):
+        row[f"smart_{key}"] = smart.get(key)
+    liquidity = dict(snap.get("liquidity") or {})
+    row["liquidity_equal_high_count"] = liquidity.get("equal_high_count")
+    row["liquidity_equal_low_count"] = liquidity.get("equal_low_count")
+    row["liquidity_tolerance"] = liquidity.get("tolerance")
+    nearest = list(liquidity.get("nearest_levels") or [])
+    row["liquidity_nearest_name"] = (nearest[0] or {}).get("name") if nearest else None
+    row["liquidity_nearest_distance"] = (nearest[0] or {}).get("distance") if nearest else None
+    macro = dict(snap.get("macro") or {})
+    row["macro_bias"] = macro.get("bias")
+    row["macro_bias_label"] = macro.get("bias_label")
+    row["macro_confidence"] = macro.get("confidence")
+    row["macro_proxy_score"] = macro.get("proxy_score")
+    for driver in list(macro.get("drivers") or []):
+        name = str((driver or {}).get("name") or "")
+        if name in {"dxy_5d", "vix_5d", "spx_5d", "oil_5d", "us10y_5d_delta"}:
+            row[f"macro_{name}_gold_score"] = (driver or {}).get("gold_score")
+            row[f"macro_{name}_value"] = (driver or {}).get("value")
+    evidence = dict(snap.get("evidence") or {})
+    for key in ("score", "direction", "coverage", "agreement_ratio", "decision_confidence", "conflict_score", "directional_confidence", "dominant_side"):
+        row[f"evidence_{key}"] = evidence.get(key)
+    cognition = dict(snap.get("cognition") or {})
+    for key in ("calibrated_confidence", "execution_action", "execution_side", "directional_classification", "directional_edge"):
+        row[f"cognition_{key}"] = cognition.get(key)
+    ranges = dict(meta.get("range_outcomes") or {})
+    row["range_max_up_usd"] = ranges.get("max_up_usd")
+    row["range_max_down_usd"] = ranges.get("max_down_usd")
+    levels = dict(ranges.get("levels") or {})
+    side = "up" if ep.candidate == "long_setup" else "down"
+    for distance in (10, 20, 30):
+        first = str((levels.get(f"pm{distance}") or {}).get("first_hit") or "none")
+        row[f"range_pm{distance}_first"] = first
+        row[f"range_pm{distance}_favorable_first"] = first == side
+    return row
+
+
+def write_gen11_feature_csv(path, episodes) -> None:
+    import csv
+    rows = [flatten_gen11_episode(ep) for ep in episodes]
+    if not rows:
+        return
+    fieldnames = list(rows[0])
+    extras = sorted({key for row in rows for key in row}.difference(fieldnames))
+    fieldnames.extend(extras)
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
