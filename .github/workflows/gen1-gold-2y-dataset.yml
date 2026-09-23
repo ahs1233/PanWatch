@@ -5,7 +5,6 @@ on:
     branches:
       - "feat/ahmed-toolbox-xau"
     paths:
-      - ".github/workflows/gen1-gold-2y-dataset.yml"
       - "src/platform/marketdata/xau_dukascopy.py"
   workflow_dispatch:
 
