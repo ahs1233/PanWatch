@@ -89,6 +89,7 @@ class XAUIntradayEngine:
         event_risk: bool = False,
         macro_bias: int = 0,
         now: datetime | None = None,
+        assume_sorted: bool = False,
     ) -> XAUIntradayAssessment:
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None:
@@ -100,9 +101,11 @@ class XAUIntradayEngine:
         warnings: list[str] = []
 
         for timeframe in (XAUTimeframe.M1, XAUTimeframe.M5, XAUTimeframe.M15):
-            bars = sorted(
-                bars_by_timeframe.get(timeframe) or [],
-                key=lambda item: item.timestamp,
+            source_bars = bars_by_timeframe.get(timeframe) or []
+            bars = (
+                list(source_bars)
+                if assume_sorted
+                else sorted(source_bars, key=lambda item: item.timestamp)
             )
             minimum = max(
                 self.slow_ema + 2,
