@@ -137,3 +137,47 @@ def test_forward_oos_uses_latest_revision_only():
     assert result["forward_oos"]["strategy_revision"] == "new"
     assert result["forward_oos"]["decorrelated_completed_current_revision"] == 40
     assert result["forward_oos"]["passed"] is False
+
+
+
+def _shadow_oos_row(index, *, win, revision="shadow-rev"):
+    from datetime import datetime, timedelta, timezone
+    observed = datetime(2026, 2, 1, tzinfo=timezone.utc) + timedelta(minutes=20 * index)
+    directional = 11.0 if win else -3.0
+    return SimpleNamespace(
+        observed_at=observed,
+        meta={
+            "decision": "WAIT",
+            "decision_confidence": 0.65,
+            "shadow_direction": "LONG",
+            "shadow_confidence": 0.65,
+            "strategy_revision": revision,
+            "revision_pinning_available": True,
+            "missing_layers": [],
+            "regime": "trend_bull",
+            "observation_source": "scheduled_forward_validation",
+            "horizon_outcomes": {
+                "60m": {
+                    "directional_return_bps": None,
+                    "shadow_directional_return_bps": directional,
+                }
+            },
+            "live_range_outcomes": {"levels": {
+                "pm10": {"first_hit": "up" if win else "down"},
+                "pm20": {"first_hit": "none"},
+                "pm30": {"first_hit": "none"},
+            }},
+        },
+    )
+
+
+def test_shadow_oos_can_diagnose_overrestrictive_candidate_gate_without_changing_wait():
+    rows = [_shadow_oos_row(i, win=(i % 5 != 0)) for i in range(180)]
+    result = evaluate_gen1_live_observations(rows)
+    assert result["decision_counts"]["WAIT"] == 180
+    assert result["completed_60m_directional_count"] == 0
+    assert result["shadow_completed_60m_count"] == 180
+    assert result["shadow_forward_oos"]["cohort"] == "shadow"
+    assert result["shadow_forward_oos"]["passed"] is True
+    assert result["gate_diagnosis"] == "shadow_signal_promising_candidate_gate_requires_review"
+    assert result["edge_proven"] is False
