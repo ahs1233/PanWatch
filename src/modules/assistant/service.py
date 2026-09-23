@@ -32,7 +32,9 @@ from src.platform.ai.ai_failover import (
 )
 from src.platform.external_tools import (
     AhmedToolboxClient,
+    GraphifyClient,
     register_ahmed_toolbox_tools,
+    register_graphify_tools,
 )
 from src.platform.persistence.models import AIModel, AIService, AppSettings
 from src.platform.runtime.config import Settings
@@ -372,35 +374,56 @@ class AssistantService:
         )
 
     def _build_tool_registry(self):
-        """Compose local tools plus the optional read-only Ahmed ToolBox surface."""
+        """Compose local, external research, and project-knowledge tools."""
         tools = build_panwatch_tool_registry(self._repository.session)
         descriptors = list(PANWATCH_TOOL_DESCRIPTORS)
         descriptors.extend(register_xau_research_tools(tools))
 
-        toolbox_url = self._settings.ahmed_toolbox_url.strip()
-        if not toolbox_url:
-            return tools, descriptors
+        graphify_url = self._settings.graphify_mcp_url.strip()
+        if graphify_url:
+            try:
+                knowledge_descriptors = register_graphify_tools(
+                    tools,
+                    GraphifyClient(
+                        graphify_url,
+                        token=self._settings.graphify_mcp_token,
+                        timeout_seconds=self._settings.graphify_mcp_timeout_seconds,
+                    ),
+                )
+                descriptors.extend(knowledge_descriptors)
+                logger.info(
+                    "Graphify knowledge discovery ready: tools=%s tool_research=%s",
+                    len(knowledge_descriptors),
+                    bool(self._settings.tool_research_enabled),
+                )
+            except Exception as exc:  # noqa: BLE001 - knowledge lookup must fail soft
+                logger.warning(
+                    "Graphify knowledge discovery unavailable; continuing without it: %s",
+                    exc,
+                )
 
-        try:
-            external_descriptors = register_ahmed_toolbox_tools(
-                tools,
-                AhmedToolboxClient(
-                    toolbox_url,
-                    token=self._settings.ahmed_toolbox_token,
-                    timeout_seconds=self._settings.ahmed_toolbox_timeout_seconds,
-                ),
-            )
-            descriptors.extend(external_descriptors)
-            logger.info(
-                "Ahmed ToolBox discovery ready: external_tools=%s tool_research=%s",
-                len(external_descriptors),
-                bool(self._settings.tool_research_enabled),
-            )
-        except Exception as exc:  # noqa: BLE001 - external research must fail soft
-            logger.warning(
-                "Ahmed ToolBox discovery unavailable; using local tools only: %s",
-                exc,
-            )
+        toolbox_url = self._settings.ahmed_toolbox_url.strip()
+        if toolbox_url:
+            try:
+                external_descriptors = register_ahmed_toolbox_tools(
+                    tools,
+                    AhmedToolboxClient(
+                        toolbox_url,
+                        token=self._settings.ahmed_toolbox_token,
+                        timeout_seconds=self._settings.ahmed_toolbox_timeout_seconds,
+                    ),
+                )
+                descriptors.extend(external_descriptors)
+                logger.info(
+                    "Ahmed ToolBox discovery ready: external_tools=%s tool_research=%s",
+                    len(external_descriptors),
+                    bool(self._settings.tool_research_enabled),
+                )
+            except Exception as exc:  # noqa: BLE001 - external research must fail soft
+                logger.warning(
+                    "Ahmed ToolBox discovery unavailable; continuing with local tools: %s",
+                    exc,
+                )
 
         return tools, descriptors
 
