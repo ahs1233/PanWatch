@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from .gen1_pipeline import run_gen1_trade_gold_pipeline
+from .gold_market_fusion_runtime import get_gold_market_fusion
 from .paper import XAUPaperTradingEngine
 from .validation import load_gen1_live_validation_summary, load_gen1_validation_summary
 from .service import build_decision_fusion, get_chart_series, get_library_validation, get_macro_context, get_xau_snapshot
@@ -61,6 +62,23 @@ async def gen1_gold():
         raise HTTPException(
             status_code=503,
             detail=f"GEN1 GOLD pipeline unavailable: {type(exc).__name__}",
+        ) from exc
+
+
+@router.get("/gold-fusion")
+async def gold_fusion(force: bool = Query(default=False)):
+    """Inspect the research-only multi-venue gold microstructure fusion."""
+    try:
+        technical = await get_xau_snapshot(force=False)
+        spot = technical.get("indicative_spot") or {}
+        return await get_gold_market_fusion(
+            xau_spot_price=(float(spot["price"]) if spot.get("price") else None),
+            force=force,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gold market fusion unavailable: {type(exc).__name__}",
         ) from exc
 
 

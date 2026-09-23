@@ -102,6 +102,33 @@ def _candidate_sign(candidate: str) -> float:
 
 
 def _xaut_score(technical: dict[str, Any]) -> dict[str, Any]:
+    multi = technical.get("gold_market_fusion") or {}
+    if multi and multi.get("status") in {"ready", "degraded"} and int(multi.get("venue_count") or 0) > 0:
+        raw = _clip(_num(multi.get("composite_microstructure_score"), 0.0))
+        venue_count = max(1, int(_num(multi.get("venue_count"), 1)))
+        independent_count = max(1, int(_num(multi.get("independent_source_count"), 1)))
+        agreement = _clip(_num(multi.get("market_agreement_score"), 50.0) / 100.0, 0.0, 1.0)
+        reliability = _clip(0.38 + 0.08 * min(3, venue_count) + 0.12 * min(2, independent_count) + 0.16 * agreement, 0.35, 0.92)
+        score = _clip(raw * reliability)
+        return {
+            "available": True,
+            "score": round(score, 4),
+            "raw_score": round(raw, 4),
+            "reliability": round(reliability, 4),
+            "components": {
+                "composite_flow": round(_num(multi.get("composite_flow_score"), 0.0), 4),
+                "composite_footprint": round(_num(multi.get("composite_footprint_score"), 0.0), 4),
+                "composite_liquidity": round(_num(multi.get("composite_liquidity_score"), 0.0), 4),
+                "market_agreement": round(agreement, 4),
+            },
+            "source_family": "multi_venue_gold_microstructure",
+            "venue_count": venue_count,
+            "independent_source_count": independent_count,
+            "market_agreement_score": multi.get("market_agreement_score"),
+            "global_xauusd_order_flow": False,
+            "never_sum_cross_venue_raw_volume": True,
+        }
+
     xaut = technical.get("xaut_order_flow") or {}
     if not xaut or xaut.get("status") != "ready":
         return {
@@ -270,7 +297,7 @@ def build_gen1_evidence_fusion(
         _num(xaut.get("score"), 0.0),
         0.19,
         available=bool(xaut.get("available")),
-        source_family="bitfinex_xaut_centralized_microstructure",
+        source_family=str(xaut.get("source_family") or "bitfinex_xaut_centralized_microstructure"),
         detail=xaut,
     )
 
@@ -392,6 +419,8 @@ def build_gen1_evidence_fusion(
         "conflicts": conflicts,
         "reasons": list(dict.fromkeys(reasons)),
         "xaut": xaut,
+        "gold_microstructure": xaut,
         "require_xaut": bool(require_xaut),
+        "require_gold_microstructure": bool(require_xaut),
         "execution_allowed": False,
     }

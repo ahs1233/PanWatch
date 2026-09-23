@@ -31,6 +31,7 @@ from src.modules.xau.market_structure import (
     volume_profile,
 )
 from src.modules.xau.market_context import build_market_context
+from src.modules.xau.gold_market_fusion_runtime import get_gold_market_fusion
 from src.modules.xau.xaut_runtime import get_xaut_order_flow
 from src.modules.xau.library_intelligence import library_consensus, vectorbt_validation
 from src.platform.ai.ai_client import AIClient
@@ -932,6 +933,17 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         xaut_order_flow_error = type(exc).__name__
         logger.warning("XAUT free order-flow sensor unavailable: %s", xaut_order_flow_error)
 
+    gold_market_fusion = None
+    gold_market_fusion_error = None
+    try:
+        gold_market_fusion = await get_gold_market_fusion(
+            xau_spot_price=(float(spot["price"]) if spot and spot.get("price") else None),
+            force=force,
+        )
+    except Exception as exc:
+        gold_market_fusion_error = type(exc).__name__
+        logger.warning("Multi-venue gold fusion unavailable: %s", gold_market_fusion_error)
+
     assessment = XAUIntradayEngine(require_execution_data=False).analyze(
         bars,
         now=datetime.now(timezone.utc),
@@ -1140,6 +1152,10 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         warnings.append("spot_consensus_disagreement")
     if xaut_order_flow_error:
         warnings.append("xaut_order_flow_unavailable")
+    if gold_market_fusion_error:
+        warnings.append("gold_market_fusion_unavailable")
+    elif gold_market_fusion and gold_market_fusion.get("status") == "degraded":
+        warnings.append("gold_market_fusion_degraded")
 
     return {
         "instrument": "XAUUSD",
@@ -1162,6 +1178,8 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "market_context_error": market_context_error,
         "xaut_order_flow": xaut_order_flow,
         "xaut_order_flow_error": xaut_order_flow_error,
+        "gold_market_fusion": gold_market_fusion,
+        "gold_market_fusion_error": gold_market_fusion_error,
         "technical_mode": technical_mode,
         "spot_minus_proxy": basis,
         "spot_minus_proxy_bps": basis_bps,
@@ -1184,8 +1202,10 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
         "frames": frames,
         "disclaimer": (
             "The live spot reference is indicative and GC=F is a delayed research proxy. "
-            "Bitfinex XAUT/USD contributes centralized gold-proxy trades/raw-book microstructure, "
-            "but is not the OTC XAUUSD execution venue or global spot order flow. "
+            "OKX XAU-USDT-SWAP, OKX XAUT-USDT and Bitfinex XAUT/USD contribute centralized "
+            "gold-proxy trades/order-book microstructure. Cross-venue raw volumes are never "
+            "summed or described as global XAUUSD volume, and these venues are not the OTC "
+            "XAUUSD execution venue or global spot order flow. "
             "Neither is a broker execution quote. Live entry, stop-loss and take-profit "
             "automation remains locked until a tradable venue-specific bid/ask feed is connected."
         ),

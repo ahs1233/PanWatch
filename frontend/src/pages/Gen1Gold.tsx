@@ -71,6 +71,9 @@ export default function Gen1GoldPage(){
   const evidence=data?.evidence_fusion||{}
   const memory=data?.memory||{}
   const xaut=technical?.xaut_order_flow||{}
+  const goldFusion=technical?.gold_market_fusion||{}
+  const fusionFlow5=goldFusion?.flow?.['5m']||{}
+  const profileMap=goldFusion?.volume_profile_map||{}
   const profile=xaut?.volume_profile||{}
   const flow5=xaut?.flow?.['5m']||{}
   const book10=xaut?.raw_book?.pm10||{}
@@ -84,6 +87,7 @@ export default function Gen1GoldPage(){
     [stages.ahmed_toolbox?.status==='ready','Ahmed Toolbox',stages.ahmed_toolbox?.search_source],
     [Boolean(stages.panwatch?.market_context_ready),'HTF Market Context',stages.panwatch?.status],
     [Boolean(stages.panwatch?.xaut_ready),'XAUT Order Flow',xaut?.transport],
+    [Boolean(stages.panwatch?.gold_market_fusion_ready),'Multi-Venue Gold Fusion',`${stages.panwatch?.gold_market_venue_count||0} venues`],
     [Boolean(stages.panwatch?.footprint_ready),'Footprint',xaut?.footprint?.method],
     [Boolean(stages.panwatch?.volume_profile_ready),'Volume Profile',profile?.volume_kind],
     [Boolean(stages.panwatch?.raw_book_ready),'Raw Order Book','Bitfinex R0'],
@@ -126,6 +130,11 @@ export default function Gen1GoldPage(){
             <Metric label="5m Delta" value={fmt(flow5?.delta,4)} hint={`ratio ${fmt(flow5?.delta_ratio,3)}`}/>
             <Metric label="Book ±10" value={fmt(book10?.imbalance,3)} hint={`bid ${fmt(book10?.bid_quantity,3)} / ask ${fmt(book10?.ask_quantity,3)}`}/>
           </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <Metric label="Fusion 5m" value={fmt(fusionFlow5?.score,3)} hint={fusionFlow5?.direction||'—'}/>
+            <Metric label="Market Agreement" value={goldFusion?.market_agreement_score==null?'—':`${Math.round(Number(goldFusion.market_agreement_score))}%`} hint={`${goldFusion?.venue_count||0} venues`}/>
+            <Metric label="Fusion Microstructure" value={fmt(goldFusion?.composite_microstructure_score,3)} hint={goldFusion?.direction||'—'}/>
+          </div>
         </section>
         <section className="card p-4">
           <div className="mb-3 text-sm font-semibold">Volume Profile — executed XAUT volume</div>
@@ -138,6 +147,13 @@ export default function Gen1GoldPage(){
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
             <div className="rounded-xl bg-accent/30 p-3">HVN: {(profile?.high_volume_nodes||[]).slice(0,4).map((x:any)=>fmt(x?.price??x)).join(' · ')||'—'}</div>
             <div className="rounded-xl bg-accent/30 p-3">LVN: {(profile?.low_volume_nodes||[]).slice(0,4).map((x:any)=>fmt(x?.price??x)).join(' · ')||'—'}</div>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-muted-foreground">
+            {['1h','4h','1d','1w'].map(tf=>{const row=profileMap?.[tf]||{};return <div key={tf} className="rounded-xl border border-border/60 p-2">
+              <div className="font-medium text-foreground">{tf.toUpperCase()} POC cluster</div>
+              <div>{row?.decision_eligible?`${fmt(row?.poc_cluster_low)}–${fmt(row?.poc_cluster_high)}`:(row?.status||'collecting')}</div>
+              <div>complete venues {row?.complete_venue_count??0}</div>
+            </div>})}
           </div>
         </section>
       </div>
@@ -238,7 +254,7 @@ export default function Gen1GoldPage(){
           {!!Object.keys(data.stage_errors||{}).length&&<div className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/5 p-3 text-xs text-rose-500">Errors: {Object.entries(data.stage_errors).map(([k,v])=>`${k}=${v}`).join(' · ')}</div>}
         </section>
       </div>
-      <div className="flex items-center gap-2 px-1 text-[10px] text-muted-foreground"><ShieldAlert className="h-3.5 w-3.5"/> Research-only. XAUT is a centralized gold proxy; historical validation does not include raw XAUT microstructure; live XAUUSD execution remains disabled.</div>
+      <div className="flex items-center gap-2 px-1 text-[10px] text-muted-foreground"><ShieldAlert className="h-3.5 w-3.5"/> Research-only. OKX XAU/XAUT and Bitfinex XAUT are centralized gold sensors; cross-venue raw volume is never treated as global XAUUSD volume; live XAUUSD execution remains disabled.</div>
     </>}
   </div>
 }

@@ -103,6 +103,7 @@ async def run_gen1_trade_gold_pipeline(
         }
 
     xaut = technical.get("xaut_order_flow") or {}
+    gold_fusion = technical.get("gold_market_fusion") or {}
     footprint = xaut.get("footprint") or {}
     profile = xaut.get("volume_profile") or {}
     raw_book = xaut.get("raw_book") or {}
@@ -116,14 +117,23 @@ async def run_gen1_trade_gold_pipeline(
         missing_layers.append("higher_timeframe_market_context")
     if not memory.get("available"):
         missing_layers.append("panwatch_persistent_memory")
-    if not xaut or technical.get("xaut_order_flow_error"):
-        missing_layers.append("xaut_order_flow")
-    if not footprint.get("available"):
-        missing_layers.append("xaut_footprint")
-    if profile.get("status") != "ready":
-        missing_layers.append("xaut_volume_profile")
-    if not raw_book:
-        missing_layers.append("xaut_raw_book")
+    gold_fusion_ready = bool(
+        gold_fusion
+        and gold_fusion.get("status") in {"ready", "degraded"}
+        and int(gold_fusion.get("venue_count") or 0) >= 2
+        and int(gold_fusion.get("independent_source_count") or 0) >= 2
+        and not technical.get("gold_market_fusion_error")
+    )
+    if not gold_fusion_ready:
+        missing_layers.append("gold_market_fusion_independent_venues")
+        if not xaut or technical.get("xaut_order_flow_error"):
+            missing_layers.append("xaut_order_flow")
+        if not footprint.get("available"):
+            missing_layers.append("xaut_footprint")
+        if profile.get("status") != "ready":
+            missing_layers.append("xaut_volume_profile")
+        if not raw_book:
+            missing_layers.append("xaut_raw_book")
 
     toolbox_stage = {
         "status": "ready" if macro.get("search_ok") and search_source == "ahmed_toolbox" else "degraded",
@@ -146,6 +156,10 @@ async def run_gen1_trade_gold_pipeline(
             int(memory.get("trade_count") or 0),
         ),
         "xaut_ready": bool(xaut) and not technical.get("xaut_order_flow_error"),
+        "gold_market_fusion_ready": gold_fusion_ready,
+        "gold_market_venue_count": int(gold_fusion.get("venue_count") or 0),
+        "gold_market_independent_source_count": int(gold_fusion.get("independent_source_count") or 0),
+        "market_agreement_score": gold_fusion.get("market_agreement_score"),
         "footprint_ready": bool(footprint.get("available")),
         "volume_profile_ready": profile.get("status") == "ready",
         "raw_book_ready": bool(raw_book),
@@ -191,6 +205,8 @@ async def run_gen1_trade_gold_pipeline(
             ],
             "never_hide_missing_layer": True,
             "never_treat_xaut_as_global_xauusd_order_flow": True,
+            "never_sum_cross_venue_raw_gold_volume": True,
+            "multi_venue_gold_fusion_is_research_only": True,
             "execution_allowed": False,
         },
     }
