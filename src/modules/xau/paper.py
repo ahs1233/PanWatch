@@ -2403,19 +2403,6 @@ class XAUPaperTradingEngine:
 
         db = open_xau_paper_session()
         try:
-            acquired, lock_ms = acquire_paper_writer_transaction(
-                db,
-                timeout_seconds=0.75,
-            )
-            if not acquired:
-                db.rollback()
-                return {
-                    "status": "busy",
-                    "reason": "paper_writer_advisory_lock_busy",
-                    "paper_writer_busy_reason": "paper_writer_advisory_lock_busy",
-                    "lock_acquire_ms": lock_ms,
-                    "execution_allowed": False,
-                }
             account = self._active_account(db)
             memory = self._memory_snapshot(db, technical, macro) if account else {}
             fusion = build_decision_fusion(
@@ -2557,6 +2544,19 @@ class XAUPaperTradingEngine:
         """Commit hard exits independently of all research work."""
         db = open_xau_paper_session()
         try:
+            acquired, lock_ms = acquire_paper_writer_transaction(
+                db,
+                timeout_seconds=0.75,
+            )
+            if not acquired:
+                db.rollback()
+                return {
+                    "status": "busy",
+                    "reason": "paper_writer_advisory_lock_busy",
+                    "paper_writer_busy_reason": "paper_writer_advisory_lock_busy",
+                    "lock_acquire_ms": lock_ms,
+                    "execution_allowed": False,
+                }
             account = self._active_account(db)
             position = self._open_position(db, account.id) if account else None
             trade = None
