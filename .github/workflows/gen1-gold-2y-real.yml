@@ -32,18 +32,36 @@ concurrency:
   group: gen1-gold-2y-real-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  GEN1_2Y_START: "2024-09-23"
+  GEN1_2Y_SPLIT: "2025-09-23"
+  GEN1_2Y_END: "2026-09-23"
+  GEN1_2Y_STEP_MINUTES: "5"
+  GEN1_2Y_DOWNLOAD_WORKERS: "12"
+  GEN1_2Y_OUT: "artifacts/gen1_gold_2y_real_v1"
+
 jobs:
-  two-year-real-backtest:
+  prepare-data:
+    name: prepare-data-${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      PYTHONPATH: ${{ github.workspace }}
-      GEN1_2Y_START: "2024-09-23"
-      GEN1_2Y_SPLIT: "2025-09-23"
-      GEN1_2Y_END: "2026-09-23"
-      GEN1_2Y_STEP_MINUTES: "5"
-      GEN1_2Y_DOWNLOAD_WORKERS: "12"
-      GEN1_2Y_OUT: "artifacts/gen1_gold_2y_real_v1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: q1
+            start: "2024-09-23"
+            end: "2025-03-23"
+          - shard: q2
+            start: "2025-03-23"
+            end: "2025-09-23"
+          - shard: q3
+            start: "2025-09-23"
+            end: "2026-03-23"
+          - shard: q4
+            start: "2026-03-23"
+            end: "2026-09-23"
 
     steps:
       - name: Checkout exact strategy revision
@@ -76,6 +94,72 @@ jobs:
           python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
           python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
           python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
+
+      - name: Download and checkpoint dataset shard
+        env:
+          GEN1_2Y_PREPARE_ONLY: "1"
+          GEN1_2Y_SHARD_START: ${{ matrix.start }}
+          GEN1_2Y_SHARD_END: ${{ matrix.end }}
+          GEN1_2Y_SHARD_OUT: gen1-data/${{ matrix.shard }}.pkl.gz
+        run: |
+          set -o pipefail
+          python benchmarks/gen1_gold_2y_real_v1/run.py 2>&1 | tee gen1-data-${{ matrix.shard }}.log
+
+      - name: Upload dataset shard
+        uses: actions/upload-artifact@v4
+        with:
+          name: gen1-gold-2y-data-${{ matrix.shard }}-${{ github.event.pull_request.head.sha || github.sha }}
+          retention-days: 7
+          path: |
+            gen1-data/${{ matrix.shard }}.pkl.gz
+            gen1-data-${{ matrix.shard }}.log
+
+  two-year-real-backtest:
+    needs: prepare-data
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GEN1_2Y_SHARD_GLOB: /tmp/gen1-2y-data/*.pkl.gz
+      GEN1_2Y_PROFILE: "1"
+
+    steps:
+      - name: Checkout exact strategy revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact strategy revision
+        env:
+          EXPECTED_STRATEGY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          ACTUAL_STRATEGY_SHA="$(git rev-parse HEAD)"
+          echo "expected_strategy_sha=$EXPECTED_STRATEGY_SHA"
+          echo "actual_strategy_sha=$ACTUAL_STRATEGY_SHA"
+          test "$ACTUAL_STRATEGY_SHA" = "$EXPECTED_STRATEGY_SHA"
+          echo "STRATEGY_REVISION=$ACTUAL_STRATEGY_SHA" >> "$GITHUB_ENV"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check \
+            httpx sqlalchemy pydantic pydantic-settings pyyaml openai \
+            apscheduler websockets matplotlib
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
+
+      - name: Download prepared dataset shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gen1-gold-2y-data-*-${{ github.event.pull_request.head.sha || github.sha }}
+          path: /tmp/gen1-2y-data
+          merge-multiple: true
 
       - name: Run two-year real XAUUSD walk-forward benchmark
         run: |
