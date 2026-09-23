@@ -45,6 +45,7 @@ from typing import Any
 
 import httpx
 
+from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
 from src.modules.xau.evidence_fusion import build_gen1_evidence_fusion
 from src.modules.xau.replay import ReplayEpisode, build_replay_technical_state
@@ -576,17 +577,26 @@ def spread_net_bps(
     return None
 
 
-def run_replay(
+def run_replay_horizons(
     bars_by_tf: dict[XAUTimeframe, list[XAUBar]],
     quotes: dict[datetime, tuple[float, float]],
-    horizon_minutes: int,
+    horizons: tuple[int, ...],
     macro_provider,
-) -> list[ReplayEpisode]:
+) -> dict[int, list[ReplayEpisode]]:
+    """Run the fixed GEN1 decision stack once per evaluation and label many horizons.
+
+    A cheap prefilter uses the exact same intraday candidate engine on the same
+    closed M1/M5/M15 windows. HTF context, cognition and evidence fusion are only
+    built when that prefilter produces a candidate, preserving decision semantics
+    while avoiding duplicate expensive work.
+    """
+    horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
     available = {tf: availability(rows, tf) for tf, rows in bars_by_tf.items()}
     m1 = bars_by_tf[XAUTimeframe.M1]
     m1_available = available[XAUTimeframe.M1]
-    episodes: list[ReplayEpisode] = []
+    episodes: dict[int, list[ReplayEpisode]] = {horizon: [] for horizon in horizons}
     last_eval = None
+    prefilter = XAUIntradayEngine(require_execution_data=False)
 
     for evaluation_time in m1_available:
         if evaluation_time < START or evaluation_time >= END:
@@ -595,13 +605,50 @@ def run_replay(
             continue
         last_eval = evaluation_time
 
+        intraday_window = {
+            XAUTimeframe.M1: bars_window(m1, m1_available, evaluation_time, 300),
+            XAUTimeframe.M5: bars_window(
+                bars_by_tf[XAUTimeframe.M5],
+                available[XAUTimeframe.M5],
+                evaluation_time,
+                300,
+            ),
+            XAUTimeframe.M15: bars_window(
+                bars_by_tf[XAUTimeframe.M15],
+                available[XAUTimeframe.M15],
+                evaluation_time,
+                300,
+            ),
+        }
+        pre = prefilter.analyze(
+            intraday_window,
+            event_risk=False,
+            macro_bias=0,
+            now=evaluation_time,
+        )
+        if pre.blocked or pre.candidate not in {"long_setup", "short_setup"}:
+            continue
+
         window = {
-            XAUTimeframe.M1: bars_window(m1, m1_available, evaluation_time, 320),
-            XAUTimeframe.M5: bars_window(bars_by_tf[XAUTimeframe.M5], available[XAUTimeframe.M5], evaluation_time, 320),
-            XAUTimeframe.M15: bars_window(bars_by_tf[XAUTimeframe.M15], available[XAUTimeframe.M15], evaluation_time, 320),
-            XAUTimeframe.H1: bars_window(bars_by_tf[XAUTimeframe.H1], available[XAUTimeframe.H1], evaluation_time, 1100),
-            XAUTimeframe.H4: bars_window(bars_by_tf[XAUTimeframe.H4], available[XAUTimeframe.H4], evaluation_time, 1100),
-            XAUTimeframe.D1: bars_window(bars_by_tf[XAUTimeframe.D1], available[XAUTimeframe.D1], evaluation_time, 1100),
+            **intraday_window,
+            XAUTimeframe.H1: bars_window(
+                bars_by_tf[XAUTimeframe.H1],
+                available[XAUTimeframe.H1],
+                evaluation_time,
+                1100,
+            ),
+            XAUTimeframe.H4: bars_window(
+                bars_by_tf[XAUTimeframe.H4],
+                available[XAUTimeframe.H4],
+                evaluation_time,
+                1100,
+            ),
+            XAUTimeframe.D1: bars_window(
+                bars_by_tf[XAUTimeframe.D1],
+                available[XAUTimeframe.D1],
+                evaluation_time,
+                1100,
+            ),
         }
         macro = macro_provider(evaluation_time)
         technical = build_replay_technical_state(
@@ -613,7 +660,12 @@ def run_replay(
         if technical.get("blocked") or candidate not in {"long_setup", "short_setup"}:
             continue
 
-        cognition = build_cognitive_state(technical, macro, memory=None, min_confidence=0.58)
+        cognition = build_cognitive_state(
+            technical,
+            macro,
+            memory=None,
+            min_confidence=0.58,
+        )
         fusion = build_decision_fusion(
             technical,
             macro,
@@ -628,65 +680,90 @@ def run_replay(
             memory=None,
             require_xaut=False,
         )
-        future = future_close(
-            m1,
-            m1_available,
-            evaluation_time + timedelta(minutes=horizon_minutes),
-        )
-        if future is None:
-            continue
-        outcome_price, outcome_at = future
         entry = float(technical["analysis_reference"]["price"])
         side = 1.0 if candidate == "long_setup" else -1.0
-        gross_bps = ((outcome_price - entry) / entry) * 10000.0 * side
-        net_bps = spread_net_bps(candidate, evaluation_time, outcome_at, quotes)
-        ranges = range_outcomes(m1, m1_available, evaluation_time, entry, horizon_minutes)
         regime = str((cognition.get("regime") or {}).get("label") or "unknown")
-        confidence = float((cognition.get("confidence") or {}).get("calibrated_confidence") or 0.0)
-        key = hashlib.sha1(
-            f"{SOURCE}|{evaluation_time.isoformat()}|{candidate}|{horizon_minutes}|{entry:.6f}".encode()
-        ).hexdigest()
-        episodes.append(
-            ReplayEpisode(
-                replay_key=key,
-                observed_at=evaluation_time,
-                outcome_at=outcome_at,
-                candidate=candidate,
-                regime=regime,
-                confidence=round(confidence, 6),
-                horizon_minutes=horizon_minutes,
-                entry_price=round(entry, 6),
-                outcome_price=round(outcome_price, 6),
-                directional_return_bps=round(gross_bps, 4),
-                positive=gross_bps > 0,
-                source=SOURCE,
-                state_vector=dict(cognition.get("market_state") or {}),
-                cognition=cognition,
-                meta={
-                    "research_only": True,
-                    "lookahead_protected": True,
-                    "gen1_decision": str(evidence.get("decision") or "WAIT"),
-                    "gen1_decision_confidence": evidence.get("decision_confidence"),
-                    "gen1_fusion_state": fusion.get("state"),
-                    "evidence_fusion": evidence,
-                    "range_outcomes": ranges,
-                    "net_spread_directional_return_bps": round(net_bps, 4) if net_bps is not None else None,
-                    "sensor_gaps": [
-                        "historical_live_news_synthesis_not_reconstructed",
-                        "historical_event_calendar_not_reconstructed",
-                        "historical_xaut_raw_book_not_available",
-                        "historical_xaut_trade_tape_not_available",
-                    ],
-                    "historical_macro_proxy": {
-                        "bias": macro.get("bias"),
-                        "confidence": macro.get("confidence"),
-                        "proxy_score": macro.get("proxy_score"),
-                        "drivers": macro.get("drivers"),
-                    },
-                    "replay_scope": "real_xau_price_htf_structure_volume_spread_plus_point_in_time_macro_proxy_without_historical_xaut_microstructure_or_live_news",
-                },
-            )
+        confidence = float(
+            (cognition.get("confidence") or {}).get("calibrated_confidence") or 0.0
         )
+        shared_meta = {
+            "research_only": True,
+            "lookahead_protected": True,
+            "gen1_decision": str(evidence.get("decision") or "WAIT"),
+            "gen1_decision_confidence": evidence.get("decision_confidence"),
+            "gen1_fusion_state": fusion.get("state"),
+            "evidence_fusion": evidence,
+            "sensor_gaps": [
+                "historical_live_news_synthesis_not_reconstructed",
+                "historical_event_calendar_not_reconstructed",
+                "historical_xaut_raw_book_not_available",
+                "historical_xaut_trade_tape_not_available",
+            ],
+            "historical_macro_proxy": {
+                "bias": macro.get("bias"),
+                "confidence": macro.get("confidence"),
+                "proxy_score": macro.get("proxy_score"),
+                "drivers": macro.get("drivers"),
+            },
+            "replay_scope": (
+                "real_xau_price_htf_structure_volume_spread_plus_point_in_time_"
+                "macro_proxy_without_historical_xaut_microstructure_or_live_news"
+            ),
+        }
+
+        for horizon_minutes in horizons:
+            future = future_close(
+                m1,
+                m1_available,
+                evaluation_time + timedelta(minutes=horizon_minutes),
+            )
+            if future is None:
+                continue
+            outcome_price, outcome_at = future
+            gross_bps = ((outcome_price - entry) / entry) * 10000.0 * side
+            net_bps = spread_net_bps(
+                candidate,
+                evaluation_time,
+                outcome_at,
+                quotes,
+            )
+            ranges = range_outcomes(
+                m1,
+                m1_available,
+                evaluation_time,
+                entry,
+                horizon_minutes,
+            )
+            key = hashlib.sha1(
+                (
+                    f"{SOURCE}|{evaluation_time.isoformat()}|{candidate}|"
+                    f"{horizon_minutes}|{entry:.6f}"
+                ).encode()
+            ).hexdigest()
+            meta = dict(shared_meta)
+            meta["range_outcomes"] = ranges
+            meta["net_spread_directional_return_bps"] = (
+                round(net_bps, 4) if net_bps is not None else None
+            )
+            episodes[horizon_minutes].append(
+                ReplayEpisode(
+                    replay_key=key,
+                    observed_at=evaluation_time,
+                    outcome_at=outcome_at,
+                    candidate=candidate,
+                    regime=regime,
+                    confidence=round(confidence, 6),
+                    horizon_minutes=horizon_minutes,
+                    entry_price=round(entry, 6),
+                    outcome_price=round(outcome_price, 6),
+                    directional_return_bps=round(gross_bps, 4),
+                    positive=gross_bps > 0,
+                    source=SOURCE,
+                    state_vector=dict(cognition.get("market_state") or {}),
+                    cognition=cognition,
+                    meta=meta,
+                )
+            )
     return episodes
 
 
@@ -920,8 +997,14 @@ def main() -> None:
     dataset["bar_counts"] = {tf.value: len(rows) for tf, rows in bars_by_tf.items()}
 
     macro_provider, macro_diagnostics = build_historical_macro_proxy(START, END)
-    episodes60 = run_replay(bars_by_tf, quotes, 60, macro_provider)
-    episodes240 = run_replay(bars_by_tf, quotes, 240, macro_provider)
+    episodes_by_horizon = run_replay_horizons(
+        bars_by_tf,
+        quotes,
+        (60, 240),
+        macro_provider,
+    )
+    episodes60 = episodes_by_horizon[60]
+    episodes240 = episodes_by_horizon[240]
 
     report = {
         "benchmark": "gen1-gold-2y-real-v1",
