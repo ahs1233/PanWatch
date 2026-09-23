@@ -267,11 +267,16 @@ def test_gen1_trade_gold_shared_core_runs_toolbox_panwatch_gen1_in_order(monkeyp
             "coverage": 0.9, "families": [], "conflicts": [], "reasons": [],
         }
 
+    def fake_record(payload):
+        calls.append(("ledger", payload["decision"]))
+        return {"status": "recorded", "signal_id": 1}
+
     monkeypatch.setattr(gen1_pipeline, "get_macro_context", fake_macro)
     monkeypatch.setattr(gen1_pipeline, "get_xau_snapshot", fake_snapshot)
     monkeypatch.setattr(gen1_pipeline, "load_gen1_memory_snapshot", fake_memory)
     monkeypatch.setattr(gen1_pipeline, "build_decision_fusion", fake_fusion)
     monkeypatch.setattr(gen1_pipeline, "build_gen1_evidence_fusion", fake_evidence)
+    monkeypatch.setattr(gen1_pipeline, "record_gen1_live_observation", fake_record)
 
     result = __import__("asyncio").run(gen1_pipeline.run_gen1_trade_gold_pipeline())
     assert calls == [
@@ -280,6 +285,7 @@ def test_gen1_trade_gold_shared_core_runs_toolbox_panwatch_gen1_in_order(monkeyp
         ("memory", "long_setup", 1),
         ("gen1", "long_setup", 1, True),
         ("evidence", True),
+        ("ledger", "LONG"),
     ]
     assert result["pipeline_order"] == ["ahmed_toolbox", "panwatch", "gen1"]
     assert result["pipeline_status"] == "ready"
@@ -287,6 +293,7 @@ def test_gen1_trade_gold_shared_core_runs_toolbox_panwatch_gen1_in_order(monkeyp
     assert result["contract"] == "gen1-trade-gold-v2"
     assert result["confidence"] == 0.74
     assert result["memory"]["available"] is True
+    assert result["live_observation"]["status"] == "recorded"
     assert result["missing_layers"] == []
     assert result["answer_contract"]["never_hide_missing_layer"] is True
 

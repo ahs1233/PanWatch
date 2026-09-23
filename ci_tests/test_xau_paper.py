@@ -9,6 +9,9 @@ import pytest
 
 from src.modules.xau.paper import (
     XAUPaperTradingEngine,
+    GEN1_LIVE_OBSERVATION_REASON,
+    _record_gen1_live_observation_sync,
+    _update_gen1_live_outcomes,
     _entry_gate_reason,
     _paper_entry_price,
     _can_revalidate_signal,
@@ -1490,6 +1493,10 @@ def test_calibration_metrics_expose_empirical_bins_for_gen1_shrinkage():
 
 
 def test_gen1_live_observation_updates_sampled_ranges_and_60m_outcome():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from src.platform.persistence.models import Base, XAUPaperAccount, XAUPaperSignal
+
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         bind=engine,
