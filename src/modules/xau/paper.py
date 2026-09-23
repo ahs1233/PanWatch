@@ -616,6 +616,7 @@ def _calibration_metrics(predictions: list[tuple[float, int]]) -> dict:
             "calibration_sample_count": 0,
             "brier_score": None,
             "expected_calibration_error": None,
+            "calibration_bins": [],
         }
 
     clean = [
@@ -630,17 +631,35 @@ def _calibration_metrics(predictions: list[tuple[float, int]]) -> dict:
         bins[index].append((probability, outcome))
 
     ece = 0.0
-    for bucket in bins:
+    calibration_bins = []
+    for index, bucket in enumerate(bins):
         if not bucket:
+            calibration_bins.append({
+                "index": index,
+                "lower": round(index / 5.0, 4),
+                "upper": round((index + 1) / 5.0, 4),
+                "count": 0,
+                "mean_predicted": None,
+                "observed_rate": None,
+            })
             continue
         avg_probability = sum(item[0] for item in bucket) / len(bucket)
         observed_rate = sum(item[1] for item in bucket) / len(bucket)
         ece += (len(bucket) / len(clean)) * abs(avg_probability - observed_rate)
+        calibration_bins.append({
+            "index": index,
+            "lower": round(index / 5.0, 4),
+            "upper": round((index + 1) / 5.0, 4),
+            "count": len(bucket),
+            "mean_predicted": round(avg_probability, 4),
+            "observed_rate": round(observed_rate, 4),
+        })
 
     return {
         "calibration_sample_count": len(clean),
         "brier_score": round(brier, 4),
         "expected_calibration_error": round(ece, 4),
+        "calibration_bins": calibration_bins,
     }
 
 

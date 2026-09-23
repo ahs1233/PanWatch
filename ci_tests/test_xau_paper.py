@@ -1475,3 +1475,14 @@ def test_replay_memory_does_not_mix_spot_and_futures_source_families():
     assert memory["source_family"] == "xau_spot_structure"
     assert memory["source_filtered"] is True
     assert memory["source_mismatch_discarded"] == 1
+
+
+
+def test_calibration_metrics_expose_empirical_bins_for_gen1_shrinkage():
+    metrics = _calibration_metrics(
+        [(0.72, 1)] * 10 + [(0.75, 0)] * 4 + [(0.32, 0)] * 10
+    )
+    assert len(metrics["calibration_bins"]) == 5
+    high = metrics["calibration_bins"][3]
+    assert high["count"] == 14
+    assert high["observed_rate"] == pytest.approx(10 / 14, abs=1e-4)

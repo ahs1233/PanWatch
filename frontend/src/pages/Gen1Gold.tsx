@@ -142,6 +142,10 @@ export default function Gen1GoldPage(){
           <div className="mt-3 space-y-1 text-[10px] text-muted-foreground">
             {(evidence?.families||[]).map((row:any)=><div key={row.name} className="flex justify-between gap-2"><span>{row.name}</span><span>{row.available?fmt(row.score,3):'N/A'}</span></div>)}
           </div>
+          <div className="mt-3 text-[10px] text-muted-foreground">
+            Confidence calibration: {evidence?.calibration?.applied?'empirical bin shrinkage':'not enough matched history'}
+            {evidence?.calibration?.bin_count!=null?` · bin n=${evidence.calibration.bin_count}`:''}
+          </div>
           {!!evidence?.conflicts?.length&&<div className="mt-3 rounded-xl border border-amber-500/30 p-2 text-[10px] text-amber-600">Conflicts: {evidence.conflicts.map((x:any)=>x.family).join(' · ')}</div>}
         </section>
         <section className="card p-4">

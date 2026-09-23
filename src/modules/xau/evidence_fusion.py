@@ -23,6 +23,76 @@ def _num(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _empirical_cognitive_calibration(
+    raw_confidence: float,
+    memory: dict[str, Any],
+) -> tuple[float, dict[str, Any]]:
+    """Conservatively shrink cognitive confidence toward observed paper outcomes.
+
+    The historical bins were generated from the cognition confidence itself,
+    so calibration is applied to that component before evidence-strength
+    blending. The result remains a decision score, not a win probability.
+    """
+    raw = _clip(raw_confidence, 0.05, 0.95)
+    bins = list(memory.get("calibration_bins") or [])
+    sample_count = int(_num(memory.get("calibration_sample_count"), 0))
+    if sample_count < 20 or not bins:
+        return raw, {
+            "applied": False,
+            "reason": "insufficient_calibration_history",
+            "sample_count": sample_count,
+            "raw_cognitive_confidence": round(raw, 4),
+            "calibrated_cognitive_confidence": round(raw, 4),
+        }
+
+    selected = None
+    for row in bins:
+        lower = _num(row.get("lower"), 0.0)
+        upper = _num(row.get("upper"), 1.0)
+        if lower <= raw < upper or (raw >= 1.0 and upper >= 1.0):
+            selected = row
+            break
+    if not selected:
+        return raw, {
+            "applied": False,
+            "reason": "matching_calibration_bin_unavailable",
+            "sample_count": sample_count,
+            "raw_cognitive_confidence": round(raw, 4),
+            "calibrated_cognitive_confidence": round(raw, 4),
+        }
+
+    bin_count = int(_num(selected.get("count"), 0))
+    observed = selected.get("observed_rate")
+    if bin_count < 8 or observed is None:
+        return raw, {
+            "applied": False,
+            "reason": "matching_bin_too_small",
+            "sample_count": sample_count,
+            "bin_count": bin_count,
+            "raw_cognitive_confidence": round(raw, 4),
+            "calibrated_cognitive_confidence": round(raw, 4),
+        }
+
+    observed_rate = _clip(_num(observed, raw), 0.05, 0.95)
+    ece = _clip(_num(memory.get("expected_calibration_error"), 0.25), 0.0, 1.0)
+    history_weight = min(0.45, (bin_count / (bin_count + 30.0)) * 0.60)
+    quality_weight = max(0.25, 1.0 - ece)
+    alpha = history_weight * quality_weight
+    calibrated = _clip((1.0 - alpha) * raw + alpha * observed_rate, 0.05, 0.95)
+    return calibrated, {
+        "applied": True,
+        "method": "paper_cognition_bin_shrinkage_v1",
+        "sample_count": sample_count,
+        "bin_count": bin_count,
+        "bin_index": selected.get("index"),
+        "observed_rate": round(observed_rate, 4),
+        "alpha": round(alpha, 4),
+        "raw_cognitive_confidence": round(raw, 4),
+        "calibrated_cognitive_confidence": round(calibrated, 4),
+        "not_a_win_probability": True,
+    }
+
+
 def _candidate_sign(candidate: str) -> float:
     if candidate == "long_setup":
         return 1.0
@@ -256,10 +326,14 @@ def build_gen1_evidence_fusion(
 
     evidence_direction = "bullish" if score >= 0.10 else "bearish" if score <= -0.10 else "neutral"
     cognitive_confidence = _clip(_num(fusion.get("cognitive_confidence"), 0.5), 0.05, 0.95)
+    calibrated_cognitive, calibration = _empirical_cognitive_calibration(
+        cognitive_confidence,
+        memory,
+    )
     memory_probability = _clip(_num(posterior, 0.5), 0.05, 0.95) if posterior is not None else 0.5
     evidence_strength = 0.5 + 0.5 * abs(score)
     decision_confidence = (
-        0.64 * cognitive_confidence
+        0.64 * calibrated_cognitive
         + 0.26 * evidence_strength
         + 0.10 * memory_probability
     )
@@ -308,7 +382,12 @@ def build_gen1_evidence_fusion(
         "agreement_ratio": round(agreement_ratio, 4),
         "decision_confidence": round(decision_confidence, 4),
         "is_validated_win_probability": False,
-        "confidence_kind": "heuristic_with_empirical_memory_adjustment",
+        "confidence_kind": (
+            "heuristic_score_with_empirical_cognitive_bin_shrinkage"
+            if calibration.get("applied")
+            else "heuristic_unvalidated_score"
+        ),
+        "calibration": calibration,
         "families": families,
         "conflicts": conflicts,
         "reasons": list(dict.fromkeys(reasons)),

@@ -89,3 +89,38 @@ def test_evidence_fusion_waits_on_strong_xaut_conflict():
     result = build_gen1_evidence_fusion(technical, macro, fusion, memory=memory)
     assert result["decision"] == "WAIT"
     assert any(row["family"] == "xaut_microstructure" for row in result["conflicts"])
+
+
+
+def test_evidence_fusion_applies_bounded_empirical_calibration_when_bin_is_mature():
+    technical, macro, fusion, memory = _base()
+    memory.update({
+        "calibration_sample_count": 40,
+        "expected_calibration_error": 0.08,
+        "calibration_bins": [
+            {"index": 0, "lower": 0.0, "upper": 0.2, "count": 0, "observed_rate": None},
+            {"index": 1, "lower": 0.2, "upper": 0.4, "count": 0, "observed_rate": None},
+            {"index": 2, "lower": 0.4, "upper": 0.6, "count": 0, "observed_rate": None},
+            {"index": 3, "lower": 0.6, "upper": 0.8, "count": 40, "observed_rate": 0.58},
+            {"index": 4, "lower": 0.8, "upper": 1.0, "count": 0, "observed_rate": None},
+        ],
+    })
+    result = build_gen1_evidence_fusion(technical, macro, fusion, memory=memory)
+    calibration = result["calibration"]
+    assert calibration["applied"] is True
+    assert calibration["method"] == "paper_cognition_bin_shrinkage_v1"
+    assert calibration["calibrated_cognitive_confidence"] < calibration["raw_cognitive_confidence"]
+    assert result["is_validated_win_probability"] is False
+
+
+def test_evidence_fusion_refuses_empirical_calibration_on_small_history():
+    technical, macro, fusion, memory = _base()
+    memory.update({
+        "calibration_sample_count": 10,
+        "calibration_bins": [
+            {"index": 3, "lower": 0.6, "upper": 0.8, "count": 10, "observed_rate": 0.9},
+        ],
+    })
+    result = build_gen1_evidence_fusion(technical, macro, fusion, memory=memory)
+    assert result["calibration"]["applied"] is False
+    assert result["confidence_kind"] == "heuristic_unvalidated_score"
