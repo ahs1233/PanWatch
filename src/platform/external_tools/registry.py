@@ -189,3 +189,167 @@ def register_ahmed_toolbox_tools(
         )
 
     return descriptors
+
+
+_GRAPHIFY_ALLOWED_TOOLS = frozenset(
+    {
+        "query_graph",
+        "get_node",
+        "get_neighbors",
+        "get_community",
+        "god_nodes",
+        "graph_stats",
+        "shortest_path",
+        "list_prs",
+        "get_pr_impact",
+        "triage_prs",
+    }
+)
+
+
+def _graphify_descriptor_metadata(
+    remote_name: str,
+) -> tuple[list[str], list[str]]:
+    mapping = {
+        "query_graph": (
+            ["codebase question", "architecture lookup", "project relationships"],
+            ["knowledge_query", "architecture", "code_navigation"],
+        ),
+        "get_node": (
+            ["explain concept", "find symbol", "inspect component"],
+            ["knowledge_lookup", "code_navigation"],
+        ),
+        "get_neighbors": (
+            ["dependencies", "callers", "related components"],
+            ["dependency_graph", "code_navigation"],
+        ),
+        "get_community": (
+            ["subsystem", "module cluster", "architecture community"],
+            ["architecture", "community_detection"],
+        ),
+        "god_nodes": (
+            ["central concepts", "architecture hubs"],
+            ["architecture", "centrality"],
+        ),
+        "graph_stats": (
+            ["knowledge graph health", "graph size"],
+            ["knowledge_graph", "diagnostics"],
+        ),
+        "shortest_path": (
+            ["how components connect", "dependency path", "relationship path"],
+            ["dependency_graph", "architecture"],
+        ),
+        "list_prs": (
+            ["pull requests", "active code changes"],
+            ["pull_requests", "code_change"],
+        ),
+        "get_pr_impact": (
+            ["pull request impact", "affected components"],
+            ["pull_requests", "change_impact"],
+        ),
+        "triage_prs": (
+            ["pull request triage", "change conflicts"],
+            ["pull_requests", "change_impact"],
+        ),
+    }
+    return mapping.get(remote_name, (["project knowledge"], ["knowledge_graph"]))
+
+
+def register_graphify_tools(
+    registry: ToolRegistry,
+    client: GraphifyClient,
+    *,
+    namespace: str = "kg",
+) -> list[ToolDescriptor]:
+    """Register a strict read-only allowlist from a Graphify MCP server."""
+
+    descriptors: list[ToolDescriptor] = []
+    seen: set[str] = set()
+
+    for remote in client.list_tools():
+        remote_name = str(remote.get("name") or "").strip()
+        if remote_name not in _GRAPHIFY_ALLOWED_TOOLS:
+            continue
+
+        local_name = _pan_tool_name(remote_name, namespace)
+        if local_name in seen:
+            raise ValueError(f"duplicate Graphify PanAgent tool name: {local_name}")
+        seen.add(local_name)
+
+        description = str(
+            remote.get("description") or f"Graphify knowledge tool {remote_name}"
+        ).strip()
+        description = description[:2_000] or f"Graphify knowledge tool {remote_name}"
+        input_schema = remote.get("inputSchema")
+        if not isinstance(input_schema, dict) or input_schema.get("type") != "object":
+            input_schema = {"type": "object", "properties": {}}
+
+        async def _execute(
+            _request: RunRequest,
+            arguments: dict[str, Any],
+            *,
+            _remote_name: str = remote_name,
+        ) -> ToolResult:
+            try:
+                result = await asyncio.to_thread(
+                    client.call_tool,
+                    _remote_name,
+                    arguments,
+                )
+            except GraphifyError as exc:
+                return ToolResult.failure(
+                    summary=f"Graphify knowledge lookup unavailable: {exc}",
+                    error_code="graphify_unavailable",
+                )
+
+            text = _extract_text(result)
+            if result.get("isError"):
+                return ToolResult.failure(
+                    summary=text,
+                    error_code="graphify_tool_failed",
+                )
+            return ToolResult.success(
+                summary=text,
+                data={
+                    "remote_tool": _remote_name,
+                    "result": result,
+                },
+                sources=[{"name": f"Graphify / {_remote_name}"}],
+                observed_at=datetime.now(timezone.utc),
+            )
+
+        title = f"Knowledge / {_tool_title(remote_name)}"
+        registry.register(
+            ToolSpec(
+                name=local_name,
+                title=title,
+                description=description,
+                risk=ToolRisk.READ,
+                confirmation_required=False,
+                exposure=ToolExposure.DEFERRED,
+                input_schema=input_schema,
+            ),
+            _execute,
+        )
+
+        keywords, capabilities = _graphify_descriptor_metadata(remote_name)
+        descriptors.append(
+            ToolDescriptor(
+                tool_name=local_name,
+                title=title,
+                summary=description[:500],
+                use_cases=keywords,
+                keywords=keywords,
+                aliases=[remote_name, f"graphify {remote_name}"],
+                domain="knowledge_graph",
+                capabilities=capabilities,
+                data_freshness=ToolDataFreshness.NEAR_REAL_TIME,
+                estimated_latency_ms=750,
+                output_summary="Scoped read-only project knowledge graph result.",
+                risk=ToolRisk.READ,
+                confirmation_required=False,
+                implementation_version="graphify-mcp-0.1",
+            )
+        )
+
+    return descriptors

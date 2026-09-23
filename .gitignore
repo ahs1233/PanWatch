@@ -31,3 +31,7 @@ CLAUDE.md
 docs/superpowers/
 .superpowers/
 .worktrees/
+
+# Graphify structural knowledge index
+graphify-out/
+.graphify-venv/
