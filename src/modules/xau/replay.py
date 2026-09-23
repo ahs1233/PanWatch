@@ -766,23 +766,31 @@ async def _attach_optional_htf_history(
     bars: dict[XAUTimeframe, list[XAUBar]],
     *,
     lookback_days: int,
+    source: str,
 ) -> dict[XAUTimeframe, list[XAUBar]]:
-    """Best-effort same-instrument HTF context; never invalidates core M1/M5/M15."""
-    provider = BiquoteXAUOHLCProvider()
+    """Best-effort HTF context from the same source family as replay core."""
+    use_biquote = str(source).startswith("biquote.io:")
+    provider = BiquoteXAUOHLCProvider() if use_biquote else YahooGoldResearchProvider()
     end = datetime.now(timezone.utc)
     days = max(5, int(lookback_days or 30))
     start = end - timedelta(days=min(365, max(days, 30)))
 
     async def one(tf: XAUTimeframe):
         try:
-            if lookback_days > 0:
-                return await asyncio.to_thread(
-                    provider.bars_range,
-                    tf,
-                    start=start,
-                    end=end,
-                )
-            return await asyncio.to_thread(provider.bars, tf, limit=1000)
+            if use_biquote:
+                if lookback_days > 0:
+                    return await asyncio.to_thread(
+                        provider.bars_range,
+                        tf,
+                        start=start,
+                        end=end,
+                    )
+                return await asyncio.to_thread(provider.bars, tf, limit=1000)
+            # Yahoo/GC=F must remain GC=F. Its provider supports H1/D1;
+            # H4 is derived from H1 by build_market_context.
+            if tf == XAUTimeframe.H4:
+                return []
+            return await asyncio.to_thread(provider.bars, tf)
         except Exception:
             return []
 
@@ -813,6 +821,7 @@ async def refresh_replay_memory(
     bars = await _attach_optional_htf_history(
         bars,
         lookback_days=lookback_days,
+        source=source,
     )
     return await asyncio.to_thread(
         _replay_and_persist, bars, source,

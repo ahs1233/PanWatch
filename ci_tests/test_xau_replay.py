@@ -37,7 +37,11 @@ def test_replay_processing_does_not_block_live_event_loop(monkeypatch):
         assert release.wait(3), "replay blocked the live event loop"
         return {"research_only": True, "execution_allowed": False}
 
+    async def optional_htf(bars, **kwargs):
+        return bars
+
     monkeypatch.setattr(replay, "_fetch_default_replay_history", history)
+    monkeypatch.setattr(replay, "_attach_optional_htf_history", optional_htf)
     monkeypatch.setattr(replay, "_replay_and_persist", slow_replay)
 
     async def exercise():
@@ -426,3 +430,52 @@ def test_walk_forward_replay_records_gen1_scope_and_sensor_gaps():
         item.meta["replay_scope"] == "full_gen1_except_historical_xaut_microstructure"
         for item in episodes
     )
+
+
+
+def test_optional_htf_history_preserves_yahoo_source_family(monkeypatch):
+    start = datetime(2026, 1, 5, 0, 0, tzinfo=timezone.utc)
+    core = {
+        XAUTimeframe.M1: _bars(XAUTimeframe.M1, 60, start=start, slope=0.1),
+        XAUTimeframe.M5: _bars(XAUTimeframe.M5, 40, start=start, slope=0.1),
+        XAUTimeframe.M15: _bars(XAUTimeframe.M15, 30, start=start, slope=0.1),
+    }
+
+    def yahoo(self, timeframe):
+        rows = _bars(
+            timeframe,
+            60 if timeframe == XAUTimeframe.H1 else 40,
+            start=start,
+            slope=0.1,
+        )
+        return [
+            XAUBar(
+                timestamp=row.timestamp,
+                timeframe=row.timeframe,
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+                source="yfinance:GC=F",
+                execution_eligible=False,
+            )
+            for row in rows
+        ]
+
+    def no_biquote(*args, **kwargs):
+        raise AssertionError("Biquote must not be mixed into Yahoo replay")
+
+    monkeypatch.setattr(replay.YahooGoldResearchProvider, "bars", yahoo)
+    monkeypatch.setattr(replay.BiquoteXAUOHLCProvider, "bars", no_biquote)
+    enriched = asyncio.run(
+        replay._attach_optional_htf_history(
+            core,
+            lookback_days=0,
+            source="yfinance:GC=F",
+        )
+    )
+    assert enriched[XAUTimeframe.H1]
+    assert enriched[XAUTimeframe.D1]
+    assert enriched[XAUTimeframe.H4] == []
+    assert all(row.source == "yfinance:GC=F" for row in enriched[XAUTimeframe.H1])
