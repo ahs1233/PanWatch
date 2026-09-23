@@ -2532,7 +2532,7 @@ class XAUPaperTradingEngine:
             return {"status": "busy", "execution_allowed": False}
         try:
             lock_started = time.monotonic()
-            with paper_writer_guard() as acquired:
+            with paper_writer_guard(timeout_seconds=0.75) as acquired:
                 lock_ms = round((time.monotonic() - lock_started) * 1000.0, 2)
                 if not acquired:
                     return {
@@ -2597,7 +2597,7 @@ class XAUPaperTradingEngine:
             return {"status": "busy", "reason": "paper_scan_in_progress", "execution_allowed": False}
         try:
             lock_started = time.monotonic()
-            with paper_writer_guard() as acquired:
+            with paper_writer_guard(timeout_seconds=0.75) as acquired:
                 lock_ms = round((time.monotonic() - lock_started) * 1000.0, 2)
                 if not acquired:
                     return {
