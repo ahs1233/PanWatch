@@ -116,17 +116,19 @@ def fetch_bytes(url: str, retries: int = 5) -> tuple[str, bytes]:
     for attempt in range(retries):
         try:
             response = _download_client().get(url)
-            if response.status_code == 404:
+            status_code = int(response.status_code)
+            if status_code == 404:
                 return "notfound", b""
-            if response.status_code == 429 or response.status_code >= 500:
-                last = f"http_{response.status_code}"
+            if status_code >= 400:
+                last = f"http_{status_code}"
+            if status_code in {403, 408, 425, 429} or status_code >= 500:
                 if attempt + 1 < retries:
                     retry_after = response.headers.get("Retry-After")
                     try:
                         delay = float(retry_after) if retry_after else min(8.0, 0.5 * (2 ** attempt))
                     except ValueError:
                         delay = min(8.0, 0.5 * (2 ** attempt))
-                    time.sleep(max(0.2, delay))
+                    time.sleep(max(0.2, delay) + random.uniform(0.0, 0.25))
                     continue
             response.raise_for_status()
             return "data", bytes(response.content)
@@ -224,36 +226,63 @@ def download_day_results(
 ) -> list[dict[str, Any]]:
     days = date_range(start, end)
     results: list[dict[str, Any]] = []
+    failed_days: dict[date, str] = {}
     started = time.monotonic()
+
+    def collect(day: date, future) -> None:
+        try:
+            results.append(future.result())
+            failed_days.pop(day, None)
+        except Exception as exc:
+            failed_days[day] = f"{type(exc).__name__}: {exc}"
+
     with ThreadPoolExecutor(max_workers=max(2, WORKERS)) as pool:
         futures = {pool.submit(fetch_day, day): day for day in days}
         for completed, future in enumerate(as_completed(futures), start=1):
             day = futures[future]
-            try:
-                results.append(future.result())
-            except Exception as exc:
-                print(json.dumps({
-                    "phase": "dataset_day_failed",
-                    "label": progress_label,
-                    "day": day.isoformat(),
-                    "completed_days": completed - 1,
-                    "requested_days": len(days),
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    "elapsed_seconds": round(time.monotonic() - started, 2),
-                }), flush=True)
-                raise
+            collect(day, future)
             if completed % 25 == 0 or completed == len(days):
                 print(json.dumps({
                     "phase": "dataset_download_progress",
                     "label": progress_label,
                     "completed_days": completed,
+                    "successful_days": len(results),
+                    "failed_days_pending_retry": len(failed_days),
                     "requested_days": len(days),
                     "elapsed_seconds": round(time.monotonic() - started, 2),
                 }), flush=True)
+
+    for retry_round in range(1, 4):
+        if not failed_days:
+            break
+        retry_days = sorted(failed_days)
+        failed_days = {}
+        time.sleep(0.5 * retry_round + random.uniform(0.0, 0.5))
+        retry_workers = max(1, min(4, max(1, WORKERS // 2)))
+        with ThreadPoolExecutor(max_workers=retry_workers) as pool:
+            futures = {pool.submit(fetch_day, day): day for day in retry_days}
+            for future in as_completed(futures):
+                collect(futures[future], future)
+        print(json.dumps({
+            "phase": "dataset_retry_round",
+            "label": progress_label,
+            "retry_round": retry_round,
+            "retried_days": len(retry_days),
+            "remaining_failed_days": len(failed_days),
+            "elapsed_seconds": round(time.monotonic() - started, 2),
+        }), flush=True)
+
+    if failed_days:
+        sample = [
+            {"day": day.isoformat(), "error": failed_days[day]}
+            for day in sorted(failed_days)[:10]
+        ]
+        raise FetchError(
+            f"dataset shard has {len(failed_days)} unrecoverable days after retries: {sample}"
+        )
+
     results.sort(key=lambda item: item["day"])
     return results
-
 
 def build_dataset_from_results(
     results: list[dict[str, Any]],
