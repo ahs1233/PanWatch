@@ -61,6 +61,9 @@ def _bars(timeframe: XAUTimeframe, count: int, *, start: datetime, slope: float 
         XAUTimeframe.M1: 1,
         XAUTimeframe.M5: 5,
         XAUTimeframe.M15: 15,
+        XAUTimeframe.H1: 60,
+        XAUTimeframe.H4: 240,
+        XAUTimeframe.D1: 1440,
     }[timeframe]
     rows = []
     for i in range(count):
