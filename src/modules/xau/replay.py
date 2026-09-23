@@ -189,6 +189,7 @@ def build_replay_technical_state(
         [list[XAUBar], list[XAUBar], list[XAUBar]],
         dict[str, Any],
     ] | None = None,
+    intraday_assessment: Any | None = None,
 ) -> dict[str, Any]:
     """Build a live-shaped technical snapshot using only closed historical bars."""
     evaluation_time = _utc(evaluation_time)
@@ -209,11 +210,12 @@ def build_replay_technical_state(
             XAUTimeframe.D1,
         )
     }
-    assessment = XAUIntradayEngine(require_execution_data=False).analyze(
+    assessment = intraday_assessment or XAUIntradayEngine(require_execution_data=False).analyze(
         available,
         event_risk=False,
         macro_bias=macro_bias,
         now=evaluation_time,
+        assume_sorted=True,
     )
 
     frames = {
