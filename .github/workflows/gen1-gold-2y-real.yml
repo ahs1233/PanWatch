@@ -77,10 +77,16 @@ jobs:
           python -m pip install --disable-pip-version-check --upgrade pip
           python -m pip install --disable-pip-version-check \
             httpx sqlalchemy pydantic pydantic-settings pyyaml openai \
-            apscheduler websockets matplotlib
+            apscheduler websockets matplotlib \
+            numpy pandas scipy statsmodels scikit-learn ruptures
           python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
           python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
           python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
+
+      - name: Run GEN1.1 research unit tests
+        run: |
+          cd benchmarks/gen1_gold_2y_real_v1
+          python -m unittest -v test_edge_analysis.py
 
       - name: Download frozen two-year dataset
         env:
@@ -106,6 +112,11 @@ jobs:
           python benchmarks/gen1_gold_2y_real_v1/run.py 2>&1 | tee gen1-gold-2y-console.json
           echo '{"phase":"benchmark_complete","strategy_revision":"'${STRATEGY_REVISION}'","dataset_release":"'${GEN1_2Y_DATASET_TAG}'","completed_at":"'$(date -u +%FT%TZ)'"}' | tee -a gen1-gold-2y-progress.jsonl
 
+      - name: Run selector-blinded GEN1.1 edge analysis
+        run: |
+          set -o pipefail
+          python benchmarks/gen1_gold_2y_real_v1/gen11.py 2>&1 | tee gen1-gold-2y-gen11-console.json
+
       - name: Upload report, episode tables and charts
         if: always()
         uses: actions/upload-artifact@v4
@@ -115,4 +126,5 @@ jobs:
           path: |
             artifacts/gen1_gold_2y_real_v1/**
             gen1-gold-2y-console.json
+            gen1-gold-2y-gen11-console.json
             gen1-gold-2y-progress.jsonl
