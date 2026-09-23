@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _external_engine = None
 _external_replay_available = False
+_replay_provisioning_error = None
 XAUPaperSessionLocal = SessionLocal
 XAUReplaySessionLocal = SessionLocal
 
@@ -64,7 +65,9 @@ def _sqlalchemy_url(url: str) -> str:
 
 def _provision_replay_table(engine) -> bool:
     """Create the replay table non-destructively when DDL is permitted."""
+    global _replay_provisioning_error
     try:
+        _replay_provisioning_error = None
         if not inspect(engine).has_table("xau_replay_episodes"):
             Base.metadata.create_all(
                 bind=engine,
@@ -72,9 +75,10 @@ def _provision_replay_table(engine) -> bool:
             )
         return inspect(engine).has_table("xau_replay_episodes")
     except SQLAlchemyError as exc:
+        _replay_provisioning_error = f"{type(exc).__name__}: {exc}"
         logger.warning(
-            "XAU replay PostgreSQL provisioning unavailable (%s); "
-            "falling back to local SQLite",
+            "XAU replay dedicated-table provisioning unavailable (%s); "
+            "replay will use the durable external paper-signal compatibility store",
             type(exc).__name__,
         )
         return False
@@ -125,13 +129,12 @@ def init_xau_paper_store(settings: Settings | None = None) -> bool:
             )
             logger.info("XAU replay store initialized on external PostgreSQL")
         else:
-            # Main SQLite is initialized independently by init_db() and includes
-            # XAUReplayEpisode via Base.metadata. This fallback keeps research
-            # replay available when the external role lacks DDL privileges.
+            # Dedicated replay-table DDL is optional. Replay persistence falls
+            # back to XAUPaperSignal in the same external PostgreSQL store.
             XAUReplaySessionLocal = SessionLocal
             logger.warning(
-                "XAU replay table is not provisioned in external PostgreSQL; "
-                "using local SQLite replay fallback"
+                "XAU replay dedicated table is unavailable; "
+                "storage_mode=external_paper_signal_compat durable_external_store=true"
             )
 
         logger.info("XAU paper store initialized on external PostgreSQL")
@@ -153,3 +156,27 @@ def open_xau_paper_session():
 
 def open_xau_replay_session():
     return XAUReplaySessionLocal()
+
+
+def replay_storage_health() -> dict:
+    """Describe the effective replay persistence mode without overstating fallback."""
+    if _external_engine is None:
+        return {
+            "replay_storage_mode": "local_sqlite",
+            "replay_storage_persistent": False,
+            "replay_dedicated_table_available": False,
+            "replay_provisioning_error": _replay_provisioning_error,
+        }
+    if _external_replay_available:
+        return {
+            "replay_storage_mode": "external_replay_table",
+            "replay_storage_persistent": True,
+            "replay_dedicated_table_available": True,
+            "replay_provisioning_error": None,
+        }
+    return {
+        "replay_storage_mode": "external_paper_signal_compat",
+        "replay_storage_persistent": True,
+        "replay_dedicated_table_available": False,
+        "replay_provisioning_error": _replay_provisioning_error,
+    }
