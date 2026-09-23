@@ -46,6 +46,10 @@ jobs:
     name: prepare-data-${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # Four shards run concurrently. Keep aggregate pressure on the public
+      # Dukascopy feed bounded instead of opening 48 worker streams at once.
+      GEN1_2Y_DOWNLOAD_WORKERS: "4"
     strategy:
       fail-fast: false
       matrix:
