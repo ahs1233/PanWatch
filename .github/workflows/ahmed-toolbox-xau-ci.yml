@@ -85,6 +85,9 @@ jobs:
           python -m pip install -e ./packages/pan-agent-token-meter
           python -m pip install -e ./packages/pan-agent-tool-research
 
+      - name: Check diff whitespace
+        run: git diff --check HEAD^ HEAD
+
       - name: Compile changed Python
         run: |
           python -m compileall -q \

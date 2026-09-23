@@ -15,7 +15,13 @@ from datetime import datetime, timezone
 from math import exp
 from typing import Any
 
-from src.modules.xau.directional_state import (\n    build_directional_state,\n    flow_opposition_for_side,\n    gold_microstructure_signal,\n)\n\nCOGNITION_VERSION = "5.6.0"
+from src.modules.xau.directional_state import (
+    build_directional_state,
+    flow_opposition_for_side,
+    gold_microstructure_signal,
+)
+
+COGNITION_VERSION = "5.6.0"
 
 
 def _number(value: Any, default: float = 0.0) -> float:
