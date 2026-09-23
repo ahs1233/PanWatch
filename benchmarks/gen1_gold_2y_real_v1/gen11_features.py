@@ -168,12 +168,18 @@ def flatten_gen11_episode(ep) -> dict[str, Any]:
         for key in ("direction", "rsi14", "atr14", "atr_pct", "breakout"):
             row[f"{tf}_{key}"] = frame.get(key)
         close, fast, slow, atr = frame.get("close"), frame.get("ema_fast"), frame.get("ema_slow"), frame.get("atr14")
+        swing_high, swing_low = frame.get("recent_swing_high"), frame.get("recent_swing_low")
         try:
-            row[f"{tf}_fast_distance_atr"] = (float(close) - float(fast)) / float(atr) if float(atr) else None
-            row[f"{tf}_slow_distance_atr"] = (float(close) - float(slow)) / float(atr) if float(atr) else None
+            atr_value = float(atr)
+            row[f"{tf}_fast_distance_atr"] = (float(close) - float(fast)) / atr_value if atr_value else None
+            row[f"{tf}_slow_distance_atr"] = (float(close) - float(slow)) / atr_value if atr_value else None
+            row[f"{tf}_swing_high_distance_atr"] = (float(close) - float(swing_high)) / atr_value if atr_value and swing_high is not None else None
+            row[f"{tf}_swing_low_distance_atr"] = (float(close) - float(swing_low)) / atr_value if atr_value and swing_low is not None else None
         except (TypeError, ValueError, ZeroDivisionError):
             row[f"{tf}_fast_distance_atr"] = None
             row[f"{tf}_slow_distance_atr"] = None
+            row[f"{tf}_swing_high_distance_atr"] = None
+            row[f"{tf}_swing_low_distance_atr"] = None
     htf = dict(snap.get("htf_bias") or {})
     for tf in ("monthly", "weekly", "daily", "h4", "h1"):
         state = dict(htf.get(tf) or {})
