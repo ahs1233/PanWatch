@@ -1559,3 +1559,83 @@ def test_gen1_live_observation_updates_sampled_ranges_and_60m_outcome():
         assert meta["horizon_outcomes"]["60m"]["method"] == "first_sample_at_or_after_horizon"
     finally:
         db.close()
+
+
+
+def test_gen1_wait_observation_can_record_research_only_shadow_direction():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from src.platform.persistence.models import Base, XAUPaperAccount, XAUPaperSignal
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[XAUPaperAccount.__table__, XAUPaperSignal.__table__],
+    )
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        now = datetime(2026, 9, 23, 10, 0)
+        db.add(XAUPaperAccount(
+            week_key="2026-W39",
+            initial_capital=10000.0,
+            realized_pnl=0.0,
+            current_equity=10000.0,
+            peak_equity=10000.0,
+            max_drawdown_pct=0.0,
+            total_trades=0,
+            winning_trades=0,
+            losing_trades=0,
+            status="active",
+            started_at=now,
+        ))
+        db.commit()
+        payload = {
+            "contract": "gen1-trade-gold-v2",
+            "strategy_revision": "shadow-rev",
+            "observation_source": "scheduled_forward_validation",
+            "pipeline_status": "ready",
+            "force_macro": False,
+            "decision": "WAIT",
+            "confidence": 0.66,
+            "technical": {
+                "analysis_reference": {
+                    "price": 4500.0,
+                    "source": "test",
+                    "observed_at": now.replace(tzinfo=timezone.utc).isoformat(),
+                },
+                "indicative_spot": {"price": 4500.0},
+            },
+            "fusion": {"state": "no_setup", "regime": "trend_bull", "meta_decision": "wait"},
+            "evidence_fusion": {
+                "score": 0.29,
+                "coverage": 0.90,
+                "direction": "bullish",
+                "reasons": ["evidence_confirmation_below_threshold"],
+            },
+            "memory": {},
+            "missing_layers": [],
+        }
+        recorded = _record_gen1_live_observation_sync(db, payload)
+        db.commit()
+        assert recorded["status"] == "recorded"
+
+        row = db.query(XAUPaperSignal).one()
+        assert row.meta["decision"] == "WAIT"
+        assert row.meta["shadow_direction"] == "LONG"
+        assert row.meta["shadow_execution_allowed"] is False
+
+        _update_gen1_live_outcomes(
+            db,
+            reference_price=4510.0,
+            now_utc=now + timedelta(minutes=61),
+            reference_source="test",
+        )
+        db.commit()
+        row = db.query(XAUPaperSignal).one()
+        horizon = row.meta["horizon_outcomes"]["60m"]
+        assert horizon["directional_return_bps"] is None
+        assert horizon["shadow_directional_return_bps"] > 0
+        assert horizon["shadow_positive"] is True
+    finally:
+        db.close()
