@@ -47,24 +47,85 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      # Four shards run concurrently. Keep aggregate pressure on the public
-      # Dukascopy feed bounded instead of opening 48 worker streams at once.
+      # Monthly checkpoints keep retry scope small. Bound aggregate pressure on
+      # the public Dukascopy feed to three concurrent shard jobs x four workers.
       GEN1_2Y_DOWNLOAD_WORKERS: "4"
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         include:
-          - shard: q1
+          - shard: m01
             start: "2024-09-23"
+            end: "2024-10-23"
+          - shard: m02
+            start: "2024-10-23"
+            end: "2024-11-23"
+          - shard: m03
+            start: "2024-11-23"
+            end: "2024-12-23"
+          - shard: m04
+            start: "2024-12-23"
+            end: "2025-01-23"
+          - shard: m05
+            start: "2025-01-23"
+            end: "2025-02-23"
+          - shard: m06
+            start: "2025-02-23"
             end: "2025-03-23"
-          - shard: q2
+          - shard: m07
             start: "2025-03-23"
+            end: "2025-04-23"
+          - shard: m08
+            start: "2025-04-23"
+            end: "2025-05-23"
+          - shard: m09
+            start: "2025-05-23"
+            end: "2025-06-23"
+          - shard: m10
+            start: "2025-06-23"
+            end: "2025-07-23"
+          - shard: m11
+            start: "2025-07-23"
+            end: "2025-08-23"
+          - shard: m12
+            start: "2025-08-23"
             end: "2025-09-23"
-          - shard: q3
+          - shard: m13
             start: "2025-09-23"
+            end: "2025-10-23"
+          - shard: m14
+            start: "2025-10-23"
+            end: "2025-11-23"
+          - shard: m15
+            start: "2025-11-23"
+            end: "2025-12-23"
+          - shard: m16
+            start: "2025-12-23"
+            end: "2026-01-23"
+          - shard: m17
+            start: "2026-01-23"
+            end: "2026-02-23"
+          - shard: m18
+            start: "2026-02-23"
             end: "2026-03-23"
-          - shard: q4
+          - shard: m19
             start: "2026-03-23"
+            end: "2026-04-23"
+          - shard: m20
+            start: "2026-04-23"
+            end: "2026-05-23"
+          - shard: m21
+            start: "2026-05-23"
+            end: "2026-06-23"
+          - shard: m22
+            start: "2026-06-23"
+            end: "2026-07-23"
+          - shard: m23
+            start: "2026-07-23"
+            end: "2026-08-23"
+          - shard: m24
+            start: "2026-08-23"
             end: "2026-09-23"
 
     steps:
