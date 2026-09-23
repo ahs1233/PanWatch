@@ -116,6 +116,16 @@ class Settings(BaseSettings):
     xau_replay_bar_limit: int = Field(default=1000, ge=60, le=1000)
     xau_replay_lookback_days: int = Field(default=5, ge=1, le=30)
 
+    # Automatic collection of complete live GEN1 observations for forward OOS
+    # validation. The collector uses cached/background macro research instead
+    # of forcing an expensive refresh on every collection pass.
+    xau_gen1_forward_validation_enabled: bool = True
+    xau_gen1_forward_interval_seconds: int = Field(default=120, ge=60, le=1800)
+    xau_gen1_oos_min_separation_minutes: int = Field(default=15, ge=5, le=240)
+    xau_gen1_oos_min_total: int = Field(default=150, ge=60, le=5000)
+    xau_gen1_oos_min_holdout: int = Field(default=50, ge=20, le=2000)
+    xau_gen1_oos_holdout_fraction: float = Field(default=0.33, ge=0.20, le=0.50)
+
     # Telegram
     notify_telegram_bot_token: str = ""
     notify_telegram_chat_id: str = ""
