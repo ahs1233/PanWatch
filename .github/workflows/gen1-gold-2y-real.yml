@@ -48,6 +48,18 @@ jobs:
     steps:
       - name: Checkout exact strategy revision
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact strategy revision
+        env:
+          EXPECTED_STRATEGY_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          ACTUAL_STRATEGY_SHA="$(git rev-parse HEAD)"
+          echo "expected_strategy_sha=$EXPECTED_STRATEGY_SHA"
+          echo "actual_strategy_sha=$ACTUAL_STRATEGY_SHA"
+          test "$ACTUAL_STRATEGY_SHA" = "$EXPECTED_STRATEGY_SHA"
+          echo "STRATEGY_REVISION=$ACTUAL_STRATEGY_SHA" >> "$GITHUB_ENV"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -68,14 +80,17 @@ jobs:
       - name: Run two-year real XAUUSD walk-forward benchmark
         run: |
           set -o pipefail
-          python benchmarks/gen1_gold_2y_real_v1/run.py | tee gen1-gold-2y-console.json
+          echo '{"phase":"benchmark_start","strategy_revision":"'${STRATEGY_REVISION}'","started_at":"'$(date -u +%FT%TZ)'"}' | tee gen1-gold-2y-progress.jsonl
+          python benchmarks/gen1_gold_2y_real_v1/run.py 2>&1 | tee gen1-gold-2y-console.json
+          echo '{"phase":"benchmark_complete","strategy_revision":"'${STRATEGY_REVISION}'","completed_at":"'$(date -u +%FT%TZ)'"}' | tee -a gen1-gold-2y-progress.jsonl
 
       - name: Upload report, episode tables and charts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gen1-gold-2y-real-v1-${{ github.sha }}
+          name: gen1-gold-2y-real-v1-${{ github.event.pull_request.head.sha || github.sha }}
           retention-days: 30
           path: |
             artifacts/gen1_gold_2y_real_v1/**
             gen1-gold-2y-console.json
+            gen1-gold-2y-progress.jsonl
