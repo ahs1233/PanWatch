@@ -103,7 +103,7 @@ class XAUIntradayEngine:
         for timeframe in (XAUTimeframe.M1, XAUTimeframe.M5, XAUTimeframe.M15):
             source_bars = bars_by_timeframe.get(timeframe) or []
             bars = (
-                list(source_bars)
+                source_bars
                 if assume_sorted
                 else sorted(source_bars, key=lambda item: item.timestamp)
             )
