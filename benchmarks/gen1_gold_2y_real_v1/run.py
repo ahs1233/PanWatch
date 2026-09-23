@@ -1852,6 +1852,7 @@ def main() -> None:
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     write_csv(OUT / "episodes_60m.csv", episodes60)
     write_csv(OUT / "episodes_240m.csv", episodes240)
+    write_gen11_feature_csv(OUT / "episodes_60m_gen11_features.csv", episodes60)
     write_gen11_feature_csv(OUT / "episodes_240m_gen11_features.csv", episodes240)
     make_charts(bars_by_tf[XAUTimeframe.D1], episodes60)
 
