@@ -225,3 +225,47 @@ def test_fetch_hour_retries_transient_503_then_decodes(monkeypatch):
     assert result.attempts == 3
     assert len(result.ticks) == 1
     assert calls["count"] == 3
+
+
+def test_ticks_range_retries_failed_hour_after_first_pass(monkeypatch):
+    payload = _payload([(1000, 1550500, 1550300, 1.0, 1.0)])
+    ticks = decode_dukascopy_xau_bi5(payload, HOUR)
+    calls = {"count": 0}
+
+    class RangeRetryProvider(DukascopyXAUHistoryProvider):
+        def fetch_hour(self, hour):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return DukascopyHourFetch(
+                    hour=hour,
+                    status="failed:http_503",
+                    ticks=(),
+                    url=dukascopy_hour_url(hour),
+                    attempts=3,
+                )
+            return DukascopyHourFetch(
+                hour=hour,
+                status="data",
+                ticks=ticks,
+                url=dukascopy_hour_url(hour),
+                attempts=1,
+            )
+
+    monkeypatch.setattr(
+        "src.platform.marketdata.xau_dukascopy.time.sleep",
+        lambda _: None,
+    )
+    provider = RangeRetryProvider(
+        retries=0,
+        retry_backoff_seconds=0.01,
+        range_retry_rounds=2,
+    )
+    rows, diagnostics = provider.ticks_range(
+        start=HOUR,
+        end=HOUR + timedelta(hours=1),
+    )
+
+    assert calls["count"] == 2
+    assert len(rows) == 1
+    assert diagnostics.failed_hours == 0
+    assert diagnostics.data_hours == 1
