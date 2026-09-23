@@ -482,3 +482,21 @@ def test_optional_htf_history_preserves_yahoo_source_family(monkeypatch):
     assert enriched[XAUTimeframe.D1]
     assert enriched[XAUTimeframe.H4] == []
     assert all(row.source == "yfinance:GC=F" for row in enriched[XAUTimeframe.H1])
+
+
+
+def test_replay_storage_health_reports_external_compat_as_persistent(monkeypatch):
+    from src.modules.xau import paper_store
+
+    monkeypatch.setattr(paper_store, "_external_engine", object())
+    monkeypatch.setattr(paper_store, "_external_replay_available", False)
+    monkeypatch.setattr(
+        paper_store,
+        "_replay_provisioning_error",
+        "ProgrammingError: permission denied",
+    )
+    health = paper_store.replay_storage_health()
+    assert health["replay_storage_mode"] == "external_paper_signal_compat"
+    assert health["replay_storage_persistent"] is True
+    assert health["replay_dedicated_table_available"] is False
+    assert "permission denied" in health["replay_provisioning_error"]
