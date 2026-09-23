@@ -19,6 +19,8 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from src.modules.xau.cognition import (
     build_market_state_vector,
     state_vector_similarity,
@@ -1206,18 +1208,6 @@ def _record_gen1_live_observation_sync(db, payload: dict) -> dict:
     revision = str(payload.get("strategy_revision") or "unversioned-local")
     revision_key = revision[:12].replace(":", "_").replace("/", "_")
     setup_key = f"gen1live:{revision_key}:{minute_bucket}:{decision.lower()}"
-    existing = (
-        db.query(XAUPaperSignal)
-        .filter(XAUPaperSignal.setup_key == setup_key)
-        .first()
-    )
-    if existing is not None:
-        return {
-            "status": "deduplicated",
-            "signal_id": existing.id,
-            "setup_key": setup_key,
-        }
-
     evidence = payload.get("evidence_fusion") or {}
     fusion = payload.get("fusion") or {}
     memory = payload.get("memory") or {}
@@ -1302,27 +1292,63 @@ def _record_gen1_live_observation_sync(db, payload: dict) -> dict:
             "execution_allowed": False,
         },
     )
-    db.add(row)
-    db.flush()
-    return {"status": "recorded", "signal_id": row.id, "setup_key": setup_key}
+    values = {
+        column.name: getattr(row, column.name)
+        for column in XAUPaperSignal.__table__.columns
+        if column.name != "id"
+    }
+    dialect = db.get_bind().dialect.name
+    table = XAUPaperSignal.__table__
+    if dialect == "postgresql":
+        statement = postgresql_insert(table).values(**values).on_conflict_do_nothing(
+            index_elements=[table.c.setup_key]
+        )
+    elif dialect == "sqlite":
+        statement = sqlite_insert(table).values(**values).on_conflict_do_nothing(
+            index_elements=[table.c.setup_key]
+        )
+    else:
+        # Unknown dialects keep the conservative ORM path. Production PostgreSQL
+        # and the SQLite test store both use atomic conflict handling above.
+        db.add(row)
+        db.flush()
+        return {"status": "recorded", "signal_id": row.id, "setup_key": setup_key}
+
+    result = db.execute(statement)
+    existing = (
+        db.query(XAUPaperSignal)
+        .filter(XAUPaperSignal.setup_key == setup_key)
+        .first()
+    )
+    if existing is None:
+        raise RuntimeError("gen1_live_atomic_insert_missing_row")
+    return {
+        "status": "recorded" if int(result.rowcount or 0) == 1 else "deduplicated",
+        "signal_id": existing.id,
+        "setup_key": setup_key,
+    }
 
 
 def record_gen1_live_observation(payload: dict) -> dict:
-    """Best-effort durable ledger entry for the complete live GEN1 pipeline."""
-    with paper_writer_guard() as acquired:
-        if not acquired:
-            return {"status": "busy", "reason": "paper_writer_busy"}
-        db = open_xau_paper_session()
-        try:
-            result = _record_gen1_live_observation_sync(db, payload)
-            db.commit()
-            return result
-        except Exception as exc:  # noqa: BLE001
-            db.rollback()
-            logger.warning("[GEN1 live ledger] record failed type=%s", type(exc).__name__)
-            return {"status": "error", "error": type(exc).__name__}
-        finally:
-            db.close()
+    """Best-effort durable ledger entry for the complete live GEN1 pipeline.
+
+    This research-only append no longer competes for the coarse paper-writer
+    advisory lock. Idempotency is enforced atomically by the database UNIQUE
+    setup_key constraint plus ON CONFLICT DO NOTHING.
+    """
+    db = open_xau_paper_session()
+    started = time.monotonic()
+    try:
+        result = _record_gen1_live_observation_sync(db, payload)
+        db.commit()
+        result["db_worker_ms"] = round((time.monotonic() - started) * 1000.0, 2)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.warning("[GEN1 live ledger] record failed type=%s", type(exc).__name__)
+        return {"status": "error", "error": type(exc).__name__}
+    finally:
+        db.close()
 
 
 def _update_gen1_live_outcomes(
@@ -1438,13 +1464,17 @@ def _update_gen1_live_outcomes(
                 }
                 changed = True
 
-        meta["live_range_outcomes"] = live_range
-        meta["horizon_outcomes"] = horizons
-        meta["last_observed_price"] = round(float(reference_price), 6)
-        meta["last_observed_at"] = now_utc.replace(tzinfo=timezone.utc).isoformat()
-        meta["last_observation_age_minutes"] = round(age_minutes, 2)
-        row.meta = meta
-        updates += 1 if changed else 0
+        if changed:
+            meta["live_range_outcomes"] = live_range
+            meta["horizon_outcomes"] = horizons
+            # Diagnostic sampling metadata is persisted only alongside a real
+            # first-touch/horizon transition. This avoids rewriting JSON rows
+            # every 15 seconds while preserving first-sample-at-or-after semantics.
+            meta["last_observed_price"] = round(float(reference_price), 6)
+            meta["last_observed_at"] = now_utc.replace(tzinfo=timezone.utc).isoformat()
+            meta["last_observation_age_minutes"] = round(age_minutes, 2)
+            row.meta = meta
+            updates += 1
     return updates
 
 
