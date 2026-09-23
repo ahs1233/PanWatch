@@ -35,6 +35,7 @@ from src.modules.research.automatic_research_scheduler import AutomaticResearchS
 from src.modules.research.claim_acquisition_scheduler import ClaimAcquisitionScheduler
 from src.modules.research.research_store import init_research_store
 from src.modules.xau.scheduler import XAUResearchScheduler
+from src.modules.xau.gen1_forward_validation import Gen1ForwardValidationScheduler
 from src.modules.xau.paper import XAUPaperTradingScheduler
 from src.modules.xau.replay import XAUReplayScheduler
 from src.modules.xau.paper_store import init_xau_paper_store
@@ -64,6 +65,7 @@ context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
 xau_research_scheduler: XAUResearchScheduler | None = None
 xau_paper_scheduler: XAUPaperTradingScheduler | None = None
 xau_replay_scheduler: XAUReplayScheduler | None = None
+xau_gen1_forward_scheduler: Gen1ForwardValidationScheduler | None = None
 automatic_research_scheduler: AutomaticResearchScheduler | None = None
 claim_acquisition_scheduler: ClaimAcquisitionScheduler | None = None
 
@@ -1695,7 +1697,7 @@ async def lifespan(app):
 
     seed_agents()
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler, automatic_research_scheduler, claim_acquisition_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler, xau_gen1_forward_scheduler, automatic_research_scheduler, claim_acquisition_scheduler
 
     macro_warmup_task = None
 
@@ -1715,6 +1717,8 @@ async def lifespan(app):
         xau_paper_scheduler.start()
         xau_replay_scheduler = XAUReplayScheduler(settings)
         xau_replay_scheduler.start()
+        xau_gen1_forward_scheduler = Gen1ForwardValidationScheduler(settings)
+        xau_gen1_forward_scheduler.start()
         # Warm the slow macro layer immediately so the dashboard does not pay
         # the first-request latency. Other AI-heavy background jobs are delayed.
         from src.modules.xau.service import get_macro_context
@@ -1861,7 +1865,10 @@ async def lifespan(app):
         xau_paper_scheduler.shutdown()
     if xau_replay_scheduler:
         xau_replay_scheduler.shutdown()
-        logger.info("XAU paper scheduler stopped")
+        logger.info("XAU replay scheduler stopped")
+    if xau_gen1_forward_scheduler:
+        xau_gen1_forward_scheduler.shutdown()
+        logger.info("GEN1 forward-validation scheduler stopped")
     if automatic_research_scheduler:
         automatic_research_scheduler.shutdown()
     if claim_acquisition_scheduler:
