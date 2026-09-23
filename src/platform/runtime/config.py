@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     ahmed_toolbox_token: str = ""
     ahmed_toolbox_timeout_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
 
+    # Optional structural project-memory layer. Never used as market evidence.
+    graphify_mcp_url: str = ""
+    graphify_mcp_token: str = ""
+    graphify_mcp_timeout_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
+
     # Automatic falsification/counter-research loop. Disabled by default in
     # generic installs; production explicitly enables it after durable-store
     # and external-tool verification.
