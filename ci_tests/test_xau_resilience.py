@@ -217,3 +217,49 @@ def test_missing_macro_blocks_engine_entry_and_can_be_revalidated(runtime, monke
     assert result['fusion']['state']=='macro_unavailable'
     assert paper._can_revalidate_signal(False,'macro_unavailable',True)
     with rt.factory() as db: assert db.query(XAUPaperPosition).count()==0
+
+
+def test_paper_writer_transaction_lock_uses_callers_transaction(monkeypatch):
+    calls = []
+
+    class Bind:
+        dialect = SimpleNamespace(name="postgresql")
+
+    class Session:
+        def get_bind(self):
+            return Bind()
+        def execute(self, stmt):
+            calls.append(str(stmt))
+            return SimpleNamespace(scalar=lambda: True)
+
+    acquired, lock_ms = paper_store.acquire_paper_writer_transaction(
+        Session(),
+        timeout_seconds=0.0,
+    )
+    assert acquired is True
+    assert lock_ms >= 0.0
+    assert len(calls) == 1
+    assert "pg_try_advisory_xact_lock" in calls[0]
+
+
+def test_paper_writer_transaction_lock_fails_fast_without_leaking(monkeypatch):
+    calls = []
+
+    class Bind:
+        dialect = SimpleNamespace(name="postgresql")
+
+    class Session:
+        def get_bind(self):
+            return Bind()
+        def execute(self, stmt):
+            calls.append(str(stmt))
+            return SimpleNamespace(scalar=lambda: False)
+
+    acquired, lock_ms = paper_store.acquire_paper_writer_transaction(
+        Session(),
+        timeout_seconds=0.0,
+    )
+    assert acquired is False
+    assert lock_ms >= 0.0
+    assert len(calls) == 1
+    assert "pg_try_advisory_xact_lock" in calls[0]
