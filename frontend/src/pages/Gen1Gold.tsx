@@ -14,7 +14,7 @@ type Gen1GoldPayload = {
 type LiveValidationPayload = {
   validation_status:string; observation_count:number; completed_60m_directional_count:number
   directional_positive_rate_60m?:number|null; average_directional_return_bps_60m?:number|null
-  calibration?:AnyMap; range_outcomes?:AnyMap; edge_proven:boolean
+  calibration?:AnyMap; range_outcomes?:AnyMap; forward_oos?:AnyMap; edge_proven:boolean
 }
 type ValidationPayload = {
   validation_status:string; episode_count:number; directional_decision_count:number
@@ -185,8 +185,14 @@ export default function Gen1GoldPage(){
             <Metric label="60m positive" value={liveValidation?.directional_positive_rate_60m==null?'—':`${Math.round(Number(liveValidation.directional_positive_rate_60m)*100)}%`}/>
             <Metric label="Live Brier" value={fmt(liveValidation?.calibration?.brier_score,3)}/>
           </div>
+          <div className="mt-3 rounded-xl border border-border/60 p-3 text-[10px] text-muted-foreground">
+            <div className="flex justify-between gap-2"><span>Forward OOS</span><span className={liveValidation?.forward_oos?.passed?'text-emerald-500':'text-amber-500'}>{liveValidation?.forward_oos?.status||'collecting'}</span></div>
+            <div className="mt-1">Independent N {liveValidation?.forward_oos?.decorrelated_completed_current_revision??0} / {liveValidation?.forward_oos?.minimum_total_required??150} · holdout {liveValidation?.forward_oos?.holdout_count??0}</div>
+            <div className="mt-1">Wilson 95% lower {liveValidation?.forward_oos?.wilson_95_lower==null?'—':`${Math.round(Number(liveValidation.forward_oos.wilson_95_lower)*100)}%`} · mean lower {fmt(liveValidation?.forward_oos?.bootstrap_mean_bps_95_lower,2)} bps</div>
+            <div className="mt-1">Revision {String(liveValidation?.forward_oos?.strategy_revision||'—').slice(0,12)} · pinned {liveValidation?.forward_oos?.revision_pinning_available?'yes':'no'}</div>
+          </div>
           <div className="mt-3 text-[10px] text-muted-foreground">{liveValidation?.validation_status||'Collecting full-pipeline observations'} · edge proven: No</div>
-          <div className="mt-2 text-[10px] text-muted-foreground">Includes live XAUT; first-touch is sampled by scheduler, not intrabar-exact.</div>
+          <div className="mt-2 text-[10px] text-muted-foreground">Auto-collector: every 2 minutes. OOS: ≥15-minute separation. Includes live XAUT; first-touch is sampled, not intrabar-exact.</div>
         </section>
       </div>
 
