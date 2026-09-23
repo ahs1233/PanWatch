@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any
 
@@ -242,6 +242,100 @@ def _volume_profile(
     }
 
 
+def _session_name(value: datetime) -> str:
+    hour = value.astimezone(timezone.utc).hour
+    if 0 <= hour < 8:
+        return "asia"
+    if 8 <= hour < 13:
+        return "london"
+    if 13 <= hour < 21:
+        return "new_york"
+    return "off_hours"
+
+
+def _rolling_profiles(
+    trades: list[XAUTTrade],
+    *,
+    tick: float,
+    value_area_fraction: float,
+) -> dict[str, Any]:
+    if not trades:
+        return {}
+    end = trades[-1].timestamp
+    out: dict[str, Any] = {}
+    for minutes in (15, 30, 60):
+        cutoff = end - timedelta(minutes=minutes)
+        subset = [trade for trade in trades if trade.timestamp >= cutoff]
+        profile = _volume_profile(
+            subset,
+            tick=tick,
+            value_area_fraction=value_area_fraction,
+        )
+        profile = dict(profile)
+        profile["requested_minutes"] = minutes
+        profile["coverage_complete"] = bool(trades and trades[0].timestamp <= cutoff)
+        profile["window_start"] = cutoff.isoformat()
+        profile["window_end"] = end.isoformat()
+        out[f"{minutes}m"] = profile
+    return out
+
+
+def _session_profiles(
+    trades: list[XAUTTrade],
+    *,
+    tick: float,
+    value_area_fraction: float,
+) -> dict[str, Any]:
+    if not trades:
+        return {"available": False, "current_session": None, "profiles": []}
+
+    groups: dict[tuple[str, str], list[XAUTTrade]] = defaultdict(list)
+    for trade in trades:
+        utc_time = trade.timestamp.astimezone(timezone.utc)
+        groups[(utc_time.date().isoformat(), _session_name(utc_time))].append(trade)
+
+    latest = trades[-1].timestamp.astimezone(timezone.utc)
+    current_key = (latest.date().isoformat(), _session_name(latest))
+    rows = []
+    for (date_key, session), subset in sorted(groups.items()):
+        profile = _volume_profile(
+            subset,
+            tick=tick,
+            value_area_fraction=value_area_fraction,
+        )
+        profile = dict(profile)
+        profile.update({
+            "date_utc": date_key,
+            "session": session,
+            "partial_tape": True,
+            "first_trade_at": subset[0].timestamp.isoformat(),
+            "last_trade_at": subset[-1].timestamp.isoformat(),
+        })
+        rows.append(profile)
+
+    current = next(
+        (
+            row for row in rows
+            if row.get("date_utc") == current_key[0] and row.get("session") == current_key[1]
+        ),
+        None,
+    )
+    return {
+        "available": bool(rows),
+        "session_clock": "UTC dominant non-overlapping windows",
+        "windows_utc": {
+            "asia": "00:00-08:00",
+            "london": "08:00-13:00",
+            "new_york": "13:00-21:00",
+            "off_hours": "21:00-24:00",
+        },
+        "current_session": current_key[1],
+        "current": current,
+        "profiles": rows,
+        "note": "Profiles cover only trades present in the XAUT tape; partial_tape=true is not a full exchange session claim.",
+    }
+
+
 def _book(snapshot: XAUTMicrostructureSnapshot, distance: float) -> dict[str, Any]:
     mid = snapshot.mid
     lower, upper = mid - distance, mid + distance
@@ -325,6 +419,16 @@ def analyze_xaut_microstructure(
         tick=volume_profile_tick,
         value_area_fraction=value_area_fraction,
     )
+    rolling_profiles = _rolling_profiles(
+        trades,
+        tick=volume_profile_tick,
+        value_area_fraction=value_area_fraction,
+    )
+    session_profiles = _session_profiles(
+        trades,
+        tick=volume_profile_tick,
+        value_area_fraction=value_area_fraction,
+    )
     if profile.get("available") and basis is not None:
         profile = dict(profile)
         profile["xauusd_mapping"] = {
@@ -379,6 +483,11 @@ def analyze_xaut_microstructure(
         "cvd": _cvd(trades),
         "footprint": _footprint(trades, tick=footprint_tick),
         "volume_profile": profile,
+        "volume_profiles": {
+            "tape": profile,
+            "rolling": rolling_profiles,
+            "session": session_profiles,
+        },
         "raw_book": books,
         "absorption": _absorption(flows["5m"], book10),
         "forward_range_map": forward,

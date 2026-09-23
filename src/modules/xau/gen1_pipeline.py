@@ -3,6 +3,8 @@
 Both the assistant command and the PanWatch GEN1 GOLD UI call this exact
 function. Pipeline order is frozen:
 Ahmed ToolBox-backed macro research -> PanWatch market state -> Gen1 fusion.
+
+Persistent memory and evidence fusion are shared with the paper/replay stack.
 Every degraded/missing layer is returned explicitly. Live execution is never enabled.
 """
 from __future__ import annotations
@@ -10,22 +12,15 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from src.modules.xau.evidence_fusion import build_gen1_evidence_fusion
+from src.modules.xau.paper import load_gen1_memory_snapshot
 from src.modules.xau.service import build_decision_fusion, get_macro_context, get_xau_snapshot
-
-
-def _decision_from_fusion(fusion: dict[str, Any]) -> str:
-    candidate = str(fusion.get("technical_candidate") or "none")
-    paper_allowed = bool(fusion.get("paper_entry_allowed"))
-    if paper_allowed and candidate == "long_setup":
-        return "LONG"
-    if paper_allowed and candidate == "short_setup":
-        return "SHORT"
-    return "WAIT"
 
 
 async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
     stage_errors: dict[str, str] = {}
 
+    # 1) Ahmed ToolBox-backed external/macro evidence.
     try:
         macro = await asyncio.wait_for(get_macro_context(force=True), timeout=75.0)
     except Exception as exc:  # noqa: BLE001
@@ -40,6 +35,7 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
                 "synthesis_ok": False, "summary": "Macro layer unavailable.", "drivers": [],
             }
 
+    # 2) PanWatch current market state.
     try:
         technical = await get_xau_snapshot(force=False)
     except Exception as exc:  # noqa: BLE001
@@ -51,14 +47,45 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
             "execution_status": "LOCKED_NO_TRADABLE_SPOT_FEED",
         }
 
+    # 2b) PanWatch persistent episodic/calibration memory.
+    memory = await asyncio.to_thread(load_gen1_memory_snapshot, technical, macro)
+    if not memory.get("available"):
+        stage_errors["panwatch_memory"] = str(memory.get("error") or "unavailable")
+
+    # 3) Gen1 cognition receives the same memory used by paper trading.
     try:
-        fusion = build_decision_fusion(technical, macro)
+        fusion = build_decision_fusion(technical, macro, memory=memory)
     except Exception as exc:  # noqa: BLE001
         stage_errors["gen1"] = type(exc).__name__
         fusion = {
             "state": "unavailable", "technical_candidate": technical.get("candidate", "none"),
             "research_ready": False, "paper_entry_allowed": False, "execution_allowed": False,
             "reasons": [f"gen1_fusion_unavailable:{type(exc).__name__}"],
+            "cognition": {},
+        }
+
+    # 3b) Independent-family evidence confirmation. XAUT is one bounded family,
+    # not several independent votes.
+    try:
+        evidence = build_gen1_evidence_fusion(
+            technical,
+            macro,
+            fusion,
+            memory=memory,
+            require_xaut=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        stage_errors["evidence_fusion"] = type(exc).__name__
+        evidence = {
+            "version": "gen1-evidence-fusion-v1",
+            "decision": "WAIT",
+            "decision_confidence": fusion.get("cognitive_confidence"),
+            "score": 0.0,
+            "coverage": 0.0,
+            "families": [],
+            "conflicts": [],
+            "reasons": [f"evidence_fusion_unavailable:{type(exc).__name__}"],
+            "execution_allowed": False,
         }
 
     xaut = technical.get("xaut_order_flow") or {}
@@ -73,6 +100,8 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
         missing_layers.append("ahmed_toolbox_primary_search")
     if not market_context or technical.get("market_context_error"):
         missing_layers.append("higher_timeframe_market_context")
+    if not memory.get("available"):
+        missing_layers.append("panwatch_persistent_memory")
     if not xaut or technical.get("xaut_order_flow_error"):
         missing_layers.append("xaut_order_flow")
     if not footprint.get("available"):
@@ -96,6 +125,12 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
         "technical_mode": technical.get("technical_mode"),
         "alignment": technical.get("alignment"),
         "market_context_ready": bool(market_context),
+        "memory_ready": bool(memory.get("available")),
+        "memory_samples": max(
+            int(memory.get("similar_samples") or 0),
+            int(memory.get("calibration_sample_count") or 0),
+            int(memory.get("trade_count") or 0),
+        ),
         "xaut_ready": bool(xaut) and not technical.get("xaut_order_flow_error"),
         "footprint_ready": bool(footprint.get("available")),
         "volume_profile_ready": profile.get("status") == "ready",
@@ -105,7 +140,10 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
         "status": fusion.get("state"),
         "candidate": fusion.get("technical_candidate"),
         "regime": fusion.get("regime"),
-        "confidence": fusion.get("cognitive_confidence"),
+        "cognitive_confidence": fusion.get("cognitive_confidence"),
+        "confidence": evidence.get("decision_confidence"),
+        "evidence_score": evidence.get("score"),
+        "evidence_coverage": evidence.get("coverage"),
         "meta_decision": fusion.get("meta_decision"),
         "research_ready": bool(fusion.get("research_ready")),
         "paper_entry_allowed": bool(fusion.get("paper_entry_allowed")),
@@ -114,17 +152,20 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
     pipeline_status = "ready" if not missing_layers and not stage_errors else "degraded"
 
     return {
-        "contract": "gen1-trade-gold-v1",
+        "contract": "gen1-trade-gold-v2",
         "trigger": "Gen1 trade gold",
         "pipeline_order": ["ahmed_toolbox", "panwatch", "gen1"],
         "pipeline_status": pipeline_status,
-        "decision": _decision_from_fusion(fusion),
+        "decision": evidence.get("decision") or "WAIT",
+        "confidence": evidence.get("decision_confidence"),
         "stages": {"ahmed_toolbox": toolbox_stage, "panwatch": panwatch_stage, "gen1": gen1_stage},
         "missing_layers": missing_layers,
         "stage_errors": stage_errors,
         "macro": macro,
         "technical": technical,
+        "memory": memory,
         "fusion": fusion,
+        "evidence_fusion": evidence,
         "forward_range_map": xaut.get("forward_range_map"),
         "answer_contract": {
             "required": [

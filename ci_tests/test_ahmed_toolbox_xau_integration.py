@@ -247,27 +247,46 @@ def test_gen1_trade_gold_shared_core_runs_toolbox_panwatch_gen1_in_order(monkeyp
             "execution_status": "LOCKED_NO_TRADABLE_SPOT_FEED",
         }
 
-    def fake_fusion(technical, macro):
-        calls.append(("gen1", technical["candidate"], macro["bias"]))
+    def fake_memory(technical, macro):
+        calls.append(("memory", technical["candidate"], macro["bias"]))
+        return {"available": True, "trade_count": 0, "similar_samples": 0, "calibration_sample_count": 0}
+
+    def fake_fusion(technical, macro, *, memory=None):
+        calls.append(("gen1", technical["candidate"], macro["bias"], bool(memory and memory.get("available"))))
         return {
             "state": "setup_macro_support", "technical_candidate": "long_setup",
             "regime": "trend", "cognitive_confidence": 0.77, "meta_decision": "eligible",
             "research_ready": True, "paper_entry_allowed": True, "execution_allowed": False,
+            "macro_ready": True, "cognition": {"directional_edge": {"score": 0.4}},
+        }
+
+    def fake_evidence(technical, macro, fusion, *, memory=None, require_xaut=True):
+        calls.append(("evidence", require_xaut))
+        return {
+            "decision": "LONG", "decision_confidence": 0.74, "score": 0.3,
+            "coverage": 0.9, "families": [], "conflicts": [], "reasons": [],
         }
 
     monkeypatch.setattr(gen1_pipeline, "get_macro_context", fake_macro)
     monkeypatch.setattr(gen1_pipeline, "get_xau_snapshot", fake_snapshot)
+    monkeypatch.setattr(gen1_pipeline, "load_gen1_memory_snapshot", fake_memory)
     monkeypatch.setattr(gen1_pipeline, "build_decision_fusion", fake_fusion)
+    monkeypatch.setattr(gen1_pipeline, "build_gen1_evidence_fusion", fake_evidence)
 
     result = __import__("asyncio").run(gen1_pipeline.run_gen1_trade_gold_pipeline())
     assert calls == [
         ("ahmed_toolbox", True),
         ("panwatch", False),
-        ("gen1", "long_setup", 1),
+        ("memory", "long_setup", 1),
+        ("gen1", "long_setup", 1, True),
+        ("evidence", True),
     ]
     assert result["pipeline_order"] == ["ahmed_toolbox", "panwatch", "gen1"]
     assert result["pipeline_status"] == "ready"
     assert result["decision"] == "LONG"
+    assert result["contract"] == "gen1-trade-gold-v2"
+    assert result["confidence"] == 0.74
+    assert result["memory"]["available"] is True
     assert result["missing_layers"] == []
     assert result["answer_contract"]["never_hide_missing_layer"] is True
 

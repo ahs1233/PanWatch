@@ -130,3 +130,20 @@ def test_volume_profile_maps_poc_vah_val_to_xau_by_instantaneous_basis_only():
     assert mapping["val"] == round(profile["val"] + 3.0, 4)
     assert result["evidence_policy"]["volume_profile_is_real_executed_xaut_volume"] is True
     assert result["evidence_policy"]["xaut_volume_profile_is_global_xauusd_volume"] is False
+
+
+
+def test_volume_profiles_include_rolling_and_session_context():
+    result = analyze_xaut_microstructure(
+        _snapshot(),
+        xau_spot_price=4363.5,
+        volume_profile_tick=0.5,
+    )
+    profiles = result["volume_profiles"]
+    assert profiles["tape"]["status"] == "ready"
+    assert set(profiles["rolling"]) == {"15m", "30m", "60m"}
+    assert profiles["rolling"]["15m"]["status"] == "ready"
+    assert profiles["session"]["available"] is True
+    assert profiles["session"]["current_session"] in {"asia", "london", "new_york", "off_hours"}
+    assert profiles["session"]["current"]["partial_tape"] is True
+    assert "full exchange session claim" in profiles["session"]["note"]

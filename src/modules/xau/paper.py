@@ -2654,3 +2654,35 @@ class XAUPaperTradingScheduler:
             self.scheduler.shutdown(wait=False)
         except Exception:
             pass
+
+
+
+def load_gen1_memory_snapshot(technical: dict, macro: dict) -> dict:
+    """Read the same calibrated memory used by the paper engine for GEN1.
+
+    This is intentionally read-only. A missing/empty history is valid; storage
+    errors are surfaced explicitly so GEN1 never pretends memory was loaded.
+    """
+    db = open_xau_paper_session()
+    try:
+        engine = XAUPaperTradingEngine()
+        memory = engine._memory_snapshot(db, technical, macro)
+        result = dict(memory or {})
+        result["available"] = True
+        result["read_only"] = True
+        result["source_engine"] = "xau_paper_memory"
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[GEN1 memory] unavailable type=%s", type(exc).__name__)
+        return {
+            "available": False,
+            "read_only": True,
+            "source_engine": "xau_paper_memory",
+            "error": type(exc).__name__,
+            "trade_count": 0,
+            "similar_samples": 0,
+            "calibration_sample_count": 0,
+            "posterior_win_probability": None,
+        }
+    finally:
+        db.close()
