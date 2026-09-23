@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .gen1_pipeline import run_gen1_trade_gold_pipeline
 from .paper import XAUPaperTradingEngine
+from .validation import load_gen1_validation_summary
 from .service import build_decision_fusion, get_chart_series, get_library_validation, get_macro_context, get_xau_snapshot
 
 router = APIRouter()
@@ -60,6 +61,18 @@ async def gen1_gold():
         raise HTTPException(
             status_code=503,
             detail=f"GEN1 GOLD pipeline unavailable: {type(exc).__name__}",
+        ) from exc
+
+
+@router.get("/gen1-gold/validation")
+def gen1_gold_validation(limit: int = Query(default=2000, ge=10, le=10000)):
+    """Historical validation of persisted GEN1 replay episodes."""
+    try:
+        return load_gen1_validation_summary(limit=limit)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"GEN1 GOLD validation unavailable: {type(exc).__name__}",
         ) from exc
 
 

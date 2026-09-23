@@ -21,6 +21,9 @@ from typing import Any, Callable
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.modules.strategy.xau_intraday import XAUIntradayEngine
 from src.modules.xau.cognition import build_cognitive_state
+from src.modules.xau.evidence_fusion import build_gen1_evidence_fusion
+from src.modules.xau.market_context import build_market_context
+from src.modules.xau.service import build_decision_fusion
 from src.modules.xau.paper_store import (
     open_xau_paper_session,
     open_xau_replay_session,
@@ -44,6 +47,10 @@ _TIMEFRAME_DURATION = {
     XAUTimeframe.M1: timedelta(minutes=1),
     XAUTimeframe.M5: timedelta(minutes=5),
     XAUTimeframe.M15: timedelta(minutes=15),
+    XAUTimeframe.M30: timedelta(minutes=30),
+    XAUTimeframe.H1: timedelta(hours=1),
+    XAUTimeframe.H4: timedelta(hours=4),
+    XAUTimeframe.D1: timedelta(days=1),
 }
 
 
@@ -91,7 +98,14 @@ def _sorted_bars(
             bars_by_timeframe.get(timeframe) or [],
             key=lambda item: _utc(item.timestamp),
         )
-        for timeframe in (XAUTimeframe.M1, XAUTimeframe.M5, XAUTimeframe.M15)
+        for timeframe in (
+            XAUTimeframe.M1,
+            XAUTimeframe.M5,
+            XAUTimeframe.M15,
+            XAUTimeframe.H1,
+            XAUTimeframe.H4,
+            XAUTimeframe.D1,
+        )
     }
 
 
@@ -176,8 +190,16 @@ def build_replay_technical_state(
             bars_by_timeframe.get(timeframe) or [],
             timeframe,
             evaluation_time,
+            max_bars=1000 if timeframe in {XAUTimeframe.H1, XAUTimeframe.H4, XAUTimeframe.D1} else 300,
         )
-        for timeframe in (XAUTimeframe.M1, XAUTimeframe.M5, XAUTimeframe.M15)
+        for timeframe in (
+            XAUTimeframe.M1,
+            XAUTimeframe.M5,
+            XAUTimeframe.M15,
+            XAUTimeframe.H1,
+            XAUTimeframe.H4,
+            XAUTimeframe.D1,
+        )
     }
     assessment = XAUIntradayEngine(require_execution_data=False).analyze(
         available,
@@ -244,6 +266,15 @@ def build_replay_technical_state(
         "execution_eligible": False,
     }
 
+    h1 = available.get(XAUTimeframe.H1) or []
+    h4 = available.get(XAUTimeframe.H4) or []
+    daily = available.get(XAUTimeframe.D1) or []
+    market_context = (
+        build_market_context(h1, h4, daily)
+        if h1 or h4 or daily
+        else {}
+    )
+
     return {
         "instrument": "XAUUSD",
         "research_only": True,
@@ -274,7 +305,70 @@ def build_replay_technical_state(
         "swing_high_reference": assessment.swing_high_reference,
         "swing_low_reference": assessment.swing_low_reference,
         "frames": frames,
+        "market_context": market_context,
+        "market_context_error": None if market_context else "historical_htf_unavailable",
+        "xaut_order_flow": None,
+        "xaut_order_flow_error": "historical_xaut_microstructure_unavailable",
     }
+
+
+def _future_range_outcomes(
+    m1: list[XAUBar],
+    evaluation_time: datetime,
+    entry_price: float,
+    *,
+    horizon_minutes: int,
+    distances: tuple[int, ...] = (10, 20, 30),
+) -> dict[str, Any]:
+    """Measure first-touch +/- USD outcomes using future closed M1 OHLC only."""
+    start = _utc(evaluation_time)
+    end = start + timedelta(minutes=max(1, int(horizon_minutes)))
+    future = [
+        bar for bar in m1
+        if _available_at(bar) > start and _available_at(bar) <= end
+    ]
+    out: dict[str, Any] = {
+        "horizon_minutes": int(horizon_minutes),
+        "bar_count": len(future),
+        "lookahead_used_for_label_only": True,
+        "levels": {},
+    }
+    if not future:
+        return out
+
+    max_up = max(float(bar.high) - entry_price for bar in future)
+    max_down = max(entry_price - float(bar.low) for bar in future)
+    out["max_up_usd"] = round(max_up, 4)
+    out["max_down_usd"] = round(max_down, 4)
+
+    for distance in distances:
+        up_level = entry_price + float(distance)
+        down_level = entry_price - float(distance)
+        first_hit = "none"
+        first_hit_at = None
+        up_hit = False
+        down_hit = False
+        for bar in future:
+            hit_up = float(bar.high) >= up_level
+            hit_down = float(bar.low) <= down_level
+            up_hit = up_hit or hit_up
+            down_hit = down_hit or hit_down
+            if first_hit == "none" and (hit_up or hit_down):
+                first_hit_at = _available_at(bar).isoformat()
+                if hit_up and hit_down:
+                    first_hit = "ambiguous_same_bar"
+                else:
+                    first_hit = "up" if hit_up else "down"
+        out["levels"][f"pm{distance}"] = {
+            "distance_usd": distance,
+            "up_level": round(up_level, 4),
+            "down_level": round(down_level, 4),
+            "up_hit": up_hit,
+            "down_hit": down_hit,
+            "first_hit": first_hit,
+            "first_hit_at": first_hit_at,
+        }
+    return out
 
 
 def _future_close(
@@ -335,6 +429,23 @@ def walk_forward_replay(
         macro.setdefault("bias", 0)
         macro.setdefault("confidence", 0.0)
         macro.setdefault("event_risk", False)
+        macro.setdefault("observed_at", evaluation_time.isoformat())
+        if macro_provider is not None:
+            # A supplied historical provider is responsible for point-in-time
+            # evidence. Missing readiness fields remain explicit, but defaults
+            # make simple deterministic providers usable in research replay.
+            macro.setdefault("calendar_ok", True)
+            macro.setdefault("search_ok", True)
+            macro.setdefault("synthesis_ok", True)
+            macro.setdefault("cache_stale", False)
+            macro.setdefault("refresh_pending", False)
+        else:
+            macro.setdefault("calendar_ok", False)
+            macro.setdefault("search_ok", False)
+            macro.setdefault("synthesis_ok", False)
+            macro.setdefault("cache_stale", False)
+            macro.setdefault("refresh_pending", False)
+            macro.setdefault("historical_gap", "macro_provider_not_supplied")
 
         technical = build_replay_technical_state(
             bars,
@@ -351,6 +462,30 @@ def walk_forward_replay(
             memory=None,
             min_confidence=min_confidence,
         )
+        # Replay the same Gen1 decision stack wherever historical inputs exist.
+        # Historical XAUT raw book/trade tape is intentionally absent, so the
+        # evidence layer runs with require_xaut=False and records that gap.
+        fusion = build_decision_fusion(
+            technical,
+            macro,
+            memory=None,
+            min_confidence=min_confidence,
+            as_of=evaluation_time,
+        )
+        evidence = build_gen1_evidence_fusion(
+            technical,
+            macro,
+            fusion,
+            memory=None,
+            require_xaut=False,
+        )
+        gen1_decision = str(evidence.get("decision") or "WAIT")
+        gen1_confidence = evidence.get("decision_confidence")
+        sensor_gaps = ["historical_xaut_microstructure_unavailable"]
+        if not technical.get("market_context"):
+            sensor_gaps.append("historical_htf_context_unavailable")
+        if macro_provider is None:
+            sensor_gaps.append("historical_macro_unavailable")
         future = _future_close(
             m1,
             evaluation_time + timedelta(minutes=horizon_minutes),
@@ -360,6 +495,12 @@ def walk_forward_replay(
         outcome_price, outcome_at = future
 
         entry_price = float(technical["analysis_reference"]["price"])
+        range_outcomes = _future_range_outcomes(
+            m1,
+            evaluation_time,
+            entry_price,
+            horizon_minutes=horizon_minutes,
+        )
         side = 1.0 if candidate == "long_setup" else -1.0
         directional_return_bps = (
             ((outcome_price - entry_price) / entry_price) * 10_000.0 * side
@@ -398,6 +539,13 @@ def walk_forward_replay(
                     "macro_bias": macro.get("bias"),
                     "macro_confidence": macro.get("confidence"),
                     "event_risk": bool(macro.get("event_risk")),
+                    "gen1_decision": gen1_decision,
+                    "gen1_decision_confidence": gen1_confidence,
+                    "gen1_fusion_state": fusion.get("state"),
+                    "evidence_fusion": evidence,
+                    "range_outcomes": range_outcomes,
+                    "sensor_gaps": sensor_gaps,
+                    "replay_scope": "full_gen1_except_historical_xaut_microstructure",
                 },
             )
         )
@@ -614,6 +762,42 @@ async def _fetch_default_replay_history(
     return bars, "yfinance:GC=F"
 
 
+async def _attach_optional_htf_history(
+    bars: dict[XAUTimeframe, list[XAUBar]],
+    *,
+    lookback_days: int,
+) -> dict[XAUTimeframe, list[XAUBar]]:
+    """Best-effort same-instrument HTF context; never invalidates core M1/M5/M15."""
+    provider = BiquoteXAUOHLCProvider()
+    end = datetime.now(timezone.utc)
+    days = max(5, int(lookback_days or 30))
+    start = end - timedelta(days=min(365, max(days, 30)))
+
+    async def one(tf: XAUTimeframe):
+        try:
+            if lookback_days > 0:
+                return await asyncio.to_thread(
+                    provider.bars_range,
+                    tf,
+                    start=start,
+                    end=end,
+                )
+            return await asyncio.to_thread(provider.bars, tf, limit=1000)
+        except Exception:
+            return []
+
+    h1, h4, d1 = await asyncio.gather(
+        one(XAUTimeframe.H1),
+        one(XAUTimeframe.H4),
+        one(XAUTimeframe.D1),
+    )
+    enriched = dict(bars)
+    enriched[XAUTimeframe.H1] = h1
+    enriched[XAUTimeframe.H4] = h4
+    enriched[XAUTimeframe.D1] = d1
+    return enriched
+
+
 async def refresh_replay_memory(
     *,
     horizon_minutes: int = 60,
@@ -624,6 +808,10 @@ async def refresh_replay_memory(
     """Fetch historical bars, run no-lookahead replay and persist new episodes."""
     bars, source = await _fetch_default_replay_history(
         limit=limit,
+        lookback_days=lookback_days,
+    )
+    bars = await _attach_optional_htf_history(
+        bars,
         lookback_days=lookback_days,
     )
     return await asyncio.to_thread(

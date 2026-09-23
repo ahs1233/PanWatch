@@ -1192,7 +1192,11 @@ async def get_xau_snapshot(force: bool = False) -> dict[str, Any]:
     }
 
 
-def macro_entry_readiness(macro: dict[str, Any]) -> tuple[bool, str]:
+def macro_entry_readiness(
+    macro: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> tuple[bool, str]:
     """Unknown, failed or expired research is not a neutral market assessment."""
     if macro.get("cache_stale") or macro.get("refresh_pending"):
         return False, "macro_refresh_pending"
@@ -1202,7 +1206,11 @@ def macro_entry_readiness(macro: dict[str, Any]) -> tuple[bool, str]:
         observed = datetime.fromisoformat(str(macro.get("observed_at") or "").replace("Z", "+00:00"))
         if observed.tzinfo is None:
             observed = observed.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - observed).total_seconds()
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        current = current.astimezone(timezone.utc)
+        age = (current - observed).total_seconds()
         if not 0 <= age <= _MACRO_TTL:
             return False, "macro_expired"
     except (TypeError, ValueError):
@@ -1216,13 +1224,14 @@ def build_decision_fusion(
     *,
     memory: dict[str, Any] | None = None,
     min_confidence: float | None = None,
+    as_of: datetime | None = None,
 ) -> dict[str, Any]:
     """Fuse technical, macro and cognitive layers into one inspectable state."""
 
     candidate = str(technical.get("candidate") or "none")
     technical_blocked = bool(technical.get("blocked"))
     event_risk = bool(macro.get("event_risk"))
-    macro_ready, macro_readiness_reason = macro_entry_readiness(macro)
+    macro_ready, macro_readiness_reason = macro_entry_readiness(macro, now=as_of)
     try:
         macro_bias = max(-1, min(1, int(macro.get("bias", 0))))
     except (TypeError, ValueError):

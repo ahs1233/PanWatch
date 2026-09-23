@@ -13,6 +13,7 @@ from src.modules.xau.replay import (
     persist_replay_episodes,
     persist_replay_episodes_in_paper_store,
     walk_forward_replay,
+    _future_range_outcomes,
 )
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
 from src.platform.persistence.database import Base
@@ -376,3 +377,52 @@ def test_replay_prefers_deep_biquote_range_history(monkeypatch):
     assert len(history[XAUTimeframe.M1]) == 400
     assert len(history[XAUTimeframe.M5]) == 100
     assert len(history[XAUTimeframe.M15]) == 50
+
+
+
+def test_future_range_outcomes_records_first_touch_without_lookahead_into_decision():
+    start = datetime(2026, 1, 5, 0, 0, tzinfo=timezone.utc)
+    bars = _bars(XAUTimeframe.M1, 90, start=start, slope=0.4)
+    evaluation = bars[30].timestamp + timedelta(minutes=1)
+    entry = bars[30].close
+    result = _future_range_outcomes(
+        bars,
+        evaluation,
+        entry,
+        horizon_minutes=45,
+    )
+    assert result["lookahead_used_for_label_only"] is True
+    assert set(result["levels"]) == {"pm10", "pm20", "pm30"}
+    assert result["max_up_usd"] > 0
+
+
+def test_walk_forward_replay_records_gen1_scope_and_sensor_gaps():
+    def historical_macro(at):
+        return {
+            "bias": 1,
+            "confidence": 0.7,
+            "event_risk": False,
+            "observed_at": at.isoformat(),
+            "calendar_ok": True,
+            "search_ok": True,
+            "synthesis_ok": True,
+        }
+
+    episodes = walk_forward_replay(
+        _history(),
+        horizon_minutes=30,
+        step_minutes=15,
+        source="gen1-replay-test",
+        macro_provider=historical_macro,
+    )
+    assert episodes
+    assert all("gen1_decision" in item.meta for item in episodes)
+    assert all("range_outcomes" in item.meta for item in episodes)
+    assert all(
+        "historical_xaut_microstructure_unavailable" in item.meta["sensor_gaps"]
+        for item in episodes
+    )
+    assert all(
+        item.meta["replay_scope"] == "full_gen1_except_historical_xaut_microstructure"
+        for item in episodes
+    )
