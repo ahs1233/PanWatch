@@ -57,6 +57,7 @@ jobs:
           python -m pip install --disable-pip-version-check \
             httpx sqlalchemy pydantic pydantic-settings pyyaml openai \
             apscheduler websockets matplotlib
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
           python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
 
       - name: Run two-year real XAUUSD walk-forward benchmark
