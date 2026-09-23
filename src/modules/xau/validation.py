@@ -270,15 +270,25 @@ def _session_name_utc(observed: datetime) -> str:
     return "off_hours"
 
 
-def _live_completed_rows(signals: Iterable[Any]) -> list[dict[str, Any]]:
+def _live_completed_rows(
+    signals: Iterable[Any],
+    *,
+    cohort: str = "final",
+) -> list[dict[str, Any]]:
     rows = []
     for item in signals:
         meta = _meta(item)
-        decision = str(meta.get("decision") or "UNKNOWN").upper()
-        if decision not in {"LONG", "SHORT"}:
-            continue
         horizon = (meta.get("horizon_outcomes") or {}).get("60m") or {}
-        directional = _number(horizon.get("directional_return_bps"))
+        if cohort == "shadow":
+            direction = str(meta.get("shadow_direction") or "").upper()
+            directional = _number(horizon.get("shadow_directional_return_bps"))
+            confidence = _number(meta.get("shadow_confidence"))
+        else:
+            direction = str(meta.get("decision") or "UNKNOWN").upper()
+            directional = _number(horizon.get("directional_return_bps"))
+            confidence = _number(meta.get("decision_confidence"))
+        if direction not in {"LONG", "SHORT"}:
+            continue
         observed = _observed_at(item)
         if directional is None or observed is None:
             continue
@@ -287,14 +297,15 @@ def _live_completed_rows(signals: Iterable[Any]) -> list[dict[str, Any]]:
             continue
         rows.append({
             "observed_at": observed,
-            "decision": decision,
+            "decision": direction,
             "directional_return_bps": float(directional),
-            "confidence": _number(meta.get("decision_confidence")),
+            "confidence": confidence,
             "strategy_revision": str(meta.get("strategy_revision") or "unversioned-local"),
             "revision_pinning_available": bool(meta.get("revision_pinning_available")),
             "regime": str(meta.get("regime") or "unknown"),
             "observation_source": str(meta.get("observation_source") or "unknown"),
             "session": _session_name_utc(observed),
+            "cohort": cohort,
         })
     rows.sort(key=lambda row: row["observed_at"])
     return rows
@@ -315,12 +326,13 @@ def _decorrelate_live_rows(rows: list[dict[str, Any]], *, min_separation_minutes
 def _forward_oos_summary(
     signals: Iterable[Any],
     *,
+    cohort: str = "final",
     min_separation_minutes: int = 15,
     min_total: int = 150,
     min_holdout: int = 50,
     holdout_fraction: float = 0.33,
 ) -> dict[str, Any]:
-    completed = _live_completed_rows(signals)
+    completed = _live_completed_rows(signals, cohort=cohort)
     revision = completed[-1]["strategy_revision"] if completed else None
     same_revision = [row for row in completed if row["strategy_revision"] == revision]
     decorrelated = _decorrelate_live_rows(
@@ -380,6 +392,7 @@ def _forward_oos_summary(
 
     return {
         "protocol": "prequential_forward_oos_v1",
+        "cohort": cohort,
         "status": status,
         "passed": passed,
         "edge_proven": False,
@@ -482,6 +495,28 @@ def evaluate_gen1_live_observations(
         min_holdout=min_holdout,
         holdout_fraction=holdout_fraction,
     )
+    shadow_oos=_forward_oos_summary(
+        rows,
+        cohort="shadow",
+        min_separation_minutes=min_separation_minutes,
+        min_total=min_oos_total,
+        min_holdout=min_holdout,
+        holdout_fraction=holdout_fraction,
+    )
+    shadow_completed=_live_completed_rows(rows, cohort="shadow")
+    shadow_positive=sum(1 for item in shadow_completed if item["directional_return_bps"] > 0)
+    shadow_positive_rate=(
+        shadow_positive / len(shadow_completed)
+        if shadow_completed else None
+    )
+    if shadow_oos["passed"] and not oos["passed"]:
+        gate_diagnosis="shadow_signal_promising_candidate_gate_requires_review"
+    elif shadow_oos["status"] == "collecting_forward_oos_sample":
+        gate_diagnosis="collecting_shadow_evidence"
+    elif shadow_oos["passed"] and oos["passed"]:
+        gate_diagnosis="final_and_shadow_cohorts_both_confirmed"
+    else:
+        gate_diagnosis="no_shadow_confirmation_of_overrestrictive_gate"
     enough=len(completed)>=100
     exploratory=bool(
         enough and rate is not None and rate>=0.55 and avg is not None and avg>0
@@ -497,6 +532,14 @@ def evaluate_gen1_live_observations(
         "calibration":calibration,
         "range_outcomes":range_summary,
         "forward_oos":oos,
+        "shadow_forward_oos":shadow_oos,
+        "shadow_completed_60m_count":len(shadow_completed),
+        "shadow_positive_rate_60m":(
+            round(shadow_positive_rate,4)
+            if shadow_positive_rate is not None
+            else None
+        ),
+        "gate_diagnosis":gate_diagnosis,
         "validation_status":oos["status"],
         "exploratory_edge_candidate":exploratory,
         "edge_proven":False,
@@ -506,6 +549,7 @@ def evaluate_gen1_live_observations(
             "First-touch ordering is based on scheduler observations, not tick-perfect intrabar reconstruction.",
             "60m outcomes use the first observed reference price at or after the horizon.",
             "OOS statistics use time-decorrelated observations from the latest strategy revision only.",
+            "Shadow cohort is research-only and never changes the final LONG/SHORT/WAIT decision or opens a paper/live trade.",
             "An exploratory or OOS-positive result is not proof of a persistent executable trading edge.",
         ],
         "execution_allowed":False,
