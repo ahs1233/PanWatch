@@ -34,6 +34,7 @@ import random
 import struct
 import time
 from bisect import bisect_left, bisect_right
+from urllib.parse import quote
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -63,6 +64,13 @@ SPLIT = datetime.fromisoformat(os.getenv("GEN1_2Y_SPLIT", "2025-09-23")).replace
 STEP_MINUTES = int(os.getenv("GEN1_2Y_STEP_MINUTES", "5"))
 WORKERS = int(os.getenv("GEN1_2Y_DOWNLOAD_WORKERS", "12"))
 OUT = Path(os.getenv("GEN1_2Y_OUT", "artifacts/gen1_gold_2y_real_v1"))
+MACRO_SYMBOLS = {
+    "dxy": "DX-Y.NYB",
+    "us10y": "^TNX",
+    "vix": "^VIX",
+    "spx": "^GSPC",
+    "oil": "CL=F",
+}
 
 
 class FetchError(RuntimeError):
@@ -339,20 +347,151 @@ def bars_window(
     return rows[max(0, end - max_bars):end]
 
 
-def macro_unavailable(evaluation_time: datetime) -> dict[str, Any]:
-    return {
-        "bias": 0,
-        "bias_label": "neutral",
-        "confidence": 0.0,
-        "event_risk": False,
-        "calendar_ok": False,
-        "search_ok": False,
-        "synthesis_ok": False,
-        "cache_stale": False,
-        "refresh_pending": False,
-        "historical_gap": "external_macro_not_reconstructed",
-        "observed_at": evaluation_time.isoformat(),
+def fetch_yahoo_daily(symbol: str, start: datetime, end: datetime) -> list[tuple[datetime, float]]:
+    url = (
+        "https://query1.finance.yahoo.com/v8/finance/chart/"
+        + quote(symbol, safe="")
+        + f"?period1={int((start - timedelta(days=30)).timestamp())}"
+        + f"&period2={int((end + timedelta(days=2)).timestamp())}"
+        + "&interval=1d&events=history&includeAdjustedClose=true"
+    )
+    last_error = None
+    for attempt in range(5):
+        try:
+            response = httpx.get(
+                url,
+                timeout=30.0,
+                follow_redirects=True,
+                headers={"User-Agent": "PanWatch-GEN1-2Y-Macro/1.0"},
+            )
+            if response.status_code == 429 or response.status_code >= 500:
+                last_error = f"http_{response.status_code}"
+                time.sleep(min(8.0, 0.5 * (2 ** attempt)))
+                continue
+            response.raise_for_status()
+            body = response.json()
+            result = ((body.get("chart") or {}).get("result") or [None])[0]
+            if not result:
+                return []
+            timestamps = result.get("timestamp") or []
+            quote_rows = (((result.get("indicators") or {}).get("quote") or [{}])[0].get("close") or [])
+            out = []
+            for stamp, close in zip(timestamps, quote_rows):
+                if close is None:
+                    continue
+                # Conservative anti-lookahead: daily close becomes available next UTC day.
+                observed = datetime.fromtimestamp(int(stamp), tz=UTC)
+                available_at = observed.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                out.append((available_at, float(close)))
+            return out
+        except (httpx.HTTPError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            last_error = type(exc).__name__
+            if attempt + 1 < 5:
+                time.sleep(min(8.0, 0.5 * (2 ** attempt)))
+    raise FetchError(f"macro series {symbol} unavailable: {last_error}")
+
+
+def build_historical_macro_proxy(start: datetime, end: datetime):
+    raw = {}
+    for name, symbol in MACRO_SYMBOLS.items():
+        try:
+            raw[name] = fetch_yahoo_daily(symbol, start, end)
+        except Exception:
+            raw[name] = []
+
+    usable = {name: rows for name, rows in raw.items() if len(rows) >= 10}
+    if len(usable) < 3:
+        raise FetchError("fewer than three historical macro proxy series are usable")
+
+    def value_at(rows: list[tuple[datetime, float]], at: datetime, lag: int = 0):
+        times = [item[0] for item in rows]
+        idx = bisect_right(times, at) - 1 - lag
+        if idx < 0:
+            return None
+        return rows[idx][1], rows[idx][0]
+
+    def provider(at: datetime) -> dict[str, Any]:
+        components = []
+        drivers = []
+
+        def pct_component(name: str, scale: float, invert: bool = False, weight: float = 0.0):
+            rows = usable.get(name)
+            if not rows:
+                return 0.0
+            now_pair = value_at(rows, at, 0)
+            prev_pair = value_at(rows, at, 5)
+            if not now_pair or not prev_pair or not prev_pair[0]:
+                return 0.0
+            change = (now_pair[0] - prev_pair[0]) / prev_pair[0]
+            score = max(-1.0, min(1.0, change / scale))
+            if invert:
+                score = -score
+            drivers.append({
+                "name": f"{name}_5d",
+                "value": round(change, 6),
+                "gold_score": round(score, 4),
+                "available_at": now_pair[1].isoformat(),
+            })
+            components.append((weight, score))
+            return score
+
+        pct_component("dxy", 0.012, invert=True, weight=0.35)
+        pct_component("vix", 0.25, invert=False, weight=0.15)
+        pct_component("spx", 0.04, invert=True, weight=0.10)
+        pct_component("oil", 0.08, invert=False, weight=0.10)
+
+        rows = usable.get("us10y")
+        if rows:
+            now_pair = value_at(rows, at, 0)
+            prev_pair = value_at(rows, at, 5)
+            if now_pair and prev_pair:
+                delta = now_pair[0] - prev_pair[0]
+                score = max(-1.0, min(1.0, -delta / 0.35))
+                drivers.append({
+                    "name": "us10y_5d_delta",
+                    "value": round(delta, 4),
+                    "gold_score": round(score, 4),
+                    "available_at": now_pair[1].isoformat(),
+                })
+                components.append((0.30, score))
+
+        total_weight = sum(weight for weight, _ in components)
+        score = (
+            sum(weight * value for weight, value in components) / total_weight
+            if total_weight else 0.0
+        )
+        score = max(-1.0, min(1.0, score))
+        bias = 1 if score >= 0.15 else -1 if score <= -0.15 else 0
+        confidence = min(0.85, 0.35 + abs(score) * 0.55)
+        return {
+            "bias": bias,
+            "bias_label": "bullish" if bias > 0 else "bearish" if bias < 0 else "neutral",
+            "confidence": round(confidence, 4),
+            "event_risk": False,
+            "calendar_ok": True,
+            "search_ok": True,
+            "synthesis_ok": True,
+            "cache_stale": False,
+            "refresh_pending": False,
+            "historical_macro_proxy": True,
+            "proxy_score": round(score, 4),
+            "drivers": drivers,
+            "observed_at": at.isoformat(),
+            "limitations": [
+                "One-day-lagged public market proxy, not exact Ahmed Toolbox news/calendar replay.",
+                "Historical event-risk calendar is not reconstructed.",
+            ],
+        }
+
+    diagnostics = {
+        "provider": "Yahoo public chart daily proxies",
+        "symbols": MACRO_SYMBOLS,
+        "usable_series": sorted(usable),
+        "lookahead_policy": "daily close usable next UTC day",
+        "exact_live_news_pipeline_replayed": False,
+        "event_calendar_replayed": False,
     }
+    return provider, diagnostics
 
 
 def future_close(
@@ -441,6 +580,7 @@ def run_replay(
     bars_by_tf: dict[XAUTimeframe, list[XAUBar]],
     quotes: dict[datetime, tuple[float, float]],
     horizon_minutes: int,
+    macro_provider,
 ) -> list[ReplayEpisode]:
     available = {tf: availability(rows, tf) for tf, rows in bars_by_tf.items()}
     m1 = bars_by_tf[XAUTimeframe.M1]
@@ -463,12 +603,16 @@ def run_replay(
             XAUTimeframe.H4: bars_window(bars_by_tf[XAUTimeframe.H4], available[XAUTimeframe.H4], evaluation_time, 1100),
             XAUTimeframe.D1: bars_window(bars_by_tf[XAUTimeframe.D1], available[XAUTimeframe.D1], evaluation_time, 1100),
         }
-        technical = build_replay_technical_state(window, evaluation_time, macro_bias=0)
+        macro = macro_provider(evaluation_time)
+        technical = build_replay_technical_state(
+            window,
+            evaluation_time,
+            macro_bias=int(macro.get("bias", 0) or 0),
+        )
         candidate = str(technical.get("candidate") or "none")
         if technical.get("blocked") or candidate not in {"long_setup", "short_setup"}:
             continue
 
-        macro = macro_unavailable(evaluation_time)
         cognition = build_cognitive_state(technical, macro, memory=None, min_confidence=0.58)
         fusion = build_decision_fusion(
             technical,
@@ -528,11 +672,18 @@ def run_replay(
                     "range_outcomes": ranges,
                     "net_spread_directional_return_bps": round(net_bps, 4) if net_bps is not None else None,
                     "sensor_gaps": [
-                        "historical_external_macro_not_reconstructed",
+                        "historical_live_news_synthesis_not_reconstructed",
+                        "historical_event_calendar_not_reconstructed",
                         "historical_xaut_raw_book_not_available",
                         "historical_xaut_trade_tape_not_available",
                     ],
-                    "replay_scope": "real_xau_price_htf_structure_volume_spread_without_historical_external_macro_or_xaut_microstructure",
+                    "historical_macro_proxy": {
+                        "bias": macro.get("bias"),
+                        "confidence": macro.get("confidence"),
+                        "proxy_score": macro.get("proxy_score"),
+                        "drivers": macro.get("drivers"),
+                    },
+                    "replay_scope": "real_xau_price_htf_structure_volume_spread_plus_point_in_time_macro_proxy_without_historical_xaut_microstructure_or_live_news",
                 },
             )
         )
@@ -768,8 +919,9 @@ def main() -> None:
     }
     dataset["bar_counts"] = {tf.value: len(rows) for tf, rows in bars_by_tf.items()}
 
-    episodes60 = run_replay(bars_by_tf, quotes, 60)
-    episodes240 = run_replay(bars_by_tf, quotes, 240)
+    macro_provider, macro_diagnostics = build_historical_macro_proxy(START, END)
+    episodes60 = run_replay(bars_by_tf, quotes, 60, macro_provider)
+    episodes240 = run_replay(bars_by_tf, quotes, 240, macro_provider)
 
     report = {
         "benchmark": "gen1-gold-2y-real-v1",
@@ -789,11 +941,14 @@ def main() -> None:
             "headline_outcome_overlap_removed": True,
             "spread_adjustment": "real Dukascopy BID/ASK M1 close spread",
             "slippage_model": "not included",
-            "historical_external_macro_reconstructed": False,
+            "historical_macro_market_proxy": True,
+            "historical_live_news_synthesis_reconstructed": False,
+            "historical_event_calendar_reconstructed": False,
             "historical_xaut_raw_book_reconstructed": False,
             "historical_xaut_trade_tape_reconstructed": False,
             "raw_data_uploaded_as_artifact": False,
         },
+        "historical_macro_proxy": macro_diagnostics,
         "horizon_60m": {
             "overall": stats_for(episodes60, 60),
             "reference_year": stats_for(split_period(episodes60, START, SPLIT), 60),
@@ -806,7 +961,7 @@ def main() -> None:
         },
         "limitations": [
             "This is a real XAUUSD price/structure/spread replay, not a reconstruction of every live sensor.",
-            "Historical Ahmed Toolbox macro/news evidence is not available point-in-time for the full two-year window, so it is not fabricated.",
+            "Macro uses one-day-lagged public market proxies (DXY, US10Y, VIX, S&P 500, crude); the exact Ahmed Toolbox live news/calendar synthesis is not reconstructed.",
             "Historical raw Bitfinex XAUT order book and complete trade tape are not available in this dataset, so they are not fabricated.",
             "Dukascopy candle volume is an activity proxy and is not centralized global gold traded volume.",
             "Spread is included from observed BID/ASK closes; broker slippage, commissions, latency and fill rejection are not modeled.",
@@ -850,8 +1005,8 @@ def main() -> None:
         "",
         "## Important",
         "",
-        "Historical external macro/news and raw XAUT microstructure were not fabricated. "
-        "This benchmark tests the reconstructable real-data price/HTF/structure/volume/spread stack.",
+        "Historical macro market proxies are point-in-time and one-day lagged. Exact live news/calendar synthesis "
+        "and raw XAUT microstructure are not fabricated.",
     ]
     (OUT / "SUMMARY.md").write_text("\n".join(summary), encoding="utf-8")
 
