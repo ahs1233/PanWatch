@@ -2523,10 +2523,20 @@ class XAUPaperTradingEngine:
         if not _paper_scan_lock.acquire(blocking=False):
             return {"status": "busy", "execution_allowed": False}
         try:
+            lock_started = time.monotonic()
             with paper_writer_guard() as acquired:
+                lock_ms = round((time.monotonic() - lock_started) * 1000.0, 2)
                 if not acquired:
-                    return {"status": "busy", "execution_allowed": False}
-                return self._protect_sync(spot, now)
+                    return {
+                        "status": "busy",
+                        "reason": "paper_writer_advisory_lock_busy",
+                        "paper_writer_busy_reason": "paper_writer_advisory_lock_busy",
+                        "lock_acquire_ms": lock_ms,
+                        "execution_allowed": False,
+                    }
+                result = self._protect_sync(spot, now)
+                result["lock_acquire_ms"] = lock_ms
+                return result
         finally:
             _paper_scan_lock.release()
 
@@ -2578,10 +2588,20 @@ class XAUPaperTradingEngine:
         if not _paper_scan_lock.acquire(blocking=False):
             return {"status": "busy", "reason": "paper_scan_in_progress", "execution_allowed": False}
         try:
+            lock_started = time.monotonic()
             with paper_writer_guard() as acquired:
+                lock_ms = round((time.monotonic() - lock_started) * 1000.0, 2)
                 if not acquired:
-                    return {"status": "busy", "execution_allowed": False}
-                return self._scan_sync(technical, macro, now)
+                    return {
+                        "status": "busy",
+                        "reason": "paper_writer_advisory_lock_busy",
+                        "paper_writer_busy_reason": "paper_writer_advisory_lock_busy",
+                        "lock_acquire_ms": lock_ms,
+                        "execution_allowed": False,
+                    }
+                result = self._scan_sync(technical, macro, now)
+                result["lock_acquire_ms"] = lock_ms
+                return result
         finally:
             _paper_scan_lock.release()
 
@@ -2901,7 +2921,14 @@ class XAUPaperTradingScheduler:
         self._running = True
         try:
             result = await self.engine.scan()
-            logger.info("[XAU paper timing] status=%s timing_ms=%s", result.get("status"), result.get("timing_ms"))
+            logger.info(
+                "[XAU paper timing] status=%s busy_reason=%s lock_acquire_ms=%s timing_ms=%s gen1_live_outcome_updates=%s",
+                result.get("status"),
+                result.get("paper_writer_busy_reason") or result.get("reason"),
+                result.get("lock_acquire_ms"),
+                result.get("timing_ms"),
+                result.get("gen1_live_outcome_updates"),
+            )
             if result.get("status") != "ok":
                 return
             account = result.get("account") or {}
