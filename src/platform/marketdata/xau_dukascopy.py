@@ -225,11 +225,13 @@ class DukascopyXAUHistoryProvider:
         timeout_seconds: float = 20.0,
         retries: int = 2,
         retry_backoff_seconds: float = 0.5,
+        range_retry_rounds: int = 2,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = float(timeout_seconds)
         self.retries = max(0, int(retries))
         self.retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
+        self.range_retry_rounds = max(0, int(range_retry_rounds))
 
     def fetch_hour(self, hour: datetime) -> DukascopyHourFetch:
         hour = _hour_floor(hour)
@@ -309,10 +311,38 @@ class DukascopyXAUHistoryProvider:
                 f"safety cap is {max_hours}. Use incremental acquisition."
             )
 
+        # Keep the final outcome per hour so a transient failure can be retried
+        # after the first pass without double-counting diagnostics or ticks.
+        outcomes: dict[datetime, DukascopyHourFetch] = {
+            hour: self.fetch_hour(hour)
+            for hour in hours
+        }
+
+        for retry_round in range(1, self.range_retry_rounds + 1):
+            failed = [
+                hour
+                for hour, fetched in outcomes.items()
+                if fetched.status.startswith("failed:")
+            ]
+            if not failed:
+                break
+            # Let a throttled/public feed cool down before retrying only the
+            # failed subset. fetch_hour still applies its own bounded retries.
+            delay = min(
+                2.0,
+                max(
+                    0.1,
+                    self.retry_backoff_seconds * retry_round,
+                ),
+            )
+            time.sleep(delay)
+            for hour in failed:
+                outcomes[hour] = self.fetch_hour(hour)
+
         ticks: list[DukascopyTick] = []
         counts = defaultdict(int)
         for hour in hours:
-            fetched = self.fetch_hour(hour)
+            fetched = outcomes[hour]
             key = "failed" if fetched.status.startswith("failed:") else fetched.status
             counts[key] += 1
             ticks.extend(
