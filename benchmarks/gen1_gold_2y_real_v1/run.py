@@ -1023,7 +1023,14 @@ def make_charts(daily: list[XAUBar], episodes60: list[ReplayEpisode]) -> list[st
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
 
+    phase_started = time.monotonic()
     m1, quotes, dataset = download_dataset(START, END)
+    print(json.dumps({
+        "phase": "dataset_download_complete",
+        "m1_bar_count": len(m1),
+        "data_days": dataset.get("data_days"),
+        "elapsed_seconds": round(time.monotonic() - phase_started, 2),
+    }), flush=True)
     bars_by_tf = {
         XAUTimeframe.M1: m1,
         XAUTimeframe.M5: resample(m1, XAUTimeframe.M5),
@@ -1033,8 +1040,18 @@ def main() -> None:
         XAUTimeframe.D1: resample(m1, XAUTimeframe.D1),
     }
     dataset["bar_counts"] = {tf.value: len(rows) for tf, rows in bars_by_tf.items()}
+    print(json.dumps({
+        "phase": "resample_complete",
+        "bar_counts": dataset["bar_counts"],
+        "elapsed_seconds": round(time.monotonic() - phase_started, 2),
+    }), flush=True)
 
     macro_provider, macro_diagnostics = build_historical_macro_proxy(START, END)
+    print(json.dumps({
+        "phase": "macro_proxy_complete",
+        "usable_series": macro_diagnostics.get("usable_series"),
+        "elapsed_seconds": round(time.monotonic() - phase_started, 2),
+    }), flush=True)
     episodes_by_horizon = run_replay_horizons(
         bars_by_tf,
         quotes,
@@ -1046,7 +1063,7 @@ def main() -> None:
 
     report = {
         "benchmark": "gen1-gold-2y-real-v1",
-        "strategy_revision_env": os.getenv("GITHUB_SHA") or "unknown",
+        "strategy_revision_env": os.getenv("STRATEGY_REVISION") or os.getenv("GITHUB_SHA") or "unknown",
         "period": {
             "start_utc": START.isoformat(),
             "split_utc": SPLIT.isoformat(),
