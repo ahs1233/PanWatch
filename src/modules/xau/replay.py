@@ -115,11 +115,12 @@ def _available_slice(
     evaluation_time: datetime,
     *,
     max_bars: int = 300,
+    availability: list[datetime] | None = None,
 ) -> list[XAUBar]:
     if not bars:
         return []
     evaluation_time = _utc(evaluation_time)
-    availability = [_available_at(bar) for bar in bars]
+    availability = availability or [_available_at(bar) for bar in bars]
     end = bisect_right(availability, evaluation_time)
     start = max(0, end - max(30, int(max_bars)))
     return bars[start:end]
@@ -182,6 +183,7 @@ def build_replay_technical_state(
     evaluation_time: datetime,
     *,
     macro_bias: int = 0,
+    availability_by_timeframe: dict[XAUTimeframe, list[datetime]] | None = None,
 ) -> dict[str, Any]:
     """Build a live-shaped technical snapshot using only closed historical bars."""
     evaluation_time = _utc(evaluation_time)
@@ -191,6 +193,7 @@ def build_replay_technical_state(
             timeframe,
             evaluation_time,
             max_bars=1000 if timeframe in {XAUTimeframe.H1, XAUTimeframe.H4, XAUTimeframe.D1} else 300,
+            availability=(availability_by_timeframe or {}).get(timeframe),
         )
         for timeframe in (
             XAUTimeframe.M1,
@@ -319,14 +322,15 @@ def _future_range_outcomes(
     *,
     horizon_minutes: int,
     distances: tuple[int, ...] = (10, 20, 30),
+    availability: list[datetime] | None = None,
 ) -> dict[str, Any]:
     """Measure first-touch +/- USD outcomes using future closed M1 OHLC only."""
     start = _utc(evaluation_time)
     end = start + timedelta(minutes=max(1, int(horizon_minutes)))
-    future = [
-        bar for bar in m1
-        if _available_at(bar) > start and _available_at(bar) <= end
-    ]
+    availability = availability or [_available_at(bar) for bar in m1]
+    start_index = bisect_right(availability, start)
+    end_index = bisect_right(availability, end)
+    future = m1[start_index:end_index]
     out: dict[str, Any] = {
         "horizon_minutes": int(horizon_minutes),
         "bar_count": len(future),
@@ -376,12 +380,13 @@ def _future_close(
     target_time: datetime,
     *,
     tolerance_minutes: int = 2,
+    availability: list[datetime] | None = None,
 ) -> tuple[float, datetime] | None:
     """Find the first fully closed 1m bar at/after the target horizon."""
     if not m1:
         return None
     target = _utc(target_time)
-    availability = [_available_at(bar) for bar in m1]
+    availability = availability or [_available_at(bar) for bar in m1]
     index = bisect_left(availability, target)
     if index >= len(m1):
         return None
@@ -408,7 +413,12 @@ def walk_forward_replay(
     horizon_minutes = max(1, int(horizon_minutes))
     step_minutes = max(1, int(step_minutes))
     bars = _sorted_bars(bars_by_timeframe)
+    availability_by_timeframe = {
+        timeframe: [_available_at(bar) for bar in rows]
+        for timeframe, rows in bars.items()
+    }
     m1 = bars[XAUTimeframe.M1]
+    m1_availability = availability_by_timeframe[XAUTimeframe.M1]
     if not m1:
         return []
 
@@ -451,6 +461,7 @@ def walk_forward_replay(
             bars,
             evaluation_time,
             macro_bias=int(macro.get("bias", 0) or 0),
+            availability_by_timeframe=availability_by_timeframe,
         )
         candidate = str(technical.get("candidate") or "none")
         if technical.get("blocked") or candidate not in {"long_setup", "short_setup"}:
@@ -489,6 +500,7 @@ def walk_forward_replay(
         future = _future_close(
             m1,
             evaluation_time + timedelta(minutes=horizon_minutes),
+            availability=m1_availability,
         )
         if future is None:
             continue
@@ -500,6 +512,7 @@ def walk_forward_replay(
             evaluation_time,
             entry_price,
             horizon_minutes=horizon_minutes,
+            availability=m1_availability,
         )
         side = 1.0 if candidate == "long_setup" else -1.0
         directional_return_bps = (
