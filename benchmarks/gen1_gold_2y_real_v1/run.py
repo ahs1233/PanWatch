@@ -36,6 +36,7 @@ import pickle
 import random
 import struct
 import sys
+import threading
 import time
 from bisect import bisect_left, bisect_right
 from urllib.parse import quote
@@ -64,6 +65,25 @@ RECORD = struct.Struct(">IIIIIf")
 DIVIDER = 1000.0
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 SOURCE = "dukascopy:datafeed:XAUUSD:native-m1-bid-ask-mid"
+_HTTP_LOCAL = threading.local()
+
+
+def _download_client() -> httpx.Client:
+    client = getattr(_HTTP_LOCAL, "client", None)
+    if client is None:
+        client = httpx.Client(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=True,
+            headers={"User-Agent": "PanWatch-GEN1-2Y-Research/1.0"},
+            limits=httpx.Limits(
+                max_connections=4,
+                max_keepalive_connections=4,
+                keepalive_expiry=60.0,
+            ),
+        )
+        _HTTP_LOCAL.client = client
+    return client
+
 START = datetime.fromisoformat(os.getenv("GEN1_2Y_START", "2024-09-23")).replace(tzinfo=UTC)
 END = datetime.fromisoformat(os.getenv("GEN1_2Y_END", "2026-09-23")).replace(tzinfo=UTC)
 SPLIT = datetime.fromisoformat(os.getenv("GEN1_2Y_SPLIT", "2025-09-23")).replace(tzinfo=UTC)
@@ -95,12 +115,7 @@ def fetch_bytes(url: str, retries: int = 5) -> tuple[str, bytes]:
     last = None
     for attempt in range(retries):
         try:
-            response = httpx.get(
-                url,
-                timeout=30.0,
-                follow_redirects=True,
-                headers={"User-Agent": "PanWatch-GEN1-2Y-Research/1.0"},
-            )
+            response = _download_client().get(url)
             if response.status_code == 404:
                 return "notfound", b""
             if response.status_code == 429 or response.status_code >= 500:
