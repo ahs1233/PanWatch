@@ -1359,6 +1359,7 @@ def _update_gen1_live_outcomes(
     reference_source: str,
 ) -> int:
     """Update sampled first-touch + 60m/240m outcomes for live GEN1 observations."""
+    outcome_started = time.monotonic()
     if reference_price is None or reference_price <= 0:
         return 0
     cutoff = now_utc - timedelta(minutes=GEN1_LIVE_MAX_TRACK_MINUTES)
@@ -1475,6 +1476,13 @@ def _update_gen1_live_outcomes(
             meta["last_observation_age_minutes"] = round(age_minutes, 2)
             row.meta = meta
             updates += 1
+    logger.info(
+        "[GEN1 live outcomes] rows_examined=%s rows_updated=%s live_outcome_updates=%s db_worker_ms=%s",
+        len(rows),
+        updates,
+        updates,
+        round((time.monotonic() - outcome_started) * 1000.0, 2),
+    )
     return updates
 
 
