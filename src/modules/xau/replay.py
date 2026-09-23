@@ -29,6 +29,7 @@ from src.modules.xau.paper_store import (
     open_xau_replay_session,
     paper_store_is_external,
     replay_store_is_external,
+    replay_storage_health,
 )
 from src.platform.marketdata.xau_biquote import BiquoteXAUOHLCProvider
 from src.platform.marketdata.xau_models import XAUBar, XAUTimeframe
@@ -894,6 +895,7 @@ def _replay_and_persist(
             db.close()
 
     observed_times = [episode.observed_at for episode in episodes]
+    storage_health = replay_storage_health()
     return {
         "status": "ok",
         "source": source,
@@ -925,6 +927,7 @@ def _replay_and_persist(
             )
         ),
         "storage_mode": storage_mode,
+        **storage_health,
     }
 
 
