@@ -10,6 +10,7 @@ Every degraded/missing layer is returned explicitly. Live execution is never ena
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from src.modules.xau.evidence_fusion import build_gen1_evidence_fusion
@@ -17,12 +18,25 @@ from src.modules.xau.paper import load_gen1_memory_snapshot, record_gen1_live_ob
 from src.modules.xau.service import build_decision_fusion, get_macro_context, get_xau_snapshot
 
 
-async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
+def _runtime_revision() -> str:
+    for key in ("RAILWAY_GIT_COMMIT_SHA","GIT_COMMIT_SHA","VERCEL_GIT_COMMIT_SHA","GITHUB_SHA"):
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            return value[:64]
+    return "unversioned-local"
+
+
+async def run_gen1_trade_gold_pipeline(
+    *,
+    force_macro: bool = True,
+    record_observation: bool = True,
+    observation_source: str = "interactive",
+) -> dict[str, Any]:
     stage_errors: dict[str, str] = {}
 
     # 1) Ahmed ToolBox-backed external/macro evidence.
     try:
-        macro = await asyncio.wait_for(get_macro_context(force=True), timeout=75.0)
+        macro = await asyncio.wait_for(get_macro_context(force=force_macro), timeout=75.0)
     except Exception as exc:  # noqa: BLE001
         stage_errors["ahmed_toolbox_macro"] = type(exc).__name__
         try:
@@ -153,6 +167,9 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
 
     result = {
         "contract": "gen1-trade-gold-v2",
+        "strategy_revision": _runtime_revision(),
+        "observation_source": str(observation_source or "interactive"),
+        "force_macro": bool(force_macro),
         "trigger": "Gen1 trade gold",
         "pipeline_order": ["ahmed_toolbox", "panwatch", "gen1"],
         "pipeline_status": pipeline_status,
@@ -177,6 +194,9 @@ async def run_gen1_trade_gold_pipeline() -> dict[str, Any]:
             "execution_allowed": False,
         },
     }
-    observation = await asyncio.to_thread(record_gen1_live_observation, result)
+    if record_observation:
+        observation = await asyncio.to_thread(record_gen1_live_observation, result)
+    else:
+        observation = {"status": "skipped", "reason": "record_observation_false"}
     result["live_observation"] = observation
     return result
