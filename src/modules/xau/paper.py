@@ -1203,7 +1203,9 @@ def _record_gen1_live_observation_sync(db, payload: dict) -> dict:
 
     observed = _gen1_observed_at(payload)
     minute_bucket = int(observed.timestamp() // 60)
-    setup_key = f"gen1live:{minute_bucket}:{decision.lower()}"
+    revision = str(payload.get("strategy_revision") or "unversioned-local")
+    revision_key = revision[:12].replace(":", "_").replace("/", "_")
+    setup_key = f"gen1live:{revision_key}:{minute_bucket}:{decision.lower()}"
     existing = (
         db.query(XAUPaperSignal)
         .filter(XAUPaperSignal.setup_key == setup_key)
@@ -1242,6 +1244,11 @@ def _record_gen1_live_observation_sync(db, payload: dict) -> dict:
         observed_at=observed.replace(tzinfo=None),
         meta={
             "contract": payload.get("contract"),
+            "strategy_revision": revision,
+            "revision_pinning_available": revision != "unversioned-local",
+            "observation_source": payload.get("observation_source"),
+            "pipeline_status": payload.get("pipeline_status"),
+            "force_macro": bool(payload.get("force_macro")),
             "decision": decision,
             "decision_confidence": payload.get("confidence"),
             "entry_price": round(float(entry_price), 6),
@@ -1252,6 +1259,8 @@ def _record_gen1_live_observation_sync(db, payload: dict) -> dict:
             "calibration": evidence.get("calibration"),
             "evidence_reasons": list(evidence.get("reasons") or []),
             "missing_layers": list(payload.get("missing_layers") or []),
+            "regime": fusion.get("regime"),
+            "meta_decision": fusion.get("meta_decision"),
             "memory_samples": max(
                 int(memory.get("similar_samples") or 0),
                 int(memory.get("calibration_sample_count") or 0),
