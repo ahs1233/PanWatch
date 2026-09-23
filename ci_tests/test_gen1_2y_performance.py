@@ -183,3 +183,34 @@ def test_dataset_shards_round_trip_without_missing_or_duplicate_days(tmp_path):
     assert diag["requested_days"] == 2
     assert diag["data_days"] == 2
     assert diag["m1_bar_count"] == 2
+
+
+def test_download_day_results_retries_transient_day_without_aborting_pool(monkeypatch):
+    start = datetime(2026, 9, 20, tzinfo=UTC)
+    end = datetime(2026, 9, 23, tzinfo=UTC)
+    attempts = {}
+
+    def fake_fetch_day(day):
+        attempts[day] = attempts.get(day, 0) + 1
+        if day == start.date() and attempts[day] == 1:
+            raise bench.FetchError("transient dukascopy failure")
+        return {
+            "day": day.isoformat(),
+            "status": "no_data",
+            "rows": [],
+        }
+
+    monkeypatch.setattr(bench, "WORKERS", 2)
+    monkeypatch.setattr(bench, "fetch_day", fake_fetch_day)
+    monkeypatch.setattr(bench.time, "sleep", lambda _: None)
+    monkeypatch.setattr(bench.random, "uniform", lambda *_: 0.0)
+
+    results = bench.download_day_results(start, end, progress_label="retry-test")
+
+    assert [row["day"] for row in results] == [
+        "2026-09-20",
+        "2026-09-21",
+        "2026-09-22",
+    ]
+    assert attempts[start.date()] == 2
+    assert sum(attempts.values()) == 4
