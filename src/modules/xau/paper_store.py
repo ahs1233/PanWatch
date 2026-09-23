@@ -77,6 +77,29 @@ def paper_writer_guard(*, timeout_seconds: float = 0.0):
         conn.close()
 
 
+def acquire_paper_writer_transaction(db, *, timeout_seconds: float = 0.0) -> tuple[bool, float]:
+    """Acquire the paper-writer advisory lock inside the caller's DB transaction.
+
+    The PostgreSQL xact lock is released automatically by commit/rollback. This
+    lets callers keep the lock around only critical account/position mutations
+    instead of wrapping research calculations or research-only metadata writes.
+    """
+    timeout_seconds = max(0.0, float(timeout_seconds))
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return True, 0.0
+
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    while True:
+        acquired = bool(
+            db.execute(text("SELECT pg_try_advisory_xact_lock(782341905)")).scalar()
+        )
+        if acquired or time.monotonic() >= deadline:
+            return acquired, round((time.monotonic() - started) * 1000.0, 2)
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+
 def _sqlalchemy_url(url: str) -> str:
     value = (url or "").strip()
     if value.startswith("postgresql://"):
