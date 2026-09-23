@@ -538,7 +538,11 @@ def analyze_gen11(episodes60: list[Any], episodes240: list[Any], out_dir: Path) 
     g240=_apply_policy(independent240,policy); g60=_apply_policy(independent60,policy)
     def comparison(frame):
         out={}
-        for name,mask in _period_masks(frame).items():
+        period_masks = {
+            **_period_masks(frame),
+            "full_period": pd.Series(True, index=frame.index),
+        }
+        for name,mask in period_masks.items():
             p=frame[mask]; gen1=p[p["gen1_decision"].isin(["LONG","SHORT"])]; gen11=p[p["gen11_decision"].isin(["LONG","SHORT"])]
             out[name]={"gen1":_metric_block(gen1),"gen1_1":_metric_block(gen11),"gen1_1_range_outcomes":_range_block(gen11)}
         return out
@@ -554,7 +558,9 @@ def analyze_gen11(episodes60: list[Any], episodes240: list[Any], out_dir: Path) 
     cols=["observed_at","direction","session","session_transition","volatility_quartile","regime","gen1_decision","fusion_state","net_bps",
       "gross_bps","cognitive_confidence","gen1_confidence","technical_alignment","atr_pct_5m","atr_pct_15m","rsi_5m","rsi_15m",
       "htf_monthly_direction","htf_weekly_direction","htf_daily_direction","htf_h4_direction","htf_h1_direction","htf_composite_score",
-      "cash_flow_score","smart_money_score","macro_proxy_score","pm10_first_hit","pm20_first_hit","pm30_first_hit"]
+      "cash_flow_direction","cash_flow_score","smart_money_bias","smart_money_score","volume_profile_location","dealing_zone",
+      "break_of_structure","liquidity_sweep","displacement","macro_bias_label","macro_proxy_score",
+      "pm10_first_hit","pm20_first_hit","pm30_first_hit"]
     independent240[[c for c in cols if c in independent240]].to_csv(out_dir/"episodes_240m_enriched_independent.csv",index=False)
     if not subgroup.empty: subgroup.to_csv(out_dir/"gen1_1_subgroups.csv",index=False)
     if not table.empty: table.drop(columns=["rule"]).to_csv(out_dir/"gen1_1_rule_search.csv",index=False)
