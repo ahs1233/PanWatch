@@ -1045,3 +1045,103 @@ def test_biquote_range_history_chunks_and_deduplicates_boundaries(monkeypatch):
     assert len(rows) == 3
     assert rows[0].timestamp == start
     assert rows[-1].timestamp == start + timedelta(minutes=200)
+
+
+
+def test_market_context_cold_refresh_is_single_flight(monkeypatch):
+    calls = {"count": 0}
+
+    async def fake_refresh():
+        calls["count"] += 1
+        await asyncio.sleep(0.01)
+        return {"bias": {"today_direction": "neutral"}}
+
+    async def scenario():
+        service._market_context_cache = None
+        service._market_context_refresh_task = None
+        monkeypatch.setattr(service, "_refresh_market_context", fake_refresh)
+        first, second = await asyncio.gather(
+            service.get_market_context(force=False),
+            service.get_market_context(force=False),
+        )
+        service._market_context_refresh_task = None
+        return first, second
+
+    first, second = asyncio.run(scenario())
+    assert calls["count"] == 1
+    assert first == second
+    assert first["bias"]["today_direction"] == "neutral"
+
+
+def test_snapshot_does_not_cancel_slow_market_context_refresh(monkeypatch):
+    state = {"finished": False, "cancelled": False}
+
+    async def fake_bars(force: bool = False):
+        return {
+            XAUTimeframe.M1: _bars(XAUTimeframe.M1),
+            XAUTimeframe.M5: _bars(XAUTimeframe.M5),
+            XAUTimeframe.M15: _bars(XAUTimeframe.M15),
+        }
+
+    async def fake_spot(force: bool = False):
+        now = datetime.now(timezone.utc)
+        return {
+            "price": 2620.0,
+            "bid": 2619.8,
+            "ask": 2620.2,
+            "spread": 0.4,
+            "spread_bps": 1.53,
+            "observed_at": now.isoformat(),
+            "age_seconds": 1.0,
+            "source": "test-spot",
+            "is_stale": False,
+            "indicative": True,
+            "execution_eligible": False,
+        }
+
+    async def slow_context(force: bool = False):
+        try:
+            await asyncio.sleep(0.05)
+            state["finished"] = True
+            return {"bias": {"today_direction": "bullish"}}
+        except asyncio.CancelledError:
+            state["cancelled"] = True
+            raise
+
+    async def fake_xaut(*args, **kwargs):
+        return {"status": "degraded", "available": False}
+
+    async def fake_gold(*args, **kwargs):
+        return {"status": "degraded"}
+
+    monkeypatch.setattr(service, "get_research_bars", fake_bars)
+    monkeypatch.setattr(service, "get_indicative_spot", fake_spot)
+    monkeypatch.setattr(service, "get_micro_context", _fake_micro)
+    monkeypatch.setattr(service, "get_spot_consensus", _fake_consensus)
+    monkeypatch.setattr(service, "get_market_context", slow_context)
+    monkeypatch.setattr(service, "get_xaut_order_flow", fake_xaut)
+    monkeypatch.setattr(service, "get_gold_market_fusion", fake_gold)
+    monkeypatch.setattr(service, "_MARKET_CONTEXT_SNAPSHOT_WAIT_SECONDS", 0.005)
+
+    async def scenario():
+        result = await service.get_xau_snapshot(force=False)
+        # Shielding must let the slow refresh finish after the snapshot returns.
+        await asyncio.sleep(0.06)
+        return result
+
+    result = asyncio.run(scenario())
+    assert result["market_context"] is None
+    assert result["market_context_error"] == "refresh_pending"
+    assert state["finished"] is True
+    assert state["cancelled"] is False
+    evidence = service.build_decision_fusion(
+        result,
+        {
+            "calendar_ok": True,
+            "search_ok": True,
+            "synthesis_ok": True,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "bias": 0,
+        },
+    )
+    assert evidence["execution_allowed"] is False
