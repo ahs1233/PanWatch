@@ -9,7 +9,7 @@ on:
       - "src/modules/xau/gtg_directional_v2.py"
       - "src/modules/xau/gtg_directional_data.py"
       - "benchmarks/gtg_directional_v2/**"
-      - "tests/test_gtg_directional_v2.py"
+      - "ci_tests/test_gtg_directional_v2.py"
       - "docs/GTG_DIRECTIONAL_V2.md"
   workflow_dispatch:
 
@@ -54,7 +54,7 @@ jobs:
       - name: Unit and regression checks
         run: |
           python -m py_compile src/modules/xau/gtg_directional_v2.py src/modules/xau/gtg_directional_data.py benchmarks/gtg_directional_v2/run.py
-          pytest -q tests/test_gtg_directional_v2.py
+          pytest -q ci_tests/test_gtg_directional_v2.py
 
       - name: Download frozen two-year dataset
         env:
