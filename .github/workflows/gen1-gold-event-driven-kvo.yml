@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: gen1-gold-event-driven-kvo-\${{ github.ref_name }}
+  group: gen1-gold-event-driven-kvo-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -73,7 +73,7 @@ jobs:
 
       - name: Download frozen two-year dataset
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/gen1-2y-data
@@ -95,7 +95,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gen1-gold-event-driven-kvo-v1-\${{ github.sha }}
+          name: gen1-gold-event-driven-kvo-v1-${{ github.sha }}
           retention-days: 30
           path: |
             artifacts/gen1_gold_event_driven_kvo_v1/**
