@@ -1,7 +1,7 @@
 # GTG Event-Conditioned Directional Experience v3 — Results
 
-Run date: 2026-09-24  
-Status: **research / shadow only**  
+Run date: 2026-09-24
+Status: **research / shadow only**
 Benchmark commit: `fd86ee7f41812811c6704b10d666e7b5188e110b`
 
 ## Verification
