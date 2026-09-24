@@ -186,7 +186,7 @@ def _frame_state(rows, timeframe: XAUTimeframe, include_ma1000: bool) -> tuple[
     for p in periods:
         slopes[p] = (mas[p] - _lag(mas[p], 3)) / atr_safe
 
-    logret = np.full(len(c), np.nan, dtype=np.float64)
+    logret = np.zeros(len(c), dtype=np.float64)
     logret[1:] = np.log(c[1:] / c[:-1])
     rv12 = _rolling_std(logret, 12)
     rv48 = _rolling_std(logret, 48)
