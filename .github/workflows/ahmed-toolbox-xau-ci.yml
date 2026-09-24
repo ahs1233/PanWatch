@@ -293,7 +293,10 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --upgrade pip
           python -m pip install --disable-pip-version-check numpy httpx sqlalchemy pydantic pydantic-settings pyyaml openai apscheduler websockets
-          python -m pip install --disable-pip-version-check torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu\n          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime\n          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter\n          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
+          python -m pip install --disable-pip-version-check torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
       - name: Download frozen GTG experience dataset
         env:
           GH_TOKEN: ${{ github.token }}
