@@ -4,7 +4,7 @@ Status: research-only. This is the first fixed one-month architecture/hypothesis
 
 ## Frozen test
 
-- Strategy revision: `9c84ce6edc95259147d94a8f9568043af377c5cf`
+- Strategy revision: `f1929bf49716f2682300078de6a19bec4fde3f35`
 - Test window: 2026-08-23 <= t < 2026-09-23 UTC
 - Historical warm-up: 2025-11-23 <= t < 2026-08-23 UTC
 - Source: frozen Dukascopy XAUUSD native M1 BID/ASK midpoint dataset
@@ -22,12 +22,13 @@ direction.
 |---|---:|---:|---:|
 | 1m | 272 | 73.53% | 7 min |
 | 5m | 258 | 65.50% | 24 min |
-| 15m | 258 | 82.17% | 93 min |
-| 1h | 324 | 66.67% | 206 min |
-| 4h | 240 | 60.00% | 2162.5 min |
+| 15m | 86 | 82.56% | 92 min |
+| 1h | 27 | 66.67% | 240 min |
+| 4h | 5 | 60.00% | 2280 min |
 
 The user's core observation is directionally supported in this month, especially on 15m and
-1m, but the data does not support a universal 90% rule.
+1m, but the data does not support a universal 90% rule. Higher-timeframe events are deduplicated
+so one closed source-timeframe bar counts once.
 
 ## Secondary MA14/MA50 cross diagnostic
 
@@ -37,12 +38,12 @@ This is explicitly separate from price breaking the MA14/MA50 pair.
 |---|---:|---:|---:|
 | 1m | 57 | 71.93% | 17 min |
 | 5m | 58 | 70.69% | 20 min |
-| 15m | 69 | 91.30% | 70 min |
-| 1h | 60 | 80.00% | 246.5 min |
-| 4h | 48 | 0.00% | n/a |
+| 15m | 23 | 91.30% | 75 min |
+| 1h | 5 | 80.00% | 126.5 min |
+| 4h | 1 | 0.00% | n/a |
 
-The 4h zero is not promoted as a general conclusion from one month; it requires broader
-validation and inspection of target geometry/horizon assumptions.
+The 4h zero comes from only one independent event and is not promoted as a general conclusion;
+it requires broader validation and inspection of target geometry/horizon assumptions.
 
 ## Accepted MA200 -> MA1000
 
@@ -53,9 +54,9 @@ with MA1000 ahead.
 |---|---:|---:|---:|
 | 1m | 71 | 63.38% | 66 min |
 | 5m | 86 | 55.81% | 82.5 min |
-| 15m | 114 | 63.16% | 216 min |
-| 1h | 84 | 71.43% | 801.5 min |
-| 4h | 144 | 33.33% | 172.5 min |
+| 15m | 38 | 63.16% | 221 min |
+| 1h | 7 | 71.43% | 829 min |
+| 4h | 3 | 33.33% | 290 min |
 
 ## MA barrier behavior (M5)
 
