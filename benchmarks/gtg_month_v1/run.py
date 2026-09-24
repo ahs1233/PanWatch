@@ -177,6 +177,7 @@ def _frame_state(bars: list[XAUBar]) -> dict[str, Any] | None:
         spacing = (float(emas[14]) - float(emas[50])) / atr
 
     return {
+        "observed_at": latest.timestamp,
         "close": float(latest.close),
         "open": float(latest.open),
         "high": float(latest.high),
@@ -683,6 +684,9 @@ def main() -> None:
     rejection_1000: list[dict[str, Any]] = []
     busy_until = TEST_START
     last_eval: datetime | None = None
+    seen_price_break_events: set[tuple[str, datetime, int]] = set()
+    seen_ma_cross_events: set[tuple[str, datetime, int]] = set()
+    seen_acceptance_events: set[tuple[str, datetime, int]] = set()
 
     for at in m1_available:
         if at < TEST_START or at >= TEST_END:
@@ -722,60 +726,82 @@ def main() -> None:
             "4h": 8640,
         }
         for tf_key, state in states.items():
+            event_time = state.get("observed_at")
             pb = int(state.get("price_break_14_50", 0))
             target200 = state["ema"].get(200)
             h200 = int(horizon_minutes[tf_key])
+            pb_key = (tf_key, event_time, pb)
             if (
                 pb
-                and target200 is not None
-                and _target_ahead(pb, float(state["close"]), target200)
-                and at + timedelta(minutes=h200) <= TEST_END
+                and event_time is not None
+                and pb_key not in seen_price_break_events
             ):
-                outcome = _future_target(
-                    m1, m1_available, at, pb, float(target200), h200
-                )
-                ladder_price_14_50[tf_key].append({
-                    "time": at,
-                    "side": pb,
-                    "target": float(target200),
-                    **outcome,
-                })
+                seen_price_break_events.add(pb_key)
+                if (
+                    target200 is not None
+                    and _target_ahead(pb, float(state["close"]), target200)
+                    and at + timedelta(minutes=h200) <= TEST_END
+                ):
+                    outcome = _future_target(
+                        m1, m1_available, at, pb, float(target200), h200
+                    )
+                    ladder_price_14_50[tf_key].append({
+                        "time": at,
+                        "event_bar_time": event_time,
+                        "side": pb,
+                        "target": float(target200),
+                        **outcome,
+                    })
 
             cross = int(state.get("cross_14_50", 0))
+            cross_key = (tf_key, event_time, cross)
             if (
                 cross
-                and target200 is not None
-                and _target_ahead(cross, float(state["close"]), target200)
-                and at + timedelta(minutes=h200) <= TEST_END
+                and event_time is not None
+                and cross_key not in seen_ma_cross_events
             ):
-                outcome = _future_target(
-                    m1, m1_available, at, cross, float(target200), h200
-                )
-                ladder_ma_cross_14_50[tf_key].append({
-                    "time": at,
-                    "side": cross,
-                    "target": float(target200),
-                    **outcome,
-                })
+                seen_ma_cross_events.add(cross_key)
+                if (
+                    target200 is not None
+                    and _target_ahead(cross, float(state["close"]), target200)
+                    and at + timedelta(minutes=h200) <= TEST_END
+                ):
+                    outcome = _future_target(
+                        m1, m1_available, at, cross, float(target200), h200
+                    )
+                    ladder_ma_cross_14_50[tf_key].append({
+                        "time": at,
+                        "event_bar_time": event_time,
+                        "side": cross,
+                        "target": float(target200),
+                        **outcome,
+                    })
 
             acc = int(state.get("accepted_200", 0))
             target1000 = state["ema"].get(1000)
             h1000 = int(target_1000_minutes[tf_key])
+            acc_key = (tf_key, event_time, acc)
             if (
                 acc
-                and target1000 is not None
-                and _target_ahead(acc, float(state["close"]), target1000)
-                and at + timedelta(minutes=h1000) <= TEST_END
+                and event_time is not None
+                and acc_key not in seen_acceptance_events
             ):
-                outcome = _future_target(
-                    m1, m1_available, at, acc, float(target1000), h1000
-                )
-                ladder_200_1000[tf_key].append({
-                    "time": at,
-                    "side": acc,
-                    "target": float(target1000),
-                    **outcome,
-                })
+                seen_acceptance_events.add(acc_key)
+                if (
+                    target1000 is not None
+                    and _target_ahead(acc, float(state["close"]), target1000)
+                    and at + timedelta(minutes=h1000) <= TEST_END
+                ):
+                    outcome = _future_target(
+                        m1, m1_available, at, acc, float(target1000), h1000
+                    )
+                    ladder_200_1000[tf_key].append({
+                        "time": at,
+                        "event_bar_time": event_time,
+                        "side": acc,
+                        "target": float(target1000),
+                        **outcome,
+                    })
 
         for p, bucket in ((200, rejection_200), (1000, rejection_1000)):
             side = int(m5["barrier_rejection"].get(p, 0))
@@ -859,6 +885,7 @@ def main() -> None:
             "rsi_period": 14,
             "timeframes": [tf.value for tf in TF_ORDER],
             "scan_step_minutes": STEP_MINUTES,
+            "hypothesis_event_deduplication": "one event per closed source-timeframe bar",
             "price_14_50_break_rule": "first close beyond BOTH MA14 and MA50 after prior close was not beyond both in that direction",
             "acceptance_rule": "two consecutive closes beyond MA200 after a prior close on the other side",
             "same_bar_tp_sl_policy": "conservative_stop",
