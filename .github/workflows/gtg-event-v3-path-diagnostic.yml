@@ -1,0 +1,100 @@
+name: GTG Event v3 Path Diagnostic
+
+on:
+  push:
+    branches:
+      - "codex/gtg-event-v3-path-diagnostic"
+    paths:
+      - ".github/workflows/gtg-event-v3-path-diagnostic.yml"
+      - "benchmarks/gtg_event_v3/path_diagnostic.py"
+      - "ci_tests/test_gtg_event_v3_path_diagnostic.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gtg-event-v3-path-diagnostic-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  GTG_V3_START: "2024-09-23"
+  GTG_V3_TRAIN_END: "2025-07-23"
+  GTG_V3_VALID_END: "2025-09-23"
+  GTG_V3_TEST_END: "2026-09-23"
+  GTG_V3_OUT: "artifacts/gtg_event_v3_path_base"
+  GTG_V3_PATH_OUT: "artifacts/gtg_event_v3_path_diagnostic"
+  GTG_V3_DATASET_ID: "gen1-xau-2y-dataset-v2-20240923-20260923"
+  GEN1_2Y_DATASET_TAG: "gen1-xau-2y-dataset-v2-20240923-20260923"
+  GEN1_2Y_SHARD_GLOB: "/tmp/gtg-event-v3-path-data/m*.pkl.gz"
+
+jobs:
+  path-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check numpy pytest httpx sqlalchemy pydantic pydantic-settings pyyaml openai apscheduler websockets
+          python -m pip install --disable-pip-version-check torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
+
+      - name: Compile and focused regression tests
+        run: |
+          python -m py_compile benchmarks/gtg_event_v3/path_diagnostic.py
+          pytest -q ci_tests/test_gtg_event_v3.py ci_tests/test_gtg_event_v3_path_diagnostic.py
+
+      - name: Download frozen two-year dataset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gtg-event-v3-path-data
+          gh release download "$GEN1_2Y_DATASET_TAG" --pattern 'm*.pkl.gz' --dir /tmp/gtg-event-v3-path-data
+          COUNT="$(find /tmp/gtg-event-v3-path-data -maxdepth 1 -name 'm*.pkl.gz' | wc -l | tr -d ' ')"
+          echo "shards=$COUNT"
+          test "$COUNT" = "24"
+          sha256sum /tmp/gtg-event-v3-path-data/m*.pkl.gz > /tmp/gtg-event-v3-path-data/sha256.txt
+
+      - name: Reproduce frozen v3 champions
+        run: |
+          set -o pipefail
+          python benchmarks/gtg_event_v3/run.py 2>&1 | tee gtg-event-v3-path-base.log
+
+      - name: Run post-OOS path diagnostic
+        run: |
+          set -o pipefail
+          python benchmarks/gtg_event_v3/path_diagnostic.py 2>&1 | tee gtg-event-v3-path-diagnostic.log
+
+      - name: Emit diagnostic report
+        if: always()
+        run: |
+          if test -f artifacts/gtg_event_v3_path_diagnostic/report.json; then
+            echo "===== GTG_EVENT_V3_PATH_DIAGNOSTIC_BEGIN ====="
+            cat artifacts/gtg_event_v3_path_diagnostic/report.json
+            echo "===== GTG_EVENT_V3_PATH_DIAGNOSTIC_END ====="
+          fi
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtg-event-v3-path-diagnostic-${{ github.sha }}
+          retention-days: 30
+          path: |
+            artifacts/gtg_event_v3_path_base/**
+            artifacts/gtg_event_v3_path_diagnostic/**
+            gtg-event-v3-path-base.log
+            gtg-event-v3-path-diagnostic.log
+            /tmp/gtg-event-v3-path-data/sha256.txt
