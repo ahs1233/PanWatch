@@ -1,12 +1,12 @@
 # GTG Event v3 — Path Diagnostic Results
 
-Run date: 2026-09-24  
-Status: **post-OOS diagnostic only — not promotion evidence**  
-Branch: `codex/gtg-event-v3-path-diagnostic`  
-Workflow run: `35992585531`  
-Job: `107609934262`  
-Benchmark commit: `aa5f8f7d1ae166159e911223e23c320492c9ee30`  
-Artifact: `10804678407`  
+Run date: 2026-09-24
+Status: **post-OOS diagnostic only — not promotion evidence**
+Branch: `codex/gtg-event-v3-path-diagnostic`
+Workflow run: `35992585531`
+Job: `107609934262`
+Benchmark commit: `aa5f8f7d1ae166159e911223e23c320492c9ee30`
+Artifact: `10804678407`
 Artifact SHA-256: `b1ae9860a19fc39726674e02aa995b15fafb441deb4a7e3b21048d8f403a08a6`
 
 ## Protocol integrity
@@ -34,8 +34,8 @@ minimize the worse of the MFE and MAE error ratios relative to the train-median 
 
 ## DOWN path
 
-Event: `bearish_14_50_to_200`  
-Frozen architecture: GRU  
+Event: `bearish_14_50_to_200`
+Frozen architecture: GRU
 Samples: train 456 / validation 80 / diagnostic reuse 547
 
 Validation-selected candidate:
@@ -72,8 +72,8 @@ It is a **forward-test candidate**, not a promoted model.
 
 ## UP path
 
-Event: `bullish_14_50_to_200`  
-Frozen architecture: TCN  
+Event: `bullish_14_50_to_200`
+Frozen architecture: TCN
 Samples: train 305 / validation 48 / diagnostic reuse 446
 
 Validation-selected candidate:
