@@ -489,6 +489,50 @@ Gate 5 result: PASS.
 
 ---
 
+## Gate 6 — Strategic Liquidity & Market-Behavior Layer
+
+### Purpose
+
+Add top-down liquidity/dealer/market-maker behavior analysis without anthropomorphic or unverifiable intent claims.
+
+### Acceptance criteria
+
+S1. Behavior states are evidence-based hypotheses, not private-intent claims.
+S2. Analysis begins from strategic/structural context and descends to auction/local microstructure.
+S3. No timeframe-voting architecture.
+S4. Depth alone cannot define liquidity withdrawal.
+S5. Book-dynamic claims require sufficient source capability and sequence integrity.
+S6. XAUT/OKX/CME/spot evidence preserves instrument + venue identity.
+S7. Derived flow features carry lineage and cannot be counted as independent votes.
+S8. Historical profiles/session states are reconstructed point-in-time.
+S9. NO_RELIABLE_INFERENCE is valid when evidence is insufficient.
+S10. Human-readable explanations cannot invent behavior states absent from structured evidence.
+S11. The layer can be ablated completely without breaking the baseline GTG architecture.
+S12. Incremental value must be demonstrated in validation before the layer or any sub-layer survives promotion.
+
+### Failure review
+
+Reviewed:
+- narrative hindsight,
+- low-depth false liquidity inference,
+- incomplete-book false absorption,
+- proxy contamination,
+- sequence gaps,
+- spoofing overclaim,
+- DST/session errors,
+- look-ahead profiles,
+- evidence double counting,
+- cross-market lead/lag clock artifacts,
+- overfit state taxonomy,
+- false inventory inference.
+
+Architectural controls are defined in:
+docs/GTG_STRATEGIC_LIQUIDITY_BEHAVIOR_LAYER_V1.md
+
+Gate 6 result: PASS.
+
+---
+
 # Final Gate Summary
 
 | Gate | Result |
@@ -498,8 +542,12 @@ Gate 5 result: PASS.
 | Promotion Statistics | PASS |
 | Runtime Compatibility Architecture | PASS |
 | Runtime Exit Strategy | PASS |
+| Strategic Liquidity & Market-Behavior Layer | PASS |
 
 Critical unresolved architecture blockers: 0.
+
+The new behavior layer does not introduce a new infrastructure dependency.
+It introduces a new domain contract (LiquidityBehaviorSnapshot) and validation obligations only.
 
 Important implementation qualification remaining:
 - provider adapters must pass source-specific acceptance tests,
