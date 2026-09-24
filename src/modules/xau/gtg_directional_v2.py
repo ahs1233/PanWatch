@@ -177,6 +177,7 @@ if nn is not None:
             self.encoder = nn.TransformerEncoder(
                 encoder_layer,
                 num_layers=config.transformer_layers,
+                enable_nested_tensor=False,
             )
             self.proj = nn.Sequential(
                 nn.LayerNorm(d_model),
