@@ -410,6 +410,8 @@ class AssistantService:
                     AhmedToolboxClient(
                         toolbox_url,
                         token=self._settings.ahmed_toolbox_token,
+                        refresh_token=self._settings.ahmed_toolbox_refresh_token,
+                        access_ttl_seconds=self._settings.ahmed_toolbox_access_ttl_seconds,
                         timeout_seconds=self._settings.ahmed_toolbox_timeout_seconds,
                     ),
                 )
