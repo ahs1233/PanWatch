@@ -312,39 +312,49 @@ def build_multitimeframe_features(
 
 
 def _event_side(raw: dict[str, np.ndarray], i: int) -> int:
+    """Detect a price transition through the MA14/MA50 cluster toward MA200.
+
+    MA slope, acceleration, compression and RSI remain learned context rather
+    than hard-coded thresholds. The transition uses only current and
+    three-bars-earlier state.
+    """
     if i < 3:
         return EVENT_CODE_NONE
     px = float(raw["close"][i])
+    old_px = float(raw["close"][i - 3])
     atr = float(raw["atr"][i])
     target = float(raw["ma200"][i])
     ma14 = float(raw["ma14"][i])
     ma50 = float(raw["ma50"][i])
     old14 = float(raw["ma14"][i - 3])
     old50 = float(raw["ma50"][i - 3])
-    vals = (px, atr, target, ma14, ma50, old14, old50)
+    vals = (px, old_px, atr, target, ma14, ma50, old14, old50)
     if not all(math.isfinite(v) for v in vals) or atr <= 1e-9:
         return EVENT_CODE_NONE
+
     distance = abs(target - px) / atr
-    # Reuse the only v1 destination-distance band that already produced OOS
-    # signal.  Directional specialization comes from MA geometry, not a new
-    # tuned threshold.
+    # Reuse the v1 MA200 destination support; do not tune this band on v3 OOS.
     if not (0.5 <= distance <= 6.0):
         return EVENT_CODE_NONE
-    bullish = (
+
+    current_top = max(ma14, ma50)
+    current_bottom = min(ma14, ma50)
+    old_top = max(old14, old50)
+    old_bottom = min(old14, old50)
+
+    bullish_transition = (
         target > px
-        and ma14 >= ma50
-        and ma14 > old14
-        and ma50 >= old50
+        and px > current_top
+        and old_px <= old_top
     )
-    bearish = (
+    bearish_transition = (
         target < px
-        and ma14 <= ma50
-        and ma14 < old14
-        and ma50 <= old50
+        and px < current_bottom
+        and old_px >= old_bottom
     )
-    if bullish:
+    if bullish_transition:
         return EVENT_CODE_BULL
-    if bearish:
+    if bearish_transition:
         return EVENT_CODE_BEAR
     return EVENT_CODE_NONE
 
