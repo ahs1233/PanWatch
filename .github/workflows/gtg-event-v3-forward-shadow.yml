@@ -18,6 +18,9 @@ concurrency:
   group: gtg-event-v3-forward-shadow-${{ github.ref_name }}
   cancel-in-progress: true
 
+env:
+  PYTHONPATH: ${{ github.workspace }}
+
 jobs:
   forward-contract:
     runs-on: ubuntu-latest
