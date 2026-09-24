@@ -32,11 +32,13 @@ from src.modules.xau.service import (
     get_xau_snapshot,
 )
 from src.modules.xau.paper_store import (
+    acquire_paper_writer_transaction,
     open_xau_paper_session,
     open_xau_replay_session,
+    paper_storage_health,
     paper_store_is_external,
     replay_store_is_external,
-    acquire_paper_writer_transaction,
+    sync_xau_paper_replica,
 )
 from src.platform.persistence.models import (
     XAUPaperAccount,
@@ -2950,8 +2952,10 @@ class XAUPaperTradingEngine:
             "fast_scan_seconds": self.settings.xau_fast_scan_seconds,
             "reversal_confirmation_cycles": 2,
             "execution_allowed": False,
-            "storage": "neon_postgres" if paper_store_is_external() else "local_sqlite_fallback",
-            "storage_persistent": paper_store_is_external(),
+            "storage": paper_storage_health(self.settings),
+            "storage_persistent": bool(
+                paper_storage_health(self.settings).get("primary_persistent")
+            ),
         }
 
 
@@ -3042,6 +3046,28 @@ class XAUPaperTradingScheduler:
         finally:
             self._running = False
 
+    async def _sync_replica(self):
+        if (
+            str(self.settings.xau_paper_storage_mode).strip().lower()
+            != "local_primary"
+            or not self.settings.xau_paper_replica_sync_enabled
+            or not self.settings.xau_paper_database_url
+        ):
+            return
+        result = await asyncio.to_thread(
+            sync_xau_paper_replica,
+            self.settings,
+        )
+        status = result.get("status")
+        if status == "success":
+            logger.info("[XAU storage] replica sync status=success")
+        elif status not in {"skipped", "busy"}:
+            logger.warning(
+                "[XAU storage] replica sync status=%s error_type=%s",
+                status,
+                result.get("error_type"),
+            )
+
     def start(self):
         if not self.settings.xau_paper_enabled:
             logger.info("XAU paper scheduler disabled")
@@ -3062,6 +3088,32 @@ class XAUPaperTradingScheduler:
             coalesce=True,
             max_instances=1,
         )
+        if (
+            str(self.settings.xau_paper_storage_mode).strip().lower()
+            == "local_primary"
+            and self.settings.xau_paper_replica_sync_enabled
+            and self.settings.xau_paper_database_url
+        ):
+            self.scheduler.add_job(
+                self._sync_replica,
+                "date",
+                run_date=datetime.now(self.scheduler.timezone)
+                + timedelta(seconds=20),
+                id="xau_paper_replica_bootstrap",
+                replace_existing=True,
+            )
+            self.scheduler.add_job(
+                self._sync_replica,
+                "interval",
+                seconds=max(
+                    60,
+                    int(self.settings.xau_paper_replica_sync_seconds),
+                ),
+                id="xau_paper_replica_sync",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
         self.scheduler.start()
         logger.info(
             "XAU paper scheduler started interval=%ss capital=%.2f",
