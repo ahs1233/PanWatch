@@ -248,7 +248,10 @@ def pr_auc_score(y: np.ndarray, p: np.ndarray) -> float | None:
     precision = tp / np.maximum(1, tp + fp)
     recall = np.concatenate(([0.0], recall))
     precision = np.concatenate(([1.0], precision))
-    return float(np.trapz(precision, recall))
+    integrator = getattr(np, "trapezoid", None)
+    if integrator is None:  # NumPy < 2.0 compatibility
+        integrator = np.trapz
+    return float(integrator(precision, recall))
 
 
 def mcc_binary(y: np.ndarray, pred: np.ndarray) -> float:

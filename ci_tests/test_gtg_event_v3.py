@@ -274,6 +274,16 @@ def test_model_registry_bundle_cpu_parity_nan_and_schema_rejection(tmp_path):
     assert error
 
 
+def test_pr_auc_is_compatible_with_current_numpy():
+    from benchmarks.gtg_event_v3.run import pr_auc_score
+
+    y = np.asarray([0, 1, 0, 1, 1], dtype=np.float64)
+    p = np.asarray([0.1, 0.9, 0.2, 0.8, 0.7], dtype=np.float64)
+    score = pr_auc_score(y, p)
+    assert score is not None
+    assert 0.0 <= score <= 1.0
+
+
 def test_up_and_down_experts_are_independent_not_complements():
     torch = pytest.importorskip("torch")
     from src.modules.xau.gtg_event_v3 import (
