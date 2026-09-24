@@ -1,15 +1,15 @@
 """Synchronous HTTP client for the Ahmed ToolBox MCP gateway.
 
-Schema discovery is intentionally synchronous because PanWatch constructs its
-ToolRegistry in a synchronous service factory. Actual tool execution is wrapped
-with asyncio.to_thread by the registry adapter so it never blocks the runtime
-event loop.
+Authentication uses a durable refresh credential from the deployment secret
+store and disposable short-lived access tokens. Authentication continuity does
+not depend on server-side or client-side RAM session state.
 """
 
 from __future__ import annotations
 
 import json
 import threading
+import time
 from typing import Any
 
 import httpx
@@ -27,17 +27,33 @@ class AhmedToolboxClient:
         url: str,
         *,
         token: str = "",
+        refresh_token: str = "",
+        access_ttl_seconds: int = 300,
         timeout_seconds: float = 5.0,
         protocol_version: str = "2024-11-05",
     ) -> None:
         self.url = url.rstrip("/")
-        self.token = token
+        self.token = token.strip()
+        self.refresh_token = refresh_token.strip()
+        self.access_ttl_seconds = max(1, int(access_ttl_seconds))
         self.timeout_seconds = timeout_seconds
         self.protocol_version = protocol_version
         self._lock = threading.RLock()
         self._initialized = False
         self._next_id = 1
-        self._client = httpx.Client(timeout=timeout_seconds)
+        self._access_token = ""
+        self._access_expires_at = 0.0
+        self._client = self._new_client()
+
+    def _new_client(self) -> httpx.Client:
+        return httpx.Client(timeout=self.timeout_seconds)
+
+    def _replace_client(self) -> None:
+        with self._lock:
+            try:
+                self._client.close()
+            finally:
+                self._client = self._new_client()
 
     def _id(self) -> int:
         with self._lock:
@@ -45,14 +61,69 @@ class AhmedToolboxClient:
             self._next_id += 1
             return value
 
+    def _base_url(self) -> str:
+        return self.url[:-4] if self.url.endswith("/mcp") else self.url
+
+    def _post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+    ) -> httpx.Response:
+        try:
+            return self._client.post(url, headers=headers, json=payload)
+        except httpx.TransportError:
+            self._replace_client()
+            return self._client.post(url, headers=headers, json=payload)
+
+    def _refresh_access_token_locked(self) -> None:
+        if not self.refresh_token:
+            raise AhmedToolboxError("Ahmed ToolBox refresh token is not configured")
+        response = self._post(
+            self._base_url() + "/auth/token",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.refresh_token}",
+            },
+            payload={"ttl_seconds": self.access_ttl_seconds},
+        )
+        if response.status_code != 200:
+            raise AhmedToolboxError(
+                f"Ahmed ToolBox token refresh failed: HTTP {response.status_code}"
+            )
+        try:
+            body = response.json()
+            self._access_token = str(body["access_token"])
+            expires_in = max(1, int(body["expires_in"]))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AhmedToolboxError("Ahmed ToolBox token refresh payload is invalid") from exc
+        self._access_expires_at = time.time() + expires_in
+
+    def _authorization_token(self) -> str:
+        if not self.refresh_token:
+            return self.token
+        with self._lock:
+            if not self._access_token or self._access_expires_at - time.time() <= 5.0:
+                self._refresh_access_token_locked()
+            return self._access_token
+
     def _headers(self) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "MCP-Protocol-Version": self.protocol_version,
         }
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        token = self._authorization_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         return headers
+
+    def _invalidate_access_token(self) -> None:
+        with self._lock:
+            self._access_token = ""
+            self._access_expires_at = 0.0
 
     def _rpc(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         request_id = self._id()
@@ -63,11 +134,18 @@ class AhmedToolboxClient:
             "params": params or {},
         }
         try:
-            response = self._client.post(
+            response = self._post(
                 self.url,
                 headers=self._headers(),
-                json=payload,
+                payload=payload,
             )
+            if response.status_code == 401 and self.refresh_token:
+                self._invalidate_access_token()
+                response = self._post(
+                    self.url,
+                    headers=self._headers(),
+                    payload=payload,
+                )
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise AhmedToolboxError(f"Ahmed ToolBox request failed: {exc}") from exc
@@ -95,14 +173,14 @@ class AhmedToolboxClient:
                 {
                     "protocolVersion": self.protocol_version,
                     "capabilities": {},
-                    "clientInfo": {"name": "PanWatch", "version": "external-tools-0.1"},
+                    "clientInfo": {"name": "PanWatch", "version": "external-tools-0.2"},
                 },
             )
             self._initialized = True
 
     def list_tools(self) -> list[dict[str, Any]]:
         self.ensure_initialized()
-        result = (self._rpc("tools/list").get("result") or {})
+        result = self._rpc("tools/list").get("result") or {}
         tools = result.get("tools") or []
         if not isinstance(tools, list):
             raise AhmedToolboxError("Ahmed ToolBox tools/list payload is malformed")
@@ -121,7 +199,5 @@ class AhmedToolboxClient:
             raise AhmedToolboxError("Ahmed ToolBox tools/call payload is malformed")
         return result
 
-
     def close(self) -> None:
-        """Release the underlying HTTP client for short-lived probes."""
         self._client.close()
