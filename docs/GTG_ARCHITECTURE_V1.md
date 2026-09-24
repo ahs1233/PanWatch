@@ -72,6 +72,7 @@ Input:
 - MarketSnapshot
 - FeatureSnapshot
 - RegimeSnapshot
+- LiquidityBehaviorSnapshot
 - EvidenceSnapshot
 - ModelManifest
 - DataQualitySnapshot
@@ -266,7 +267,40 @@ Initial architecture forbids:
 - "if regime=A use model X, otherwise model Y" without validation,
 because hard routers can amplify classification mistakes.
 
-## 9. Event detector
+## 9. Strategic Liquidity & Market-Behavior Layer
+
+Purpose:
+- model observable liquidity-provider / dealer / aggressor behavior from broad context to local microstructure,
+- connect strategic risk environment, structural liquidity, auction/session state, local liquidity and executed flow,
+- produce probabilistic behavior hypotheses rather than claims about private intent.
+
+Top-down levels:
+1. strategic risk environment,
+2. structural liquidity map,
+3. auction/session state,
+4. local liquidity state,
+5. aggressor flow + price response,
+6. final LiquidityBehaviorSnapshot.
+
+Core rules:
+- behavior, not mind reading,
+- no "manipulation/trap" story labels without rigorous preregistered definitions,
+- depth alone is not liquidity,
+- lower-capability sources cannot fabricate higher-capability claims,
+- instrument/venue provenance survives to DecisionArtifact,
+- correlated derivatives of the same raw flow are not independent votes,
+- NO_RELIABLE_INFERENCE is a valid state.
+
+This layer feeds:
+- Event Detector with meaningful behavior/state transitions,
+- Evidence Engine with structured behavior evidence.
+
+It never authorizes an order.
+
+Detailed contract and failure review:
+docs/GTG_STRATEGIC_LIQUIDITY_BEHAVIOR_LAYER_V1.md
+
+## 10. Event detector
 
 GTG is selective.
 
@@ -286,7 +320,7 @@ Event identity includes:
 
 Changing event logic creates a new event definition version and invalidates direct comparison unless explicitly controlled.
 
-## 10. Evidence engine
+## 11. Evidence engine
 
 Evidence is grouped by families to prevent double counting.
 
@@ -317,7 +351,7 @@ Correlated evidence must not be treated as independent votes.
 
 The architecture rejects simple naive summation as the final fusion rule.
 
-## 11. GTG Brain
+## 12. GTG Brain
 
 GTG Brain is a pure decision component.
 
@@ -343,7 +377,7 @@ Required outputs:
 
 No direct order action is produced.
 
-## 12. Abstention as a first-class output
+## 13. Abstention as a first-class output
 
 GTG must be allowed to say no.
 
@@ -359,7 +393,7 @@ Reasons include:
 
 Abstention rate is measured and reported.
 
-## 13. Market snapshot
+## 14. Market snapshot
 
 The GTG Brain never reads a mutable live dataframe directly.
 
@@ -369,7 +403,7 @@ The same snapshot contract is reconstructed during historical replay.
 
 A later data arrival cannot retroactively change a committed prediction.
 
-## 14. Storage architecture
+## 15. Storage architecture
 
 ### Market history
 Primary format:
@@ -396,7 +430,7 @@ Append-only journal semantics:
 
 No in-place mutation of committed historical predictions.
 
-## 15. Experiment governance
+## 16. Experiment governance
 
 Every experiment must be registered, including failures.
 
@@ -416,7 +450,7 @@ The number of attempted variants is part of the evidence.
 
 Cherry-picking only successful trials is prohibited.
 
-## 16. Model manifest
+## 17. Model manifest
 
 A frozen candidate includes:
 
@@ -435,7 +469,7 @@ A frozen candidate includes:
 Forward campaigns pin exact immutable versions.
 Mutable aliases such as "champion" are not accepted as campaign identity.
 
-## 17. Validation architecture
+## 18. Validation architecture
 
 Stages:
 
@@ -465,7 +499,7 @@ Secondary robustness:
 Forward minimum sample size is not hard-coded arbitrarily.
 It must come from a power/precision requirement defined before the campaign.
 
-## 18. Research vs authoritative engines
+## 19. Research vs authoritative engines
 
 vectorbt:
 - fast research
@@ -486,7 +520,7 @@ Runtime Candidate B — LEAN:
 
 Disagreement between authoritative engines is a defect to investigate, not a result to average.
 
-## 19. Recovery and idempotency
+## 20. Recovery and idempotency
 
 Event lifecycle:
 
@@ -506,7 +540,7 @@ Restart after any step must recover without:
 - model/version substitution,
 - retroactive changes.
 
-## 20. Observability
+## 21. Observability
 
 Use existing OpenTelemetry-compatible infrastructure.
 
@@ -521,7 +555,7 @@ Every decision should correlate:
 Goal:
 a strange final decision must be traceable back to raw source events.
 
-## 21. Ahmed Toolbox boundary
+## 22. Ahmed Toolbox boundary
 
 Ahmed Toolbox may provide:
 - research
@@ -541,7 +575,7 @@ If Toolbox is unavailable:
 - confidence may degrade,
 - required missing context may cause abstention.
 
-## 22. Deliberate exclusions
+## 23. Deliberate exclusions
 
 Do not add now:
 - Kafka
@@ -557,7 +591,7 @@ Do not add now:
 
 Add complexity only after measured need.
 
-## 23. Complexity target
+## 24. Complexity target
 
 Preferred topology:
 - modular monolith for GTG domain,
@@ -570,7 +604,7 @@ Preferred topology:
 
 Fewer moving parts are a reliability feature.
 
-## 24. Freeze criteria
+## 25. Freeze criteria
 
 Architecture may be marked FROZEN only after:
 
@@ -587,6 +621,9 @@ Architecture may be marked FROZEN only after:
 - Promotion Statistics specification passed
 - RuntimePort acceptance specification passed
 - runtime exit strategy passed
+- Strategic Liquidity & Market-Behavior Layer review passed
+- behavior-layer golden architecture tests defined
+- no unsupported market-maker-intent claims in machine vocabulary
 
 Current gate status:
 - critical unresolved architecture blockers: 0
