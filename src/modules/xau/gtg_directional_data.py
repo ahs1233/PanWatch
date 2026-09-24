@@ -170,11 +170,16 @@ def build_directional_features(m5) -> tuple[np.ndarray, dict[str, np.ndarray], l
     candle_range = (h - l) / atr_safe
     upper = (h - np.maximum(o, c)) / atr_safe
     lower = (np.minimum(o, c) - l) / atr_safe
-    close_location = np.where(
-        (h - l) > 1e-9,
-        ((c - l) / (h - l)) * 2.0 - 1.0,
-        0.0,
+    candle_span = h - l
+    close_ratio = np.zeros(len(c), dtype=np.float64)
+    np.divide(
+        c - l,
+        candle_span,
+        out=close_ratio,
+        where=candle_span > 1e-9,
     )
+    close_location = close_ratio * 2.0 - 1.0
+    close_location[candle_span <= 1e-9] = 0.0
     feats.extend([body, candle_range, upper, lower, close_location])
 
     lv = np.log1p(v)
