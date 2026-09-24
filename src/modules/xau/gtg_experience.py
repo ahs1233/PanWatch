@@ -120,6 +120,7 @@ class GTGExperienceEngine:
         *,
         feature_mean: list[float],
         feature_std: list[float],
+        temperatures: dict[str, float] | None = None,
         device: str = "cpu",
     ) -> None:
         require_torch()
@@ -128,6 +129,10 @@ class GTGExperienceEngine:
         self.device = device
         self.feature_mean = torch.tensor(feature_mean, dtype=torch.float32, device=device)
         self.feature_std = torch.tensor(feature_std, dtype=torch.float32, device=device).clamp_min(1e-6)
+        self.temperatures = {
+            name: max(0.05, float((temperatures or {}).get(name, 1.0)))
+            for name in self.model.config.heads
+        }
 
     def predict(self, sequence: list[list[float]]) -> GTGExperiencePrediction:
         require_torch()
@@ -143,7 +148,9 @@ class GTGExperienceEngine:
         with torch.no_grad():
             logits, latent = self.model(x.unsqueeze(0))
         probabilities = {
-            name: float(torch.sigmoid(value)[0].item())
+            name: float(
+                torch.sigmoid(value / self.temperatures.get(name, 1.0))[0].item()
+            )
             for name, value in logits.items()
         }
         # Bernoulli entropy-like uncertainty proxy: maximal at p=.5, minimal at 0/1.
@@ -167,6 +174,7 @@ class GTGExperienceEngine:
                 "state_dict": self.model.state_dict(),
                 "feature_mean": self.feature_mean.detach().cpu().tolist(),
                 "feature_std": self.feature_std.detach().cpu().tolist(),
+                "temperatures": dict(self.temperatures),
                 "metadata": metadata or {},
             },
             path,
@@ -185,6 +193,7 @@ class GTGExperienceEngine:
             model,
             feature_mean=list(payload["feature_mean"]),
             feature_std=list(payload["feature_std"]),
+            temperatures=dict(payload.get("temperatures") or {}),
             device=device,
         )
         return engine, dict(payload.get("metadata") or {})
