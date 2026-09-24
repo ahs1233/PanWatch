@@ -1594,6 +1594,8 @@ async def verify_runtime_integrations() -> None:
             client = AhmedToolboxClient(
                 settings.ahmed_toolbox_url,
                 token=settings.ahmed_toolbox_token,
+                refresh_token=settings.ahmed_toolbox_refresh_token,
+                access_ttl_seconds=settings.ahmed_toolbox_access_ttl_seconds,
                 timeout_seconds=settings.ahmed_toolbox_timeout_seconds,
             )
             tools = await asyncio.wait_for(asyncio.to_thread(client.list_tools), timeout=20)
