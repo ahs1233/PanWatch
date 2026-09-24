@@ -2,8 +2,8 @@
 
 Status: **shadow research; not decision authority**
 
-Run: GitHub Actions `35976023371`  
-Artifact: `gtg-experience-v1-ci-5ec9e877e1224d0caeebee50d474c5ef2e6d681b`  
+Run: GitHub Actions `35976023371`
+Artifact: `gtg-experience-v1-ci-5ec9e877e1224d0caeebee50d474c5ef2e6d681b`
 Artifact ID: `10798735022`
 
 ## Temporal split
