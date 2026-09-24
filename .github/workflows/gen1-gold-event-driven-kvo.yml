@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHONPATH: \${{ github.workspace }}
+  PYTHONPATH: "."
   GEN1_2Y_START: "2024-09-23"
   GEN1_2Y_SPLIT: "2025-09-23"
   GEN1_2Y_END: "2026-09-23"
