@@ -271,3 +271,55 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: pnpm build
+
+  gtg-directional-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      GTG_DIR_START: "2024-09-23"
+      GTG_DIR_TRAIN_END: "2025-07-23"
+      GTG_DIR_VALID_END: "2025-09-23"
+      GTG_DIR_TEST_END: "2026-09-23"
+      GTG_DIR_OUT: "artifacts/gtg_directional_v2"
+      GEN1_2Y_DATASET_TAG: "gen1-xau-2y-dataset-v2-20240923-20260923"
+      GEN1_2Y_SHARD_GLOB: "/tmp/gtg-directional-data/m*.pkl.gz"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install GTG directional dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check numpy pytest httpx sqlalchemy pydantic pydantic-settings pyyaml openai apscheduler websockets
+          python -m pip install --disable-pip-version-check torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
+      - name: GTG v2 regression checks
+        run: |
+          python -m py_compile src/modules/xau/gtg_directional_v2.py src/modules/xau/gtg_directional_data.py benchmarks/gtg_directional_v2/run.py
+          pytest -q tests/test_gtg_directional_v2.py
+      - name: Download GTG v2 frozen dataset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gtg-directional-data
+          gh release download "$GEN1_2Y_DATASET_TAG" --pattern 'm*.pkl.gz' --dir /tmp/gtg-directional-data
+          test "$(find /tmp/gtg-directional-data -maxdepth 1 -name 'm*.pkl.gz' | wc -l | tr -d ' ')" = "24"
+      - name: Train and evaluate GTG Directional v2
+        run: |
+          set -o pipefail
+          python benchmarks/gtg_directional_v2/run.py 2>&1 | tee gtg-directional-v2-console.json
+      - name: Upload GTG v2 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtg-directional-v2-ci-${{ github.sha }}
+          retention-days: 30
+          path: |
+            artifacts/gtg_directional_v2/**
+            gtg-directional-v2-console.json
