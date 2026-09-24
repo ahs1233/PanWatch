@@ -133,3 +133,50 @@ Required forward sample/information size is derived per campaign from effect siz
 
 Reason:
 A fixed event count such as 60 can be either grossly insufficient or unnecessarily large depending on the process.
+
+
+## ADR-018 — Infer observable behavior, not private intent
+
+Decision:
+GTG may infer liquidity/flow behavior states from measurable evidence but may not claim knowledge of a market maker's private intent or inventory.
+
+Reason:
+Private intention is generally unobservable. Treating a narrative as fact creates false confidence.
+
+## ADR-019 — Strategic liquidity analysis is top-down, not timeframe voting
+
+Decision:
+The Strategic Liquidity & Market-Behavior Layer flows from broad risk context through structural liquidity and auction state to local microstructure.
+
+Weekly/Daily/H1/M5 are data horizons, not independent voters.
+
+Reason:
+The meaning of local flow depends on broader context, while simple timeframe voting destroys causal hierarchy.
+
+## ADR-020 — Depth alone is not liquidity
+
+Decision:
+Local liquidity inference must consider multiple dimensions such as spread, displayed depth, replenishment/resilience, price impact and executed flow when source capability allows.
+
+Reason:
+Shallow displayed depth can coexist with fast quote refresh and effective liquidity.
+
+## ADR-021 — Evidence lineage prevents double counting
+
+Decision:
+Derived features and behavior hypotheses carry lineage to their raw evidence.
+
+Fusion may not treat correlated descendants of the same raw flow as independent votes.
+
+Reason:
+Delta, CVD, footprint and absorption can be transformations of the same trades.
+
+## ADR-022 — Microstructure claims are capability-gated
+
+Decision:
+Book dynamics, replenishment, cancellation and similar states require source tiers capable of supporting them.
+
+A lower-tier source cannot synthesize a higher-tier claim.
+
+Reason:
+Semantic honesty is more important than feature completeness.
