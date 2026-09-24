@@ -263,6 +263,8 @@ async def _toolbox_readiness(settings: Settings) -> dict:
     client = AhmedToolboxClient(
         settings.ahmed_toolbox_url,
         token=settings.ahmed_toolbox_token,
+        refresh_token=settings.ahmed_toolbox_refresh_token,
+        access_ttl_seconds=settings.ahmed_toolbox_access_ttl_seconds,
         timeout_seconds=settings.ahmed_toolbox_timeout_seconds,
     )
     try:
