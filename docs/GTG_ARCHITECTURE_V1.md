@@ -1,6 +1,6 @@
 # GTG Architecture v1 — Architecture Only
 
-Status: DRAFT FOR REVIEW
+Status: READY FOR FINAL FREEZE REVIEW
 Implementation: FORBIDDEN until architecture is frozen
 Base commit: 6086611d47a476a677e0161036bcbf6647fbfe6c
 
@@ -33,11 +33,13 @@ Responsibilities:
 No trading intelligence is allowed here.
 
 ### B. Runtime Plane
-Preferred runtime spine: NautilusTrader.
+Architecture boundary: RuntimePort.
 
-Responsibilities delegated to mature runtime infrastructure:
+The architecture freezes required runtime capabilities, not a specific vendor/version.
+
+Responsibilities delegated to a mature runtime:
 - event loop,
-- clock abstraction,
+- injected clock/time frontier,
 - event ordering,
 - historical replay,
 - live/shadow data adapters,
@@ -46,7 +48,13 @@ Responsibilities delegated to mature runtime infrastructure:
 - message routing,
 - restart/recovery primitives.
 
-GTG must not build a second custom event runtime unless a documented incompatibility proves it necessary.
+Runtime candidates:
+- Candidate A: NautilusTrader
+- Candidate B: LEAN
+- Custom runtime: last resort only after mature candidates fail documented critical requirements.
+
+GTG Domain Core must not contain runtime-specific objects.
+Changing runtime must not require rewriting GTG Brain.
 
 ### C. GTG Domain Core
 Framework-independent pure decision domain.
@@ -94,11 +102,11 @@ Purpose:
 - walk-forward evaluation,
 - independent verification.
 
-Primary authoritative replay:
-- NautilusTrader event-driven simulation.
+Authoritative replay:
+- whichever RuntimePort candidate passes the GTG Runtime Acceptance Suite.
 
 Independent audit:
-- LEAN parity / independent replay for frozen candidates.
+- a second mature engine where feasible (LEAN is the default independent verifier when Nautilus is the selected runtime, and vice versa where practical).
 
 vectorbt is a research accelerator, not the final authority when event sequencing matters.
 
@@ -371,7 +379,7 @@ Query layer:
 - DuckDB
 
 Replay/catalog layer:
-- NautilusTrader catalog or compatible adapter over the same immutable data.
+- RuntimePort-compatible catalog/adapter over the same immutable historical data.
 
 ### Operational state / evidence
 - PostgreSQL
@@ -465,14 +473,16 @@ vectorbt:
 - ablation
 - candidate generation
 
-NautilusTrader:
-- event-driven authoritative simulation candidate
+Runtime Candidate A — NautilusTrader:
+- event-driven runtime candidate
 - clock/event semantics
-- replay
-- live/shadow runtime candidate
+- replay/catalog/custom data
+- version must pass compatibility and golden tests
 
-LEAN:
-- independent verifier / parity engine for frozen candidates
+Runtime Candidate B — LEAN:
+- independent verifier
+- fallback authoritative runtime candidate
+- must pass the same Runtime Acceptance Suite
 
 Disagreement between authoritative engines is a defect to investigate, not a result to average.
 
@@ -572,3 +582,13 @@ Architecture may be marked FROZEN only after:
 - unresolved critical risks = 0
 - all deliberate assumptions documented
 - all external dependencies have fallback/exit strategy
+- Source Capability Matrix passed
+- exact DecisionArtifact contract passed
+- Promotion Statistics specification passed
+- RuntimePort acceptance specification passed
+- runtime exit strategy passed
+
+Current gate status:
+- critical unresolved architecture blockers: 0
+- implementation qualification remains required for providers/runtime candidates/campaign parameters
+- architecture is not FROZEN until final human review approves the freeze
