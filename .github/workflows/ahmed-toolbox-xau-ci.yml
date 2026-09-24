@@ -270,3 +270,49 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: pnpm build
+
+  gtg-experience-v1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      GTG_EXP_START: "2024-09-23"
+      GTG_EXP_TRAIN_END: "2025-07-23"
+      GTG_EXP_VALID_END: "2025-09-23"
+      GTG_EXP_TEST_END: "2026-09-23"
+      GTG_EXP_OUT: "artifacts/gtg_experience_v1"
+      GEN1_2Y_DATASET_TAG: "gen1-xau-2y-dataset-v2-20240923-20260923"
+      GEN1_2Y_SHARD_GLOB: "/tmp/gtg-exp-data/m*.pkl.gz"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install GTG deep-learning dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check numpy httpx sqlalchemy pydantic pydantic-settings pyyaml openai apscheduler websockets
+          python -m pip install --disable-pip-version-check torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+      - name: Download frozen GTG experience dataset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gtg-exp-data
+          gh release download "$GEN1_2Y_DATASET_TAG" --pattern 'm*.pkl.gz' --dir /tmp/gtg-exp-data
+          test "$(find /tmp/gtg-exp-data -maxdepth 1 -name 'm*.pkl.gz' | wc -l | tr -d ' ')" = "24"
+      - name: Train and evaluate GTG Deep Experience v1
+        run: |
+          set -o pipefail
+          python -m py_compile src/modules/xau/gtg_experience.py benchmarks/gtg_experience_v1/run.py
+          python benchmarks/gtg_experience_v1/run.py 2>&1 | tee gtg-experience-console.json
+      - name: Upload GTG Deep Experience evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtg-experience-v1-ci-${{ github.sha }}
+          retention-days: 30
+          path: |
+            artifacts/gtg_experience_v1/**
+            gtg-experience-console.json
