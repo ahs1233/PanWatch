@@ -2,6 +2,8 @@
 # Reuse proven libraries before writing custom infrastructure.
 numpy>=2.0,<2.3
 pandas>=2.2,<3.0
+numba>=0.60,<0.62
+plotly>=5.24,<6
 scikit-learn>=1.5,<2.0
 river>=0.22,<1.0
 joblib>=1.4,<2.0
