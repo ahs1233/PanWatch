@@ -35,18 +35,25 @@ available timeframe:
 
 ### MA ladder hypothesis
 
-The initial fixed hypothesis to test is:
+The primary GTG price-ladder hypothesis is:
 
-1. A directional 14/50 cross can make MA200 the next major target when MA200 lies ahead in
-   that direction and the higher-timeframe regime does not contradict the move.
-2. After a real break and acceptance beyond MA200, MA1000 can become the next structural
-   target when it lies ahead in the same direction.
+1. When PRICE crosses/reclaims the MA14 and MA50 pair and becomes established on their new
+   side, MA200 can become the next major target when MA200 lies ahead in that direction and
+   the higher-timeframe regime does not contradict the move.
+2. After PRICE breaks MA200 and is accepted beyond it, MA1000 can become the next structural
+   target when MA1000 lies ahead in the same direction.
 3. Any MA can simultaneously be a target and a dynamic barrier. A target that rejects price
    becomes support/resistance; a target that is broken and accepted can become a transition
    or launch level.
+4. MA14 crossing MA50 is recorded separately as a secondary MA-dynamics event. It is NOT the
+   same event as price breaking/reclaiming the 14/50 pair.
 
-"Acceptance" is not a wick. Historical GTG v1.0 defines it as two consecutive closed bars on
-the new side after a prior close on the opposite side.
+Historical GTG defines a 14/50 price break as the first closed bar whose close is beyond BOTH
+MA14 and MA50 after the previous closed bar was not beyond both in that direction. A wick
+alone does not count.
+
+"Acceptance" beyond MA200 is stronger than a wick: two consecutive closed bars on the new side
+after a prior close on the opposite side.
 
 ## 3. Price Structure
 
@@ -148,8 +155,8 @@ Live execution requires a current trigger. Context alone is not an entry.
 
 Research setup families for the first fixed test:
 
-1. MA ladder continuation: 14/50 cross toward 200.
-2. MA ladder continuation: accepted 200 break toward 1000.
+1. MA price-ladder continuation: price breaks/reclaims the 14/50 pair toward 200.
+2. MA price-ladder continuation: accepted price break of 200 toward 1000.
 3. MA barrier rejection: 200 or 1000 rejects price with contextual confirmation.
 
 The first monthly test must not optimize thresholds from outcomes.
