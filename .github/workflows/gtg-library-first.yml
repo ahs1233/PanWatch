@@ -1,0 +1,51 @@
+name: GTG Library-First v1
+
+on:
+  push:
+    branches:
+      - rewrite/gtg-library-first-v1
+    paths:
+      - "src/modules/xau/gtg_next/**"
+      - "ci_tests/test_gtg_library_first.py"
+      - "requirements-gtg-library-first.txt"
+      - ".github/workflows/gtg-library-first.yml"
+  pull_request:
+    paths:
+      - "src/modules/xau/gtg_next/**"
+      - "ci_tests/test_gtg_library_first.py"
+      - "requirements-gtg-library-first.txt"
+      - ".github/workflows/gtg-library-first.yml"
+  workflow_dispatch:
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-gtg-library-first.txt
+      - name: Install library-first stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-gtg-library-first.txt
+          pip install pytest
+      - name: Compile clean package
+        run: python -m compileall -q src/modules/xau/gtg_next
+      - name: Run isolated contract tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest -q ci_tests/test_gtg_library_first.py
+      - name: Verify required reused libraries
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python - <<'PY'
+          from src.modules.xau.gtg_next.registry import LibraryRegistry
+          LibraryRegistry.assert_required()
+          for row in LibraryRegistry.status():
+              print(row)
+          PY
