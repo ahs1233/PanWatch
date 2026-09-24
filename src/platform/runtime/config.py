@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     xau_paper_scan_seconds: int = Field(default=15, ge=5, le=3600)
     xau_paper_timezone: str = "Asia/Baghdad"
     xau_paper_database_url: str = ""
+    # Storage authority for XAU paper/replay. local_primary keeps one durable
+    # source of truth on /app/data; the external database becomes an optional
+    # replica/archive and can never take the trading engine down.
+    xau_paper_storage_mode: str = "external_preferred"
+    xau_paper_data_persistent: bool = False
+    xau_paper_replica_sync_enabled: bool = True
+    xau_paper_replica_sync_seconds: int = Field(default=300, ge=60, le=86400)
 
     # Research-only historical replay. Runs off the hot path and never creates
     # paper/live fills; it only refreshes bounded episodic research memory.
