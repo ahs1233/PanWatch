@@ -1,0 +1,273 @@
+name: Ahmed ToolBox + XAU CI
+
+on:
+  push:
+    branches:
+      - feat/ahmed-toolbox-xau
+  pull_request:
+    paths:
+      - "server.py"
+      - "src/platform/external_tools/**"
+      - "src/platform/marketdata/xau_*"
+      - "src/platform/marketdata/gold_okx.py"
+      - "src/modules/strategy/xau_intraday.py"
+      - "src/modules/strategy/xau_strategy_exporter.py"
+      - "src/modules/strategy/xau_v2.py"
+      - "src/modules/strategy/xau_v2_replay.py"
+      - "src/modules/strategy/xau_v2_dataset.py"
+      - "src/modules/strategy/trading_engine.py"
+      - "src/modules/strategy/trading_engine_adapters.py"
+      - "src/modules/strategy/validation/**"
+      - "src/modules/assistant/xau_tools.py"
+      - "src/modules/xau/**"
+      - "src/modules/research/**"
+      - "src/platform/persistence/models.py"
+      - "src/platform/persistence/migrations.py"
+      - "src/modules/assistant/service.py"
+      - "src/modules/automation/tradingagents/xau_support.py"
+      - "src/platform/runtime/config.py"
+      - "benchmarks/**"
+      - "ci_tests/test_ahmed_toolbox_xau_integration.py"
+      - "ci_tests/test_ahmed_toolbox_auth_lifecycle.py"
+      - "ci_tests/test_graphify_external_tools.py"
+      - "ci_tests/test_xau_cognition.py"
+      - "ci_tests/test_xau_directional_state.py"
+      - "ci_tests/test_gen1_evidence_fusion.py"
+      - "ci_tests/test_gold_market_fusion.py"
+      - "ci_tests/test_gen1_validation.py"
+      - "ci_tests/test_gen1_forward_validation.py"
+      - "ci_tests/test_gen1_2y_performance.py"
+      - "ci_tests/test_xaut_bitfinex.py"
+      - "ci_tests/test_xaut_runtime.py"
+      - "ci_tests/test_xau_replay.py"
+      - "ci_tests/test_xau_paper_store_failsoft.py"
+      - "ci_tests/test_xau_paper_replica.py"
+      - "ci_tests/test_xau_resilience.py"
+      - "ci_tests/test_xau_strategy_exporter.py"
+      - "ci_tests/test_xau_strategy_v2.py"
+      - "ci_tests/test_xau_v2_replay.py"
+      - "ci_tests/test_xau_v2_dataset.py"
+      - "ci_tests/test_xau_dukascopy.py"
+      - "ci_tests/test_trading_engine_core.py"
+      - "ci_tests/test_trading_validation_v1.py"
+      - "ci_tests/test_panwatch_benchmark_v1.py"
+      - "ci_tests/test_panwatch_economic_benchmark_v1.py"
+      - "ci_tests/test_research_evidence_foundation.py"
+      - "ci_tests/test_research_claim_graph_falsification.py"
+      - "ci_tests/test_panwatch_reasoning_benchmark_v1.py"
+      - "ci_tests/test_research_persistent_belief_state.py"
+      - "ci_tests/test_research_external_store.py"
+      - "ci_tests/test_research_automatic_loop.py"
+      - "ci_tests/test_research_claim_acquisition.py"
+      - "ci_tests/test_research_entity_identity.py"
+      - "ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py"
+      - "ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py"
+      - "ci_tests/test_panwatch_company_sector_benchmark_v1.py"
+      - "ci_tests/test_panwatch_automatic_research_benchmark_v1.py"
+      - "ci_tests/test_panwatch_belief_benchmark_v1.py"
+      - ".github/workflows/ahmed-toolbox-xau-ci.yml"
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The next step compares HEAD^..HEAD. actions/checkout defaults to a
+          # depth-1 shallow clone, where HEAD^ is unavailable and git exits 128.
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install focused dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio fastapi httpx openai apscheduler "pydantic>=2" "pydantic-settings>=2" "sqlalchemy>=2" pyyaml
+          python -m pip install -e ./packages/pan-agent-runtime
+          python -m pip install -e ./packages/pan-agent-token-meter
+          python -m pip install -e ./packages/pan-agent-tool-research
+
+      - name: Check diff whitespace
+        run: git diff --check HEAD^ HEAD
+
+      - name: Compile changed Python
+        run: |
+          python -m compileall -q \
+            server.py \
+            benchmarks \
+            src/bootstrap/application.py \
+            src/platform/external_tools \
+            src/platform/persistence/models.py \
+            src/platform/persistence/migrations.py \
+            src/platform/marketdata/xau_models.py \
+            src/platform/marketdata/xau_dukascopy.py \
+            src/platform/marketdata/xau_provider_audit.py \
+            src/platform/marketdata/xau_research_provider.py \
+            src/platform/marketdata/xau_spot_reference.py \
+            src/platform/marketdata/xau_micro_reference.py \
+            src/platform/marketdata/gold_okx.py \
+            src/modules/xau \
+            src/modules/research \
+            src/modules/strategy/xau_intraday.py \
+            src/modules/strategy/xau_strategy_exporter.py \
+            src/modules/strategy/xau_v2.py \
+            src/modules/strategy/xau_v2_replay.py \
+            src/modules/strategy/xau_v2_dataset.py \
+            src/modules/strategy/trading_engine.py \
+            src/modules/strategy/trading_engine_adapters.py \
+            src/modules/strategy/validation \
+            src/modules/assistant/xau_tools.py \
+            src/modules/assistant/service.py \
+            src/modules/automation/tradingagents/xau_support.py \
+            src/platform/runtime/config.py
+
+      - name: Run focused tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m pytest -q ci_tests/test_graphify_external_tools.py ci_tests/test_ahmed_toolbox_xau_integration.py ci_tests/test_ahmed_toolbox_auth_lifecycle.py ci_tests/test_gen1_evidence_fusion.py ci_tests/test_gold_market_fusion.py ci_tests/test_gen1_validation.py ci_tests/test_gen1_forward_validation.py ci_tests/test_gen1_2y_performance.py ci_tests/test_xaut_bitfinex.py ci_tests/test_xaut_runtime.py ci_tests/test_xau_terminal.py ci_tests/test_xau_paper.py ci_tests/test_xau_paper_store_failsoft.py ci_tests/test_xau_paper_replica.py ci_tests/test_xau_cognition.py ci_tests/test_xau_directional_state.py ci_tests/test_xau_replay.py ci_tests/test_xau_resilience.py ci_tests/test_xau_strategy_exporter.py ci_tests/test_xau_strategy_v2.py ci_tests/test_xau_v2_replay.py ci_tests/test_xau_v2_dataset.py ci_tests/test_xau_dukascopy.py ci_tests/test_trading_engine_core.py ci_tests/test_trading_validation_v1.py ci_tests/test_panwatch_benchmark_v1.py ci_tests/test_research_evidence_foundation.py ci_tests/test_research_claim_graph_falsification.py ci_tests/test_panwatch_economic_benchmark_v1.py ci_tests/test_panwatch_reasoning_benchmark_v1.py ci_tests/test_research_persistent_belief_state.py ci_tests/test_research_external_store.py ci_tests/test_research_automatic_loop.py ci_tests/test_research_claim_acquisition.py ci_tests/test_research_entity_identity.py ci_tests/test_panwatch_belief_benchmark_v1.py ci_tests/test_panwatch_automatic_research_benchmark_v1.py ci_tests/test_panwatch_claim_acquisition_benchmark_v1.py ci_tests/test_panwatch_semantic_resolution_benchmark_v1.py ci_tests/test_panwatch_company_sector_benchmark_v1.py
+
+      - name: Run GEN1 Gold Validation Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python benchmarks/gen1_gold_validation_v1/run.py > gen1-gold-validation-${{ matrix.python-version }}.json
+
+      - name: Upload GEN1 Gold validation benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: gen1-gold-validation-v1-python-${{ matrix.python-version }}
+          path: gen1-gold-validation-${{ matrix.python-version }}.json
+
+      - name: Run XAU Strategy v2 Causal Ablation Benchmark
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python benchmarks/xau_v2_ablation_v1/run.py > xau-v2-ablation-${{ matrix.python-version }}.json
+
+      - name: Upload XAU Strategy v2 ablation benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: xau-v2-ablation-v1-python-${{ matrix.python-version }}
+          path: xau-v2-ablation-${{ matrix.python-version }}.json
+
+      - name: Run Trading Validation Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python benchmarks/trading_validation_v1/run.py > trading-validation-result-${{ matrix.python-version }}.json
+
+      - name: Upload trading validation benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-validation-v1-python-${{ matrix.python-version }}
+          path: trading-validation-result-${{ matrix.python-version }}.json
+
+      - name: Run PanWatch Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.runner --json benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-benchmark-v1-python-${{ matrix.python-version }}
+          path: benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Economic Evidence Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.economic_runner --json economic-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload economic benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-economic-evidence-v1-python-${{ matrix.python-version }}
+          path: economic-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Claim Graph + Falsification Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.reasoning_runner --json reasoning-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload reasoning benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-claim-graph-v1-python-${{ matrix.python-version }}
+          path: reasoning-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Persistent Belief Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.belief_runner --json belief-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload belief benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-persistent-belief-v1-python-${{ matrix.python-version }}
+          path: belief-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Automatic Research Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.automatic_research_runner --json automatic-research-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload automatic research benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-automatic-research-v1-python-${{ matrix.python-version }}
+          path: automatic-research-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run General Claim Acquisition Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.claim_acquisition_runner --json claim-acquisition-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload claim acquisition benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-claim-acquisition-v1-python-${{ matrix.python-version }}
+          path: claim-acquisition-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Semantic Claim Resolution Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.semantic_resolution_runner --json semantic-resolution-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload semantic resolution benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-semantic-resolution-v1-python-${{ matrix.python-version }}
+          path: semantic-resolution-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Run Company/Sector Research Benchmark v1
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m benchmarks.panwatch_v1.company_sector_runner --json company-sector-benchmark-result-${{ matrix.python-version }}.json
+
+      - name: Upload company/sector research benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: panwatch-company-sector-v1-python-${{ matrix.python-version }}
+          path: company-sector-benchmark-result-${{ matrix.python-version }}.json
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm build

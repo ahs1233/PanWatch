@@ -1079,6 +1079,163 @@ class PaperTradingTrade(Base):
     meta = Column(JSON, default={})
 
 
+
+class XAUPaperAccount(Base):
+    """Weekly XAU paper-trading league account."""
+
+    __tablename__ = "xau_paper_accounts"
+    __table_args__ = (
+        UniqueConstraint("week_key", name="uq_xau_paper_account_week"),
+        Index("ix_xau_paper_account_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    week_key = Column(String, nullable=False)
+    initial_capital = Column(Float, nullable=False, default=10000.0)
+    realized_pnl = Column(Float, nullable=False, default=0.0)
+    current_equity = Column(Float, nullable=False, default=10000.0)
+    peak_equity = Column(Float, nullable=False, default=10000.0)
+    max_drawdown_pct = Column(Float, nullable=False, default=0.0)
+    total_trades = Column(Integer, nullable=False, default=0)
+    winning_trades = Column(Integer, nullable=False, default=0)
+    losing_trades = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False, default="active")
+    started_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class XAUPaperSignal(Base):
+    """Deduplicated XAU setup observation used by the weekly paper engine."""
+
+    __tablename__ = "xau_paper_signals"
+    __table_args__ = (
+        UniqueConstraint("setup_key", name="uq_xau_paper_signal_setup"),
+        Index("ix_xau_paper_signal_account_observed", "account_id", "observed_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("xau_paper_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    setup_key = Column(String, nullable=False)
+    candidate = Column(String, nullable=False, default="none")
+    fusion_state = Column(String, nullable=False, default="")
+    macro_relation = Column(String, nullable=False, default="")
+    event_risk = Column(Boolean, nullable=False, default=False)
+    price = Column(Float, nullable=True)
+    accepted = Column(Boolean, nullable=False, default=False)
+    rejection_reason = Column(String, nullable=False, default="")
+    observed_at = Column(DateTime, nullable=False)
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class XAUPaperPosition(Base):
+    """Open/closed XAU paper position; at most one is opened by the engine."""
+
+    __tablename__ = "xau_paper_positions"
+    __table_args__ = (
+        UniqueConstraint("setup_key", name="uq_xau_paper_position_setup"),
+        Index("ix_xau_paper_position_status", "status"),
+        Index("ix_xau_paper_position_account", "account_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("xau_paper_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    setup_key = Column(String, nullable=False, default="")
+    side = Column(String, nullable=False)
+    quantity_oz = Column(Float, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    stop_loss = Column(Float, nullable=False)
+    target_price = Column(Float, nullable=False)
+    current_price = Column(Float, nullable=False)
+    unrealized_pnl = Column(Float, nullable=False, default=0.0)
+    mfe_usd = Column(Float, nullable=False, default=0.0)
+    mae_usd = Column(Float, nullable=False, default=0.0)
+    risk_usd = Column(Float, nullable=False, default=0.0)
+    setup_state = Column(String, nullable=False, default="")
+    macro_relation = Column(String, nullable=False, default="")
+    price_source = Column(String, nullable=False, default="")
+    status = Column(String, nullable=False, default="open")
+    opened_at = Column(DateTime, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class XAUPaperTrade(Base):
+    """Closed XAU paper trade with excursion analytics."""
+
+    __tablename__ = "xau_paper_trades"
+    __table_args__ = (
+        Index("ix_xau_paper_trade_account_closed", "account_id", "closed_at"),
+        Index("ix_xau_paper_trade_setup", "setup_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(
+        Integer,
+        ForeignKey("xau_paper_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    setup_key = Column(String, nullable=False, default="")
+    side = Column(String, nullable=False)
+    quantity_oz = Column(Float, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=False)
+    stop_loss = Column(Float, nullable=False)
+    target_price = Column(Float, nullable=False)
+    pnl = Column(Float, nullable=False, default=0.0)
+    pnl_pct_equity = Column(Float, nullable=False, default=0.0)
+    r_multiple = Column(Float, nullable=False, default=0.0)
+    mfe_usd = Column(Float, nullable=False, default=0.0)
+    mae_usd = Column(Float, nullable=False, default=0.0)
+    risk_usd = Column(Float, nullable=False, default=0.0)
+    exit_reason = Column(String, nullable=False, default="")
+    setup_state = Column(String, nullable=False, default="")
+    macro_relation = Column(String, nullable=False, default="")
+    price_source = Column(String, nullable=False, default="")
+    opened_at = Column(DateTime, nullable=False)
+    closed_at = Column(DateTime, nullable=False)
+    meta = Column(JSON, default={})
+
+
+class XAUReplayEpisode(Base):
+    """Research-only walk-forward episode; never an executed paper/live trade."""
+
+    __tablename__ = "xau_replay_episodes"
+    __table_args__ = (
+        UniqueConstraint("replay_key", name="uq_xau_replay_episode_key"),
+        Index("ix_xau_replay_candidate_observed", "candidate", "observed_at"),
+        Index("ix_xau_replay_regime_observed", "regime", "observed_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    replay_key = Column(String, nullable=False)
+    candidate = Column(String, nullable=False, default="none")
+    regime = Column(String, nullable=False, default="")
+    confidence = Column(Float, nullable=True)
+    horizon_minutes = Column(Integer, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    outcome_price = Column(Float, nullable=False)
+    directional_return_bps = Column(Float, nullable=False)
+    positive = Column(Boolean, nullable=False, default=False)
+    source = Column(String, nullable=False, default="")
+    observed_at = Column(DateTime, nullable=False)
+    outcome_at = Column(DateTime, nullable=False)
+    state_vector = Column(JSON, default={})
+    cognition = Column(JSON, default={})
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class ChatConversation(Base):
     """AI 对话会话"""
 
@@ -1330,3 +1487,460 @@ class MCPCallLog(Base):
     duration_ms = Column(Integer, default=0)
     client_ip = Column(String, nullable=True)
     called_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchSourceRecord(Base):
+    """Immutable source provenance captured by the research evidence layer."""
+
+    __tablename__ = "research_sources"
+    __table_args__ = (
+        Index("ix_research_source_domain_published", "domain", "published_at"),
+        Index("ix_research_source_independence", "independence_key"),
+        Index("ix_research_source_content_hash", "content_hash"),
+    )
+
+    source_id = Column(String, primary_key=True)
+    url = Column(Text, nullable=False, default="")
+    canonical_url = Column(Text, nullable=False, default="")
+    domain = Column(String, nullable=False, default="")
+    publisher = Column(String, default="")
+    title = Column(Text, default="")
+    source_tier = Column(String, nullable=False, default="unknown")
+    source_family = Column(String, nullable=False, default="")
+    independence_key = Column(String, nullable=False, default="")
+    published_at = Column(DateTime, nullable=True)
+    retrieved_at = Column(DateTime, nullable=False)
+    observed_at = Column(DateTime, nullable=False)
+    content_hash = Column(String, nullable=False)
+    parent_source_id = Column(String, nullable=True)
+    tool_name = Column(String, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchEvidenceRecord(Base):
+    """Append-only evidence item linked to immutable source provenance."""
+
+    __tablename__ = "research_evidence"
+    __table_args__ = (
+        Index(
+            "ix_research_evidence_claim_kind_time",
+            "claim_key",
+            "observation_kind",
+            "event_time",
+        ),
+        Index("ix_research_evidence_source", "source_id"),
+        Index("ix_research_evidence_recorded", "recorded_at"),
+    )
+
+    evidence_id = Column(String, primary_key=True)
+    claim_key = Column(String, nullable=False)
+    source_id = Column(
+        String,
+        ForeignKey("research_sources.source_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    statement = Column(Text, nullable=False)
+    relation = Column(String, nullable=False, default="supports")
+    observation_kind = Column(String, nullable=False, default="actual")
+    event_time = Column(DateTime, nullable=True)
+    observed_at = Column(DateTime, nullable=False)
+    recorded_at = Column(DateTime, nullable=False)
+    confidence = Column(Float, nullable=False, default=1.0)
+    content_hash = Column(String, nullable=False)
+    numeric_value = Column(Float, nullable=True)
+    unit = Column(String, default="")
+    period = Column(String, default="")
+    revision_of = Column(String, nullable=True)
+    supersedes = Column(String, nullable=True)
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchClaimRecord(Base):
+    """Immutable claim definition in the research reasoning graph."""
+
+    __tablename__ = "research_claims"
+    __table_args__ = (
+        Index("ix_research_claim_key_kind", "claim_key", "kind"),
+        Index("ix_research_claim_validity", "valid_from", "valid_until"),
+    )
+
+    claim_id = Column(String, primary_key=True)
+    claim_key = Column(String, nullable=False)
+    statement = Column(Text, nullable=False)
+    kind = Column(String, nullable=False, default="hypothesis")
+    prior_confidence = Column(Float, nullable=False, default=0.5)
+    created_at = Column(DateTime, nullable=False)
+    valid_from = Column(DateTime, nullable=True)
+    valid_until = Column(DateTime, nullable=True)
+    supersedes = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    meta = Column(JSON, default={})
+
+
+class ResearchClaimEdgeRecord(Base):
+    """Directed logical/causal relation between two research claims."""
+
+    __tablename__ = "research_claim_edges"
+    __table_args__ = (
+        Index("ix_research_claim_edge_source", "source_claim_id"),
+        Index("ix_research_claim_edge_target", "target_claim_id"),
+        Index("ix_research_claim_edge_relation", "relation"),
+    )
+
+    edge_id = Column(String, primary_key=True)
+    source_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    relation = Column(String, nullable=False)
+    weight = Column(Float, nullable=False, default=1.0)
+    required = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False)
+    meta = Column(JSON, default={})
+
+
+class ResearchClaimEvidenceLinkRecord(Base):
+    """Explicit evidence-to-claim link used by the Claim Graph."""
+
+    __tablename__ = "research_claim_evidence_links"
+    __table_args__ = (
+        Index("ix_research_claim_evidence_claim", "claim_id"),
+        Index("ix_research_claim_evidence_evidence", "evidence_id"),
+    )
+
+    link_id = Column(String, primary_key=True)
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    evidence_id = Column(
+        String,
+        ForeignKey("research_evidence.evidence_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    relation = Column(String, nullable=False, default="supports")
+    weight = Column(Float, nullable=False, default=1.0)
+    created_at = Column(DateTime, nullable=False)
+    meta = Column(JSON, default={})
+
+
+class ResearchFalsificationRuleRecord(Base):
+    """Explicit failure condition attached to a research claim."""
+
+    __tablename__ = "research_falsification_rules"
+    __table_args__ = (
+        Index("ix_research_falsification_claim", "claim_id"),
+        Index("ix_research_falsification_type", "rule_type"),
+    )
+
+    rule_id = Column(String, primary_key=True)
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    description = Column(Text, nullable=False)
+    rule_type = Column(String, nullable=False)
+    hard_fail = Column(Boolean, nullable=False, default=False)
+    weight = Column(Float, nullable=False, default=1.0)
+    evidence_claim_key = Column(String, default="")
+    operator = Column(String, default="")
+    threshold = Column(Float, nullable=True)
+    min_sources = Column(Integer, nullable=False, default=1)
+    max_age_seconds = Column(Integer, nullable=True)
+    related_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    required_kinds = Column(JSON, default=[])
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchBeliefCycleRecord(Base):
+    """One durable PanWatch evaluation cycle over a set of claims."""
+
+    __tablename__ = "research_belief_cycles"
+    __table_args__ = (
+        Index("ix_research_belief_cycle_started", "started_at"),
+    )
+
+    cycle_id = Column(String, primary_key=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=False)
+    claim_count = Column(Integer, nullable=False, default=0)
+    changed_count = Column(Integer, nullable=False, default=0)
+    falsified_count = Column(Integer, nullable=False, default=0)
+    probe_count = Column(Integer, nullable=False, default=0)
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchBeliefSnapshotRecord(Base):
+    """Immutable historical belief state for one claim at one evaluation time."""
+
+    __tablename__ = "research_belief_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_research_belief_claim_evaluated",
+            "claim_id",
+            "evaluated_at",
+        ),
+        Index("ix_research_belief_cycle", "cycle_id"),
+        Index("ix_research_belief_final_status", "final_status"),
+        Index("ix_research_belief_fingerprint", "input_fingerprint"),
+    )
+
+    snapshot_id = Column(String, primary_key=True)
+    cycle_id = Column(
+        String,
+        ForeignKey("research_belief_cycles.cycle_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    claim_key = Column(String, nullable=False)
+    evaluated_at = Column(DateTime, nullable=False)
+    base_status = Column(String, nullable=False)
+    final_status = Column(String, nullable=False)
+    base_confidence = Column(Float, nullable=False)
+    final_confidence = Column(Float, nullable=False)
+    support_score = Column(Float, nullable=False, default=0.0)
+    contradiction_score = Column(Float, nullable=False, default=0.0)
+    falsification_coverage = Column(Float, nullable=False, default=0.0)
+    evidence_ids = Column(JSON, default=[])
+    triggered_rules = Column(JSON, default=[])
+    untestable_rules = Column(JSON, default=[])
+    dependency_failures = Column(JSON, default=[])
+    reasons = Column(JSON, default=[])
+    input_fingerprint = Column(String, nullable=False)
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchBeliefEventRecord(Base):
+    """Append-only explanation of a material belief-state transition."""
+
+    __tablename__ = "research_belief_events"
+    __table_args__ = (
+        Index(
+            "ix_research_belief_event_claim_time",
+            "claim_id",
+            "occurred_at",
+        ),
+        Index("ix_research_belief_event_type", "event_type"),
+        Index("ix_research_belief_event_cycle", "cycle_id"),
+    )
+
+    event_id = Column(String, primary_key=True)
+    cycle_id = Column(
+        String,
+        ForeignKey("research_belief_cycles.cycle_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    event_type = Column(String, nullable=False)
+    occurred_at = Column(DateTime, nullable=False)
+    previous_snapshot_id = Column(
+        String,
+        ForeignKey("research_belief_snapshots.snapshot_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    current_snapshot_id = Column(
+        String,
+        ForeignKey("research_belief_snapshots.snapshot_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    previous_status = Column(String, nullable=True)
+    current_status = Column(String, nullable=False)
+    confidence_delta = Column(Float, nullable=False, default=0.0)
+    detail = Column(Text, nullable=False, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchLoopRunRecord(Base):
+    """One bounded automatic research-loop execution."""
+
+    __tablename__ = "research_loop_runs"
+    __table_args__ = (
+        Index("ix_research_loop_run_started", "started_at"),
+        Index("ix_research_loop_run_status", "status"),
+    )
+
+    run_id = Column(String, primary_key=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    status = Column(String, nullable=False, default="running")
+    probes_planned = Column(Integer, nullable=False, default=0)
+    probes_executed = Column(Integer, nullable=False, default=0)
+    tool_calls = Column(Integer, nullable=False, default=0)
+    documents_read = Column(Integer, nullable=False, default=0)
+    evidence_added = Column(Integer, nullable=False, default=0)
+    beliefs_changed = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=False, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchProbeAttemptRecord(Base):
+    """Persisted anti-loop/cooldown record for one falsification research probe."""
+
+    __tablename__ = "research_probe_attempts"
+    __table_args__ = (
+        Index(
+            "ix_research_probe_key_attempted",
+            "probe_key",
+            "attempted_at",
+        ),
+        Index("ix_research_probe_run", "run_id"),
+        Index("ix_research_probe_status", "status"),
+    )
+
+    attempt_id = Column(String, primary_key=True)
+    run_id = Column(
+        String,
+        ForeignKey("research_loop_runs.run_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    probe_key = Column(String, nullable=False)
+    rule_id = Column(String, nullable=False)
+    claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    attempted_at = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False)
+    query = Column(Text, nullable=False, default="")
+    tool_name = Column(String, nullable=False, default="")
+    source_count = Column(Integer, nullable=False, default=0)
+    evidence_count = Column(Integer, nullable=False, default=0)
+    error_code = Column(String, nullable=False, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchAcquisitionRunRecord(Base):
+    """One bounded general claim-acquisition execution."""
+
+    __tablename__ = "research_acquisition_runs"
+    __table_args__ = (
+        Index("ix_research_acquisition_started", "started_at"),
+        Index("ix_research_acquisition_status", "status"),
+    )
+
+    run_id = Column(String, primary_key=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    status = Column(String, nullable=False, default="running")
+    seed_topic = Column(Text, nullable=False, default="")
+    documents_seen = Column(Integer, nullable=False, default=0)
+    candidates_extracted = Column(Integer, nullable=False, default=0)
+    claims_accepted = Column(Integer, nullable=False, default=0)
+    duplicates = Column(Integer, nullable=False, default=0)
+    rejected = Column(Integer, nullable=False, default=0)
+    superseded = Column(Integer, nullable=False, default=0)
+    tool_calls = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=False, default="")
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ResearchClaimCandidateRecord(Base):
+    """Audit trail for every extracted claim candidate and its admission decision."""
+
+    __tablename__ = "research_claim_candidates"
+    __table_args__ = (
+        Index("ix_research_candidate_run", "run_id"),
+        Index("ix_research_candidate_source", "source_id"),
+        Index("ix_research_candidate_decision", "decision"),
+        Index("ix_research_candidate_key", "proposed_claim_key"),
+        Index("ix_research_candidate_fingerprint", "fingerprint"),
+    )
+
+    candidate_id = Column(String, primary_key=True)
+    run_id = Column(
+        String,
+        ForeignKey("research_acquisition_runs.run_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_id = Column(
+        String,
+        ForeignKey("research_sources.source_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    fingerprint = Column(String, nullable=False)
+    quote = Column(Text, nullable=False)
+    statement = Column(Text, nullable=False)
+    proposed_claim_key = Column(String, nullable=False)
+    kind = Column(String, nullable=False)
+    observation_kind = Column(String, nullable=False)
+    confidence = Column(Float, nullable=False, default=0.5)
+    valid_from = Column(DateTime, nullable=True)
+    valid_until = Column(DateTime, nullable=True)
+    supersedes_previous = Column(Boolean, nullable=False, default=False)
+    decision = Column(String, nullable=False)
+    reason = Column(Text, nullable=False, default="")
+    accepted_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    meta = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())
+
+
+
+class ResearchClaimResolutionRecord(Base):
+    """Audit trail for semantic resolution of an acquired claim candidate."""
+
+    __tablename__ = "research_claim_resolutions"
+    __table_args__ = (
+        Index("ix_research_resolution_candidate", "candidate_id"),
+        Index("ix_research_resolution_matched_claim", "matched_claim_id"),
+        Index("ix_research_resolution_relation", "relation"),
+        Index("ix_research_resolution_created", "created_at"),
+    )
+
+    resolution_id = Column(String, primary_key=True)
+    candidate_id = Column(
+        String,
+        ForeignKey("research_claim_candidates.candidate_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    matched_claim_id = Column(
+        String,
+        ForeignKey("research_claims.claim_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    relation = Column(String, nullable=False)
+    score = Column(Float, nullable=False, default=0.0)
+    lexical_score = Column(Float, nullable=False, default=0.0)
+    key_match = Column(Boolean, nullable=False, default=False)
+    numeric_match = Column(Boolean, nullable=False, default=False)
+    period_match = Column(Boolean, nullable=False, default=False)
+    polarity_match = Column(Boolean, nullable=False, default=False)
+    reason = Column(Text, nullable=False, default="")
+    signals = Column(JSON, default={})
+    created_at = Column(DateTime, server_default=func.now())

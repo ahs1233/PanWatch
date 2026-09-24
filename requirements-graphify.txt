@@ -1,0 +1,2 @@
+# Isolated from PanWatch's FastAPI runtime on purpose.
+graphifyy[mcp]==0.9.66

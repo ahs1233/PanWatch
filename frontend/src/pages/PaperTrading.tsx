@@ -1,547 +1,768 @@
-import { useEffect, useState, useCallback } from 'react'
-import { RefreshCw, Power, RotateCcw, X, TrendingUp, TrendingDown, Trophy, BarChart3, Wallet, Activity, Play, Bell, SlidersHorizontal } from 'lucide-react'
-import {
-  paperTradingApi,
-  type PaperTradingAccountResponse,
-  type PaperTradingPositionItem,
-  type PaperTradingTradeItem,
-  type EquityCurvePoint,
-  type StrategyPerformanceItem,
-  type NotifyChannelItem,
-  type MarketView,
-} from '@panwatch/api'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Activity, RefreshCw, ShieldAlert, Target, TrendingDown, TrendingUp } from 'lucide-react'
+import { fetchAPI } from '@panwatch/api/client'
 import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Switch } from '@panwatch/base-ui/components/ui/switch'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
-import { useToast } from '@panwatch/base-ui/components/ui/toast'
 
-const EXIT_REASON_MAP: Record<string, string> = {
-  stop_loss: '止损',
-  target_price: '止盈',
-  signal_reversal: '信号反转',
-  manual: '手动平仓',
+interface PaperAccount {
+  id: number
+  week_key: string
+  initial_capital: number
+  realized_pnl: number
+  current_equity: number
+  peak_equity: number
+  max_drawdown_pct: number
+  total_trades: number
+  winning_trades: number
+  losing_trades: number
+  status: string
+  started_at: string | null
+  ended_at: string | null
 }
 
-function formatCurrency(v: number) {
-  return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+interface PaperPosition {
+  id: number
+  account_id: number
+  setup_key: string
+  side: 'long' | 'short'
+  quantity_oz: number
+  entry_price: number
+  stop_loss: number
+  target_price: number
+  current_price: number
+  unrealized_pnl: number
+  mfe_usd: number
+  mae_usd: number
+  risk_usd: number
+  setup_state: string
+  macro_relation: string
+  price_source: string
+  status: string
+  opened_at: string | null
+  closed_at: string | null
 }
 
-function PnlText({ value, suffix = '' }: { value: number; suffix?: string }) {
-  const color = value > 0 ? 'text-rose-500' : value < 0 ? 'text-emerald-500' : 'text-muted-foreground'
-  const prefix = value > 0 ? '+' : ''
-  return <span className={color}>{prefix}{formatCurrency(value)}{suffix}</span>
+interface PaperTrade {
+  id: number
+  side: 'long' | 'short'
+  quantity_oz: number
+  entry_price: number
+  exit_price: number
+  stop_loss: number
+  target_price: number
+  pnl: number
+  pnl_pct_equity: number
+  r_multiple: number
+  mfe_usd: number
+  mae_usd: number
+  risk_usd: number
+  exit_reason: string
+  setup_state: string
+  macro_relation: string
+  price_source: string
+  opened_at: string | null
+  closed_at: string | null
 }
 
-function PnlPctText({ value }: { value: number }) {
-  const color = value > 0 ? 'text-rose-500' : value < 0 ? 'text-emerald-500' : 'text-muted-foreground'
-  const prefix = value > 0 ? '+' : ''
-  return <span className={color}>{prefix}{value.toFixed(2)}%</span>
+interface PaperSignal {
+  id: number
+  setup_key: string
+  candidate: string
+  fusion_state: string
+  macro_relation: string
+  event_risk: boolean
+  price: number | null
+  accepted: boolean
+  rejection_reason: string
+  observed_at: string | null
 }
 
-function EquityChart({ data }: { data: EquityCurvePoint[] }) {
-  if (data.length < 2) {
-    return <div className="h-48 flex items-center justify-center text-muted-foreground text-sm">暂无足够数据绘制曲线</div>
+interface PaperSettings {
+  enabled: boolean
+  engine_version: string
+  initial_capital: number
+  risk_pct: number
+  reward_risk: number
+  max_leverage: number
+  max_spread_bps: number
+  max_hold_minutes: number
+  scan_seconds: number
+  timezone: string
+  entry_states: string[]
+  execution_allowed: boolean
+  storage: string
+  storage_persistent: boolean
+}
+
+interface PaperPerformance {
+  trade_count: number
+  average_r: number
+  expectancy_r: number
+  profit_factor: number | null
+  average_mfe_usd: number
+  average_mae_usd: number
+  average_win_r: number
+  average_loss_r: number
+}
+
+interface PaperWeekHistory extends PaperAccount {
+  return_pct: number
+  win_rate: number
+  performance: PaperPerformance
+}
+
+interface PaperWeeksResponse {
+  weeks: PaperWeekHistory[]
+  execution_allowed: boolean
+}
+
+interface PaperEligibility {
+  eligible: boolean
+  gate_reason: string
+  candidate: string
+  fusion_state: string
+  macro_relation: string
+  macro_bias: number
+  macro_confidence: number | null
+  event_risk: boolean
+  event_kind: string | null
+  event_name: string | null
+  event_time_utc: string | null
+  event_age_minutes: number | null
+  event_confidence: number | null
+  event_validation: string | null
+  event_policy_version: string | null
+  event_source_url: string | null
+  alignment: string
+  micro_direction: string
+  spot: {
+    price: number | null
+    bid: number | null
+    ask: number | null
+    spread_bps: number | null
+    source: string | null
+    age_seconds: number | null
+    is_stale: boolean | null
+  }
+  projected: {
+    side: 'long' | 'short'
+    entry_price: number
+    stop_loss: number
+    target_price: number
+    quantity_oz: number
+    risk_usd: number
+  } | null
+  position: PaperPosition | null
+  execution_allowed: boolean
+}
+
+interface PaperSummary {
+  account: PaperAccount | null
+  position: PaperPosition | null
+  trades: PaperTrade[]
+  signals: PaperSignal[]
+  settings: PaperSettings
+  performance: PaperPerformance
+  execution_allowed: boolean
+}
+
+function money(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '--'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
+function num(value?: number | null, digits = 2): string {
+  if (value == null || !Number.isFinite(value)) return '--'
+  return value.toFixed(digits)
+}
+
+function human(value?: string | null): string {
+  if (!value) return '--'
+  return value.replace(/_/g, ' ').replace(/^./, (c: string) => c.toUpperCase())
+}
+
+function EquityCurve({
+  initialCapital,
+  currentEquity,
+  trades,
+}: {
+  initialCapital: number
+  currentEquity: number
+  trades: PaperTrade[]
+}) {
+  const ordered = [...trades].sort((a, b) => {
+    const left = a.closed_at ? new Date(a.closed_at).getTime() : 0
+    const right = b.closed_at ? new Date(b.closed_at).getTime() : 0
+    return left - right
+  })
+
+  const values = [initialCapital]
+  let equity = initialCapital
+  for (const trade of ordered) {
+    equity += trade.pnl
+    values.push(equity)
+  }
+  const latestClosedEquity = values[values.length - 1] || initialCapital
+  if (Math.abs(latestClosedEquity - currentEquity) > 0.005) {
+    values.push(currentEquity)
   }
 
-  const width = 600
-  const height = 180
-  const pad = { top: 20, right: 20, bottom: 30, left: 60 }
-  const w = width - pad.left - pad.right
-  const h = height - pad.top - pad.bottom
-
-  const values = data.map(d => d.equity)
-  const minV = Math.min(...values)
-  const maxV = Math.max(...values)
-  const range = maxV - minV || 1
-
-  const points = data.map((d, i) => {
-    const x = pad.left + (i / (data.length - 1)) * w
-    const y = pad.top + h - ((d.equity - minV) / range) * h
-    return { x, y, ...d }
-  })
-
-  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
-  const areaD = pathD + ` L${points[points.length - 1].x},${pad.top + h} L${points[0].x},${pad.top + h} Z`
-
-  const isPositive = values[values.length - 1] >= values[0]
-  const strokeColor = isPositive ? '#f43f5e' : '#10b981'
-  const fillColor = isPositive ? 'rgba(244,63,94,0.1)' : 'rgba(16,185,129,0.1)'
-
-  // Y axis ticks
-  const yTicks = 4
-  const yLabels = Array.from({ length: yTicks + 1 }, (_, i) => {
-    const v = minV + (range / yTicks) * i
-    return { v, y: pad.top + h - (i / yTicks) * h }
-  })
-
-  // X axis labels (show first, middle, last)
-  const xIndices = [0, Math.floor(data.length / 2), data.length - 1]
-  const xLabels = xIndices.map(i => ({ label: data[i].date.slice(5), x: points[i].x }))
+  const minValue = Math.min(...values)
+  const maxValue = Math.max(...values)
+  const span = Math.max(1, maxValue - minValue)
+  const pad = Math.max(span * 0.15, initialCapital * 0.001)
+  const low = minValue - pad
+  const high = maxValue + pad
+  const range = Math.max(1, high - low)
+  const denominator = Math.max(1, values.length - 1)
+  const points = values
+    .map((value, index) => {
+      const x = (index / denominator) * 100
+      const y = 34 - ((value - low) / range) * 30
+      return `${x.toFixed(2)},${y.toFixed(2)}`
+    })
+    .join(' ')
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
-      {/* Grid lines */}
-      {yLabels.map((t, i) => (
-        <g key={i}>
-          <line x1={pad.left} x2={width - pad.right} y1={t.y} y2={t.y} stroke="hsl(var(--border))" strokeWidth={0.5} />
-          <text x={pad.left - 6} y={t.y + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10}>
-            {(t.v / 10000).toFixed(1)}万
-          </text>
-        </g>
-      ))}
-      {/* Area */}
-      <path d={areaD} fill={fillColor} />
-      {/* Line */}
-      <path d={pathD} fill="none" stroke={strokeColor} strokeWidth={2} />
-      {/* X labels */}
-      {xLabels.map((l, i) => (
-        <text key={i} x={l.x} y={height - 6} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={10}>
-          {l.label}
-        </text>
-      ))}
-    </svg>
+    <div>
+      <div className="mb-2 flex items-end justify-between gap-3">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Equity curve</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">
+            {ordered.length} closed trade{ordered.length === 1 ? '' : 's'} · live equity included
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="font-mono text-[16px] font-semibold">{money(currentEquity)}</div>
+          <div className="text-[10px] text-muted-foreground">
+            Range {money(minValue)} → {money(maxValue)}
+          </div>
+        </div>
+      </div>
+      <div className="h-40 w-full rounded-xl bg-accent/25 p-2">
+        <svg viewBox="0 0 100 36" className="h-full w-full overflow-visible" role="img" aria-label="Paper trading equity curve">
+          <line x1="0" x2="100" y1="34" y2="34" className="stroke-border" strokeWidth="0.35" />
+          <polyline
+            points={points}
+            fill="none"
+            vectorEffect="non-scaling-stroke"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="text-primary"
+          />
+          {values.map((value, index) => {
+            const x = (index / denominator) * 100
+            const y = 34 - ((value - low) / range) * 30
+            return (
+              <circle
+                key={`${index}-${value}`}
+                cx={x}
+                cy={y}
+                r="0.75"
+                fill="currentColor"
+                className="text-primary"
+              />
+            )
+          })}
+        </svg>
+      </div>
+    </div>
   )
 }
 
+function dateTime(value?: string | null): string {
+  if (!value) return '--'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleString()
+}
+
 export default function PaperTradingPage() {
-  const { toast } = useToast()
-  const [account, setAccount] = useState<PaperTradingAccountResponse | null>(null)
-  const [positions, setPositions] = useState<PaperTradingPositionItem[]>([])
-  const [trades, setTrades] = useState<PaperTradingTradeItem[]>([])
-  const [tradesTotal, setTradesTotal] = useState(0)
-  const [equityCurve, setEquityCurve] = useState<EquityCurvePoint[]>([])
-  const [strategyPerf, setStrategyPerf] = useState<StrategyPerformanceItem[]>([])
+  const [data, setData] = useState<PaperSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
-  const [tradesPage, setTradesPage] = useState(0)
-  const tradesPageSize = 20
+  const [error, setError] = useState('')
+  const [weeks, setWeeks] = useState<PaperWeekHistory[]>([])
+  const [eligibility, setEligibility] = useState<PaperEligibility | null>(null)
 
-  // 市场视图（分段单选，切换即按该市场口径刷新统计）
-  const [marketView, setMarketView] = useState<MarketView>('ALL')
-
-  // 资金配置
-  const [configOpen, setConfigOpen] = useState(false)
-  const [cfgTotal, setCfgTotal] = useState('')
-  const [cfgRatios, setCfgRatios] = useState<{ CN: string; HK: string; US: string }>({ CN: '', HK: '', US: '' })
-  const [cfgSaving, setCfgSaving] = useState(false)
-
-  // 通知设置
-  const [tradesOpen, setTradesOpen] = useState(false)
-  const [notifyOpen, setNotifyOpen] = useState(false)
-  const [notifyEnabled, setNotifyEnabled] = useState(false)
-  const [notifyRealtime, setNotifyRealtime] = useState(true)
-  const [notifyPremarket, setNotifyPremarket] = useState(true)
-  const [notifySummary, setNotifySummary] = useState(true)
-  const [notifyChannels, setNotifyChannels] = useState<NotifyChannelItem[]>([])
-  const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set())
-  const [notifySaving, setNotifySaving] = useState(false)
-  const [notifyTesting, setNotifyTesting] = useState(false)
-
-  const loadData = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true)
+    setError('')
     try {
-      const mkt = marketView === 'ALL' ? undefined : marketView
-      const [acc, pos, tradeData, metrics] = await Promise.all([
-        paperTradingApi.getAccount(mkt),
-        paperTradingApi.listPositions('open', mkt),
-        paperTradingApi.listTrades(tradesPageSize, tradesPage * tradesPageSize, mkt),
-        paperTradingApi.getMetrics(mkt),
+      const [result, history] = await Promise.all([
+        fetchAPI<PaperSummary>('/xau/paper/summary?trade_limit=50&signal_limit=50', {
+          timeoutMs: 30000,
+        }),
+        fetchAPI<PaperWeeksResponse>('/xau/paper/weeks?limit=12', {
+          timeoutMs: 30000,
+        }),
       ])
-      setAccount(acc)
-      setPositions(pos)
-      setTrades(tradeData.items)
-      setTradesTotal(tradeData.total)
-      setEquityCurve(metrics.equity_curve)
-      setStrategyPerf(metrics.strategy_performance || [])
-    } catch {
-      toast('加载失败', 'error')
+      setData(result)
+      setWeeks(history.weeks || [])
+
+      try {
+        const liveEligibility = await fetchAPI<PaperEligibility>('/xau/paper/eligibility', {
+          timeoutMs: 30000,
+        })
+        setEligibility(liveEligibility)
+      } catch {
+        setEligibility(null)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Paper league unavailable')
     } finally {
       setLoading(false)
     }
-  }, [tradesPage, marketView])
+  }, [])
 
-  useEffect(() => { loadData() }, [loadData])
-
-  const handleToggle = async () => {
-    if (!account) return
-    try {
-      const res = await paperTradingApi.toggleAccount(!account.enabled)
-      setAccount(res)
-      toast(res.enabled ? '模拟盘已启动' : '模拟盘已暂停', 'success')
-    } catch {
-      toast('操作失败', 'error')
-    }
-  }
-
-  const handleReset = async () => {
-    if (!confirm('确定重置模拟盘？所有持仓和交易记录将被清空。')) return
-    try {
-      await paperTradingApi.resetAccount()
-      toast('模拟盘已重置', 'success')
-      loadData()
-    } catch {
-      toast('重置失败', 'error')
-    }
-  }
-
-  const handleScan = async () => {
+  const scan = useCallback(async () => {
     setScanning(true)
+    setError('')
     try {
-      const res = await paperTradingApi.scan()
-      toast(`扫描完成: 建仓 ${res.opened ?? 0} 笔, 平仓 ${res.closed ?? 0} 笔`, 'success')
-      loadData()
-    } catch {
-      toast('扫描失败', 'error')
+      await fetchAPI('/xau/paper/scan', {
+        method: 'POST',
+        timeoutMs: 120000,
+      })
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Paper scan failed')
     } finally {
       setScanning(false)
     }
-  }
+  }, [load])
 
-  const handleClosePosition = async (id: number) => {
-    try {
-      await paperTradingApi.closePosition(id)
-      toast('平仓成功', 'success')
-      loadData()
-    } catch {
-      toast('平仓失败', 'error')
-    }
-  }
+  useEffect(() => {
+    void load()
+    const timer = window.setInterval(() => {
+      void load()
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [load])
 
-  const handleOpenConfig = async () => {
-    setConfigOpen(true)
-    try {
-      // 以"全部"口径取总资金与各市场比例
-      const acc = await paperTradingApi.getAccount()
-      setCfgTotal(String(Math.round(acc.initial_capital)))
-      const a = acc.market_allocations || {}
-      setCfgRatios({
-        CN: String(Math.round((a.CN ?? 0) * 100)),
-        HK: String(Math.round((a.HK ?? 0) * 100)),
-        US: String(Math.round((a.US ?? 0) * 100)),
-      })
-    } catch {
-      toast('加载配置失败', 'error')
-    }
-  }
+  const account = data?.account
+  const position = data?.position
+  const winRate = useMemo(() => {
+    if (!account?.total_trades) return 0
+    return (account.winning_trades / account.total_trades) * 100
+  }, [account])
 
-  const handleSaveConfig = async () => {
-    const total = Number(cfgTotal)
-    const cn = Number(cfgRatios.CN) || 0
-    const hk = Number(cfgRatios.HK) || 0
-    const us = Number(cfgRatios.US) || 0
-    if (!(total > 0)) {
-      toast('总资金需大于 0', 'error')
-      return
-    }
-    if (cn + hk + us > 100) {
-      toast('比例合计不能超过 100%', 'error')
-      return
-    }
-    setCfgSaving(true)
-    try {
-      await paperTradingApi.updateSettings({
-        initial_capital: total,
-        market_allocations: { CN: cn / 100, HK: hk / 100, US: us / 100 },
-      })
-      toast('资金配置已保存', 'success')
-      setConfigOpen(false)
-      loadData()
-    } catch {
-      toast('保存失败', 'error')
-    } finally {
-      setCfgSaving(false)
-    }
-  }
-
-  const loadNotifySettings = async () => {
-    try {
-      const data = await paperTradingApi.getNotifySettings()
-      const s = data.settings
-      setNotifyEnabled(s.pt_notify_enabled === 'true')
-      setNotifyRealtime(s.pt_notify_realtime === 'true')
-      setNotifyPremarket(s.pt_notify_premarket === 'true')
-      setNotifySummary(s.pt_notify_summary === 'true')
-      setNotifyChannels(data.channels)
-      const ids = s.pt_notify_channel_ids
-        ? new Set(s.pt_notify_channel_ids.split(',').map(Number).filter(Boolean))
-        : new Set<number>()
-      setSelectedChannelIds(ids)
-    } catch {
-      toast('加载通知配置失败', 'error')
-    }
-  }
-
-  const handleOpenNotify = async () => {
-    setNotifyOpen(true)
-    await loadNotifySettings()
-  }
-
-  const handleSaveNotify = async () => {
-    setNotifySaving(true)
-    try {
-      await paperTradingApi.updateNotifySettings({
-        pt_notify_enabled: notifyEnabled ? 'true' : 'false',
-        pt_notify_channel_ids: Array.from(selectedChannelIds).join(','),
-        pt_notify_realtime: notifyRealtime ? 'true' : 'false',
-        pt_notify_premarket: notifyPremarket ? 'true' : 'false',
-        pt_notify_summary: notifySummary ? 'true' : 'false',
-      })
-      toast('通知配置已保存', 'success')
-      setNotifyOpen(false)
-    } catch {
-      toast('保存失败', 'error')
-    } finally {
-      setNotifySaving(false)
-    }
-  }
-
-  const handleTestNotify = async () => {
-    setNotifyTesting(true)
-    try {
-      await paperTradingApi.testNotify()
-      toast('测试通知已发送', 'success')
-    } catch {
-      toast('测试通知发送失败', 'error')
-    } finally {
-      setNotifyTesting(false)
-    }
-  }
-
-  const toggleChannel = (id: number) => {
-    setSelectedChannelIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  const totalPages = Math.ceil(tradesTotal / tradesPageSize)
-  const ratioSum = (Number(cfgRatios.CN) || 0) + (Number(cfgRatios.HK) || 0) + (Number(cfgRatios.US) || 0)
+  const returnPct = useMemo(() => {
+    if (!account?.initial_capital) return 0
+    return ((account.current_equity - account.initial_capital) / account.initial_capital) * 100
+  }, [account])
 
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shrink-0">
-            <Activity className="w-4 h-4 text-white" />
-          </div>
-          <h1 className="text-lg font-bold">模拟盘</h1>
-          {account && (
-            <span className={`text-xs px-2 py-0.5 rounded-full ${account.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>
-              {account.enabled ? '运行中' : '已暂停'}
+    <div className="page-container pb-10">
+      <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="mb-2 flex items-center gap-2">
+            <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold tracking-[0.14em] text-primary">
+              XAU PAPER LEAGUE
             </span>
-          )}
+            <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-500">
+              WEEKLY $10K
+            </span>
+            <span className="rounded-full bg-accent/50 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+              AUTO · 60s
+            </span>
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Gold Paper Trading</h1>
+          <p className="mt-1 max-w-3xl text-[13px] leading-6 text-muted-foreground">
+            A separate weekly XAU/USD simulation account. It uses conservative indicative bid/ask fills,
+            explicit risk rules, and never routes a live order.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          {tradesTotal > 0 && (
-            <Button variant="outline" size="sm" className="h-8" onClick={() => setTradesOpen(true)}>
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline ml-1">平仓记录 ({tradesTotal})</span>
-              <span className="sm:hidden ml-1">{tradesTotal}</span>
-            </Button>
-          )}
-          <Button variant="outline" size="sm" className="h-8" onClick={handleOpenNotify}>
-            <Bell className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline ml-1">通知</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
           </Button>
-          <Button variant="outline" size="sm" className="h-8" onClick={handleScan} disabled={scanning}>
-            <Play className="w-3.5 h-3.5 mr-1" />
-            <span className="hidden sm:inline">{scanning ? '扫描中...' : '立即扫描'}</span>
-            <span className="sm:hidden">{scanning ? '扫描中' : '扫描'}</span>
-          </Button>
-          <Button variant="outline" size="sm" className="h-8" onClick={loadData} disabled={loading}>
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline ml-1">刷新</span>
-          </Button>
-          <Button variant="outline" size="sm" className="h-8" onClick={handleToggle}>
-            <Power className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline ml-1">{account?.enabled ? '暂停' : '启动'}</span>
-          </Button>
-          <Button variant="outline" size="sm" className="h-8 text-destructive hover:text-destructive" onClick={handleReset}>
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline ml-1">重置</span>
+          <Button onClick={() => void scan()} disabled={scanning}>
+            <Activity className={`mr-2 h-4 w-4 ${scanning ? 'animate-pulse' : ''}`} />
+            Run paper scan
           </Button>
         </div>
       </div>
 
-      {/* Market View Filter + 资金配置 */}
-      {account && (
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground text-xs">交易市场:</span>
-            {(['ALL', 'CN', 'HK', 'US'] as const).map(m => {
-              const label = m === 'ALL' ? '全部' : m === 'CN' ? 'A股' : m === 'HK' ? '港股' : '美股'
-              const active = marketView === m
-              const ratio = m !== 'ALL' ? account.market_allocations?.[m] : undefined
-              const isOff = m !== 'ALL' && (ratio ?? 0) <= 0
-              return (
-                <button
-                  key={m}
-                  onClick={() => setMarketView(m)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                    active
-                      ? 'bg-primary text-primary-foreground'
-                      : isOff
-                      ? 'bg-muted/50 text-muted-foreground'
-                      : 'bg-primary/10 text-primary ring-1 ring-primary/20'
-                  }`}
-                >
-                  {label}{m !== 'ALL' && ratio != null ? ` ${Math.round(ratio * 100)}%` : ''}
-                </button>
-              )
-            })}
-          </div>
-          <Button variant="outline" size="sm" className="h-8" onClick={handleOpenConfig}>
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline ml-1">资金配置</span>
-          </Button>
-        </div>
-      )}
-
-      {/* Summary Cards */}
-      {account && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
-              <Wallet className="w-3.5 h-3.5" />
-              总资产
+      <div className="mb-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/8 p-4">
+        <div className="flex items-start gap-3">
+          <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
+          <div>
+            <div className="text-[13px] font-semibold">Simulation boundary is enforced</div>
+            <div className="mt-1 text-[12px] leading-5 text-muted-foreground">
+              Paper fills may use indicative XAU/USD bid/ask data. execution_allowed=false is hard-coded for this
+              engine. A broker execution adapter is not connected.
             </div>
-            <div className="text-lg font-bold">{formatCurrency(account.total_equity)}</div>
-          </div>
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
-              {account.total_pnl >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-              总收益
-            </div>
-            <div className="text-lg font-bold"><PnlText value={account.total_pnl} /></div>
-          </div>
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
-              <Trophy className="w-3.5 h-3.5" />
-              胜率
-            </div>
-            <div className="text-lg font-bold">{account.win_rate.toFixed(1)}%</div>
-            <div className="text-xs text-muted-foreground">{account.winning_trades}/{account.total_trades} 笔</div>
-          </div>
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
-              <BarChart3 className="w-3.5 h-3.5" />
-              最大回撤
-            </div>
-            <div className="text-lg font-bold text-emerald-500">{account.max_drawdown_pct.toFixed(2)}%</div>
-          </div>
-          <div className="card p-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
-              <Wallet className="w-3.5 h-3.5" />
-              可用资金
-            </div>
-            <div className="text-lg font-bold">{formatCurrency(account.current_capital)}</div>
           </div>
         </div>
-      )}
-
-      {/* Equity Curve */}
-      <div className="card p-4">
-        <h2 className="text-sm font-semibold mb-3">收益曲线</h2>
-        <EquityChart data={equityCurve} />
       </div>
 
-      {/* Strategy Performance */}
-      {strategyPerf.length > 0 && (
+      {data && !data.settings.storage_persistent && (
+        <div className="mb-4 rounded-2xl border border-amber-500/25 bg-amber-500/8 p-4">
+          <div className="text-[13px] font-semibold text-amber-500">Storage is temporary</div>
+          <div className="mt-1 text-[12px] leading-5 text-muted-foreground">
+            The engine is running, but weekly history is currently on local SQLite and may reset after a deployment.
+            Durable Neon storage becomes active automatically when XAU_PAPER_DATABASE_URL is configured.
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/8 p-4 text-[13px] text-rose-500">
+          {error}
+        </div>
+      )}
+
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-8">
         <div className="card p-4">
-          <h2 className="text-sm font-semibold mb-3">策略绩效</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-muted-foreground text-xs">
-                  <th className="text-left py-2 pr-3">策略</th>
-                  <th className="text-right py-2 px-2">已平仓</th>
-                  <th className="text-right py-2 px-2">胜率</th>
-                  <th className="text-right py-2 px-2">已实现盈亏</th>
-                  <th className="text-right py-2 px-2">平均盈亏%</th>
-                  <th className="text-right py-2 px-2">平均持仓天数</th>
-                  <th className="text-right py-2 px-2">持仓中</th>
-                  <th className="text-right py-2 pl-2">浮动盈亏</th>
-                </tr>
-              </thead>
-              <tbody>
-                {strategyPerf.map(s => (
-                  <tr key={s.strategy_code} className="border-b border-border/50 hover:bg-accent/30">
-                    <td className="py-2 pr-3 font-medium">{s.strategy_code}</td>
-                    <td className="text-right py-2 px-2">{s.total_trades}</td>
-                    <td className="text-right py-2 px-2">
-                      {s.total_trades > 0 ? (
-                        <span className={s.win_rate >= 50 ? 'text-rose-500' : s.win_rate > 0 ? 'text-amber-500' : 'text-muted-foreground'}>
-                          {s.win_rate.toFixed(1)}%
-                        </span>
-                      ) : '-'}
-                    </td>
-                    <td className="text-right py-2 px-2"><PnlText value={s.total_pnl} /></td>
-                    <td className="text-right py-2 px-2"><PnlPctText value={s.avg_pnl_pct} /></td>
-                    <td className="text-right py-2 px-2">{s.total_trades > 0 ? `${s.avg_holding_days}天` : '-'}</td>
-                    <td className="text-right py-2 px-2">{s.open_positions > 0 ? s.open_positions : '-'}</td>
-                    <td className="text-right py-2 pl-2">
-                      {s.open_positions > 0 ? <PnlText value={s.unrealized_pnl} /> : '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Week</div>
+          <div className="mt-2 text-[18px] font-bold">{account?.week_key || '--'}</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            {data?.settings?.timezone || 'Asia/Baghdad'} · v{data?.settings?.engine_version || '--'} · {data?.settings?.storage_persistent ? 'NEON PERSISTENT' : 'LOCAL FALLBACK'}
           </div>
         </div>
-      )}
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Equity</div>
+          <div className="mt-2 font-mono text-[20px] font-bold">{money(account?.current_equity)}</div>
+          <div className={`mt-1 text-[11px] ${returnPct >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+            {returnPct >= 0 ? '+' : ''}{num(returnPct, 2)}%
+          </div>
+        </div>
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Realized P/L</div>
+          <div className={`mt-2 font-mono text-[20px] font-bold ${(account?.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+            {money(account?.realized_pnl)}
+          </div>
+          <div className="mt-1 text-[10px] text-muted-foreground">{account?.total_trades || 0} closed trades</div>
+        </div>
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Win rate</div>
+          <div className="mt-2 text-[20px] font-bold">{num(winRate, 1)}%</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            {account?.winning_trades || 0}W · {account?.losing_trades || 0}L
+          </div>
+        </div>
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Max drawdown</div>
+          <div className="mt-2 text-[20px] font-bold text-amber-500">{num(account?.max_drawdown_pct, 2)}%</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">Peak {money(account?.peak_equity)}</div>
+        </div>
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Risk model</div>
+          <div className="mt-2 text-[18px] font-bold">{num((data?.settings?.risk_pct || 0) * 100, 1)}% / trade</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            {num(data?.settings?.reward_risk, 1)}R · {num(data?.settings?.max_leverage, 1)}× · ≤{num(data?.settings?.max_spread_bps, 1)} bps · {num(data?.settings?.max_hold_minutes, 0)}m
+          </div>
+        </div>
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Expectancy</div>
+          <div className={`mt-2 text-[20px] font-bold ${(data?.performance?.expectancy_r || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+            {num(data?.performance?.expectancy_r, 2)}R
+          </div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            Avg win {num(data?.performance?.average_win_r, 2)}R · avg loss {num(data?.performance?.average_loss_r, 2)}R
+          </div>
+        </div>
+        <div className="card p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Profit factor</div>
+          <div className="mt-2 text-[20px] font-bold">
+            {data?.performance?.profit_factor == null ? '--' : num(data.performance.profit_factor, 2)}
+          </div>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            Avg MFE {money(data?.performance?.average_mfe_usd)} · MAE {money(data?.performance?.average_mae_usd)}
+          </div>
+        </div>
+      </div>
 
-      {/* Open Positions */}
-      <div className="card p-4">
-        <h2 className="text-sm font-semibold mb-3">当前持仓 ({positions.length})</h2>
-        {positions.length === 0 ? (
-          <div className="text-center text-muted-foreground text-sm py-8">暂无持仓</div>
+      <div className="card mb-4 p-4">
+        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-[14px] font-semibold">Live entry eligibility</h2>
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${
+                eligibility == null
+                  ? 'bg-accent/60 text-muted-foreground'
+                  : eligibility.eligible
+                    ? 'bg-emerald-500/10 text-emerald-500'
+                    : 'bg-amber-500/10 text-amber-500'
+              }`}>
+                {eligibility == null ? 'UNAVAILABLE' : eligibility.eligible ? 'ELIGIBLE' : 'BLOCKED'}
+              </span>
+              <span className="rounded-full bg-accent/50 px-2.5 py-1 text-[10px] text-muted-foreground">
+                PAPER ONLY
+              </span>
+            </div>
+            <div className="mt-1 text-[12px] text-muted-foreground">
+              Exact same gates used by the paper engine. No separate UI scoring.
+            </div>
+          </div>
+          <div className="text-left md:text-right">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Gate reason</div>
+            <div className={`mt-1 text-[13px] font-semibold ${eligibility?.eligible ? 'text-emerald-500' : 'text-amber-500'}`}>
+              {eligibility == null ? 'Live check unavailable' : human(eligibility.gate_reason)}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8">
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Candidate</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.candidate)}</div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Fusion</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.fusion_state)}</div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Alignment</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.alignment)}</div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Micro</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.micro_direction)}</div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Macro</div>
+            <div className="mt-1 text-[12px] font-semibold">{human(eligibility?.macro_relation)}</div>
+            <div className="mt-0.5 text-[9px] text-muted-foreground">
+              confidence {num(eligibility?.macro_confidence, 2)}
+            </div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Bid / Ask</div>
+            <div className="mt-1 font-mono text-[12px]">
+              {num(eligibility?.spot?.bid)} / {num(eligibility?.spot?.ask)}
+            </div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Spread</div>
+            <div className="mt-1 font-mono text-[12px]">{num(eligibility?.spot?.spread_bps, 2)} bps</div>
+            <div className="mt-0.5 text-[9px] text-muted-foreground">
+              limit ≤{num(data?.settings?.max_spread_bps, 1)}
+            </div>
+          </div>
+          <div className="rounded-xl bg-accent/30 p-3">
+            <div className="text-[10px] text-muted-foreground">Spot</div>
+            <div className="mt-1 font-mono text-[12px]">{num(eligibility?.spot?.price)}</div>
+            <div className="mt-0.5 truncate text-[9px] text-muted-foreground">
+              {eligibility?.spot?.source || '--'}
+            </div>
+          </div>
+        </div>
+
+        {eligibility?.projected && (
+          <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-emerald-500/15 bg-emerald-500/5 p-3 md:grid-cols-6">
+            <div>
+              <div className="text-[10px] text-muted-foreground">Projected side</div>
+              <div className={`mt-1 text-[12px] font-semibold uppercase ${eligibility.projected.side === 'long' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                {eligibility.projected.side}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Entry</div>
+              <div className="mt-1 font-mono text-[12px]">{num(eligibility.projected.entry_price)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Stop</div>
+              <div className="mt-1 font-mono text-[12px] text-rose-500">{num(eligibility.projected.stop_loss)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Target</div>
+              <div className="mt-1 font-mono text-[12px] text-emerald-500">{num(eligibility.projected.target_price)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Size</div>
+              <div className="mt-1 font-mono text-[12px]">{num(eligibility.projected.quantity_oz, 4)} oz</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground">Risk</div>
+              <div className="mt-1 font-mono text-[12px]">{money(eligibility.projected.risk_usd)}</div>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-3 text-[10px] text-muted-foreground">
+          Event risk: {eligibility?.event_risk ? 'ACTIVE' : 'clear'} · validation {human(eligibility?.event_validation)}
+          {eligibility?.event_name ? ` · ${eligibility.event_name}` : ''}
+          {eligibility?.event_time_utc ? ` · ${dateTime(eligibility.event_time_utc)}` : ''}
+          {eligibility?.event_kind === 'breaking' && eligibility?.event_age_minutes != null ? ` · age ${num(eligibility.event_age_minutes, 0)}m` : ''}
+          {eligibility?.event_policy_version ? ` · policy ${eligibility.event_policy_version}` : ''}
+          {' · '}quote age {num(eligibility?.spot?.age_seconds, 0)}s · live execution remains locked.
+        </div>
+      </div>
+
+      <div className="card mb-4 p-4">
+        <EquityCurve
+          initialCapital={account?.initial_capital || data?.settings?.initial_capital || 10_000}
+          currentEquity={account?.current_equity || data?.settings?.initial_capital || 10_000}
+          trades={data?.trades || []}
+        />
+      </div>
+
+      <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-12">
+        <div className="card p-4 lg:col-span-5">
+          <div className="mb-4 flex items-center gap-2">
+            <Target className="h-4 w-4 text-primary" />
+            <h2 className="text-[14px] font-semibold">Open position</h2>
+          </div>
+
+          {!position ? (
+            <div className="rounded-xl bg-accent/30 p-5 text-center text-[12px] text-muted-foreground">
+              Flat. The engine waits for an eligible setup.
+            </div>
+          ) : (
+            <div>
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className={`flex items-center gap-2 text-[18px] font-bold uppercase ${position.side === 'long' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                    {position.side === 'long' ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />}
+                    {position.side}
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted-foreground">{human(position.setup_state)}</div>
+                </div>
+                <div className={`font-mono text-[20px] font-bold ${position.unrealized_pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                  {money(position.unrealized_pnl)}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-[12px]">
+                <div className="rounded-xl bg-accent/30 p-3">
+                  <div className="text-muted-foreground">Entry</div>
+                  <div className="mt-1 font-mono">{num(position.entry_price)}</div>
+                </div>
+                <div className="rounded-xl bg-accent/30 p-3">
+                  <div className="text-muted-foreground">Mark</div>
+                  <div className="mt-1 font-mono">{num(position.current_price)}</div>
+                </div>
+                <div className="rounded-xl bg-accent/30 p-3">
+                  <div className="text-muted-foreground">Stop</div>
+                  <div className="mt-1 font-mono text-rose-500">{num(position.stop_loss)}</div>
+                </div>
+                <div className="rounded-xl bg-accent/30 p-3">
+                  <div className="text-muted-foreground">Target</div>
+                  <div className="mt-1 font-mono text-emerald-500">{num(position.target_price)}</div>
+                </div>
+                <div className="rounded-xl bg-accent/30 p-3">
+                  <div className="text-muted-foreground">Size</div>
+                  <div className="mt-1 font-mono">{num(position.quantity_oz, 4)} oz</div>
+                </div>
+                <div className="rounded-xl bg-accent/30 p-3">
+                  <div className="text-muted-foreground">Initial risk</div>
+                  <div className="mt-1 font-mono">{money(position.risk_usd)}</div>
+                </div>
+                <div className="rounded-xl bg-accent/30 p-3">
+                  <div className="text-muted-foreground">MFE</div>
+                  <div className="mt-1 font-mono text-emerald-500">{money(position.mfe_usd)}</div>
+                </div>
+                <div className="rounded-xl bg-accent/30 p-3">
+                  <div className="text-muted-foreground">MAE</div>
+                  <div className="mt-1 font-mono text-rose-500">{money(position.mae_usd)}</div>
+                </div>
+              </div>
+
+              <div className="mt-3 text-[10px] text-muted-foreground">
+                {position.price_source} · opened {dateTime(position.opened_at)}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="card p-4 lg:col-span-7">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-[14px] font-semibold">Recent closed trades</h2>
+            <span className="text-[10px] text-muted-foreground">{data?.trades?.length || 0} shown</span>
+          </div>
+          {!data?.trades?.length ? (
+            <div className="rounded-xl bg-accent/30 p-5 text-center text-[12px] text-muted-foreground">
+              No closed XAU paper trades this week yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-[11px]">
+                <thead className="text-left text-muted-foreground">
+                  <tr className="border-b border-border/60">
+                    <th className="pb-2 pr-3">Side</th>
+                    <th className="pb-2 pr-3">Entry → Exit</th>
+                    <th className="pb-2 pr-3">P/L</th>
+                    <th className="pb-2 pr-3">R</th>
+                    <th className="pb-2 pr-3">MFE / MAE</th>
+                    <th className="pb-2 pr-3">Reason</th>
+                    <th className="pb-2">Closed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.trades.map((trade) => (
+                    <tr key={trade.id} className="border-b border-border/40">
+                      <td className={`py-3 pr-3 font-semibold uppercase ${trade.side === 'long' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                        {trade.side}
+                      </td>
+                      <td className="py-3 pr-3 font-mono">{num(trade.entry_price)} → {num(trade.exit_price)}</td>
+                      <td className={`py-3 pr-3 font-mono font-semibold ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                        {money(trade.pnl)}
+                      </td>
+                      <td className="py-3 pr-3 font-mono">{num(trade.r_multiple, 2)}R</td>
+                      <td className="py-3 pr-3 font-mono">
+                        <span className="text-emerald-500">{money(trade.mfe_usd)}</span>
+                        {' / '}
+                        <span className="text-rose-500">{money(trade.mae_usd)}</span>
+                      </td>
+                      <td className="py-3 pr-3">{human(trade.exit_reason)}</td>
+                      <td className="py-3 text-muted-foreground">{dateTime(trade.closed_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="card mb-4 p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-[14px] font-semibold">Weekly history</h2>
+          <span className="text-[10px] text-muted-foreground">Last {weeks.length || 0} league weeks</span>
+        </div>
+        {!weeks.length ? (
+          <div className="rounded-xl bg-accent/30 p-5 text-center text-[12px] text-muted-foreground">
+            Weekly history will build automatically as each Baghdad-time week closes.
+          </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-muted-foreground text-xs">
-                  <th className="text-left py-2 pr-3">股票</th>
-                  <th className="text-right py-2 px-2">入场价</th>
-                  <th className="text-right py-2 px-2">现价</th>
-                  <th className="text-right py-2 px-2">浮动盈亏</th>
-                  <th className="text-right py-2 px-2">止损</th>
-                  <th className="text-right py-2 px-2">止盈</th>
-                  <th className="text-left py-2 px-2">策略</th>
-                  <th className="text-right py-2 px-2">持仓天数</th>
-                  <th className="text-right py-2 pl-2">操作</th>
+            <table className="w-full min-w-[820px] text-[11px]">
+              <thead className="text-left text-muted-foreground">
+                <tr className="border-b border-border/60">
+                  <th className="pb-2 pr-3">Week</th>
+                  <th className="pb-2 pr-3">Equity</th>
+                  <th className="pb-2 pr-3">Return</th>
+                  <th className="pb-2 pr-3">Trades</th>
+                  <th className="pb-2 pr-3">Win rate</th>
+                  <th className="pb-2 pr-3">Expectancy</th>
+                  <th className="pb-2 pr-3">Profit factor</th>
+                  <th className="pb-2">Max DD</th>
                 </tr>
               </thead>
               <tbody>
-                {positions.map(p => (
-                  <tr key={p.id} className="border-b border-border/50 hover:bg-accent/30">
-                    <td className="py-2 pr-3">
-                      <div className="font-medium">{p.stock_name || p.stock_symbol}</div>
-                      <div className="text-xs text-muted-foreground">{p.stock_symbol} · {p.stock_market}</div>
+                {weeks.map((week) => (
+                  <tr key={week.id} className="border-b border-border/40">
+                    <td className="py-3 pr-3 font-semibold">{week.week_key}</td>
+                    <td className="py-3 pr-3 font-mono">{money(week.current_equity)}</td>
+                    <td className={`py-3 pr-3 font-mono font-semibold ${week.return_pct >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {week.return_pct >= 0 ? '+' : ''}{num(week.return_pct, 2)}%
                     </td>
-                    <td className="text-right py-2 px-2">{p.entry_price.toFixed(2)}</td>
-                    <td className="text-right py-2 px-2">{p.current_price?.toFixed(2) ?? '-'}</td>
-                    <td className="text-right py-2 px-2">
-                      <PnlText value={p.unrealized_pnl} />
-                      <div className="text-xs"><PnlPctText value={p.unrealized_pnl_pct} /></div>
+                    <td className="py-3 pr-3">{week.total_trades}</td>
+                    <td className="py-3 pr-3">{num(week.win_rate, 1)}%</td>
+                    <td className={`py-3 pr-3 font-mono ${week.performance.expectancy_r >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {num(week.performance.expectancy_r, 2)}R
                     </td>
-                    <td className="text-right py-2 px-2">{p.stop_loss?.toFixed(2) ?? '-'}</td>
-                    <td className="text-right py-2 px-2">{p.target_price?.toFixed(2) ?? '-'}</td>
-                    <td className="py-2 px-2 text-xs text-muted-foreground">{p.strategy_code || '-'}</td>
-                    <td className="text-right py-2 px-2">{p.holding_days}天</td>
-                    <td className="text-right py-2 pl-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-destructive hover:text-destructive"
-                        onClick={() => handleClosePosition(p.id)}
-                      >
-                        <X className="w-3.5 h-3.5 mr-0.5" />
-                        平仓
-                      </Button>
+                    <td className="py-3 pr-3 font-mono">
+                      {week.performance.profit_factor == null ? '--' : num(week.performance.profit_factor, 2)}
                     </td>
+                    <td className="py-3 font-mono text-amber-500">{num(week.max_drawdown_pct, 2)}%</td>
                   </tr>
                 ))}
               </tbody>
@@ -550,228 +771,41 @@ export default function PaperTradingPage() {
         )}
       </div>
 
-      {/* Trade History Dialog */}
-      <Dialog open={tradesOpen} onOpenChange={setTradesOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>已平仓记录 ({tradesTotal})</DialogTitle>
-            <DialogDescription>历史交易详情</DialogDescription>
-          </DialogHeader>
-          {trades.length === 0 ? (
-            <div className="text-center text-muted-foreground text-sm py-8">暂无交易记录</div>
-          ) : (
-            <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-muted-foreground text-xs">
-                      <th className="text-left py-2 pr-3">股票</th>
-                      <th className="text-right py-2 px-2">入场价</th>
-                      <th className="text-right py-2 px-2">出场价</th>
-                      <th className="text-right py-2 px-2">盈亏</th>
-                      <th className="text-right py-2 px-2">盈亏%</th>
-                      <th className="text-left py-2 px-2">出场原因</th>
-                      <th className="text-left py-2 px-2">策略</th>
-                      <th className="text-right py-2 px-2">持仓天数</th>
-                      <th className="text-right py-2 pl-2">平仓时间</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trades.map(t => (
-                      <tr key={t.id} className="border-b border-border/50 hover:bg-accent/30">
-                        <td className="py-2 pr-3">
-                          <div className="font-medium">{t.stock_name || t.stock_symbol}</div>
-                          <div className="text-xs text-muted-foreground">{t.stock_symbol} · {t.stock_market}</div>
-                        </td>
-                        <td className="text-right py-2 px-2">{t.entry_price.toFixed(2)}</td>
-                        <td className="text-right py-2 px-2">{t.exit_price.toFixed(2)}</td>
-                        <td className="text-right py-2 px-2"><PnlText value={t.pnl} /></td>
-                        <td className="text-right py-2 px-2"><PnlPctText value={t.pnl_pct} /></td>
-                        <td className="py-2 px-2 text-xs">{EXIT_REASON_MAP[t.exit_reason] || t.exit_reason}</td>
-                        <td className="py-2 px-2 text-xs text-muted-foreground">{t.strategy_code || '-'}</td>
-                        <td className="text-right py-2 px-2">{t.holding_days}天</td>
-                        <td className="text-right py-2 pl-2 text-xs text-muted-foreground">{t.closed_at?.slice(0, 10) || '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {totalPages > 1 && (
-                <div className="flex items-center justify-center gap-2 mt-3">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={tradesPage === 0}
-                    onClick={() => setTradesPage(p => Math.max(0, p - 1))}
-                  >
-                    上一页
-                  </Button>
-                  <span className="text-xs text-muted-foreground">
-                    {tradesPage + 1} / {totalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={tradesPage >= totalPages - 1}
-                    onClick={() => setTradesPage(p => p + 1)}
-                  >
-                    下一页
-                  </Button>
-                </div>
-              )}
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* 资金配置对话框 */}
-      <Dialog open={configOpen} onOpenChange={setConfigOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>资金配置</DialogTitle>
-            <DialogDescription>设置总资金与各市场投资比例，比例为 0 则不投入该市场（已有持仓不受影响，仅停止新建仓）</DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div>
-              <div className="text-sm font-medium mb-1">总资金</div>
-              <input
-                type="number"
-                value={cfgTotal}
-                onChange={e => setCfgTotal(e.target.value)}
-                className="w-full h-9 px-3 rounded-lg border border-border bg-background text-sm"
-                placeholder="如 1000000"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm font-medium">
-                <span>各市场投资比例</span>
-                <span className={`text-xs ${ratioSum > 100 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                  合计 {ratioSum}%{ratioSum > 100 ? '（超过 100%）' : ''}
-                </span>
-              </div>
-              {(['CN', 'HK', 'US'] as const).map(m => {
-                const label = m === 'CN' ? 'A股' : m === 'HK' ? '港股' : '美股'
-                const pct = Number(cfgRatios[m]) || 0
-                const amount = ((Number(cfgTotal) || 0) * pct) / 100
-                return (
-                  <div key={m} className="flex items-center gap-3">
-                    <span className="w-12 text-sm">{label}</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={cfgRatios[m]}
-                      onChange={e => setCfgRatios(prev => ({ ...prev, [m]: e.target.value }))}
-                      className="w-20 h-9 px-2 rounded-lg border border-border bg-background text-sm text-right"
-                    />
-                    <span className="text-sm text-muted-foreground">%</span>
-                    <span className="text-xs text-muted-foreground ml-auto">≈ {formatCurrency(amount)}</span>
-                  </div>
-                )
-              })}
-              <div className="text-xs text-muted-foreground">合计可小于 100%，余下为闲置不投入的资金。</div>
-            </div>
-
-            <div className="flex items-center gap-2 pt-1">
-              <Button size="sm" onClick={handleSaveConfig} disabled={cfgSaving || ratioSum > 100}>
-                {cfgSaving ? '保存中...' : '保存'}
-              </Button>
-            </div>
+      <div className="card p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-[14px] font-semibold">Setup audit trail</h2>
+          <span className="text-[10px] text-muted-foreground">
+            Every deduplicated long/short setup is recorded
+          </span>
+        </div>
+        {!data?.signals?.length ? (
+          <div className="rounded-xl bg-accent/30 p-5 text-center text-[12px] text-muted-foreground">
+            No directional setup has been recorded this week yet.
           </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* 跟单通知设置对话框 */}
-      <Dialog open={notifyOpen} onOpenChange={setNotifyOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>跟单通知设置</DialogTitle>
-            <DialogDescription>配置模拟盘交易通知，实时跟踪建仓/平仓动作</DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-5">
-            {/* 总开关 */}
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm font-medium">启用通知</div>
-                <div className="text-xs text-muted-foreground">开启后将通过所选渠道推送交易通知</div>
-              </div>
-              <Switch checked={notifyEnabled} onCheckedChange={setNotifyEnabled} />
-            </div>
-
-            {notifyEnabled && (
-              <>
-                {/* 通知渠道选择 */}
+        ) : (
+          <div className="space-y-2">
+            {data.signals.map((signal) => (
+              <div key={signal.id} className="flex flex-col gap-2 rounded-xl bg-accent/30 p-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <div className="text-sm font-medium mb-2">通知渠道</div>
-                  {notifyChannels.length === 0 ? (
-                    <div className="text-xs text-muted-foreground">暂无可用渠道，请先在设置中配置通知渠道</div>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {notifyChannels.map(ch => (
-                        <button
-                          key={ch.id}
-                          onClick={() => toggleChannel(ch.id)}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                            selectedChannelIds.has(ch.id)
-                              ? 'bg-primary/10 text-primary ring-1 ring-primary/20'
-                              : 'bg-muted/50 text-muted-foreground'
-                          }`}
-                        >
-                          {ch.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {selectedChannelIds.size === 0 && notifyChannels.length > 0 && (
-                    <div className="text-xs text-muted-foreground mt-1">未选择渠道时将使用默认渠道</div>
-                  )}
-                </div>
-
-                {/* 通知模式 */}
-                <div className="space-y-3">
-                  <div className="text-sm font-medium">通知模式</div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm">实时交易信号</div>
-                      <div className="text-xs text-muted-foreground">建仓/平仓时立即推送</div>
-                    </div>
-                    <Switch checked={notifyRealtime} onCheckedChange={setNotifyRealtime} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`text-[12px] font-semibold uppercase ${signal.candidate === 'long_setup' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {human(signal.candidate)}
+                    </span>
+                    <span className="rounded-full bg-background/70 px-2 py-0.5 text-[10px]">{human(signal.fusion_state)}</span>
+                    <span className="rounded-full bg-background/70 px-2 py-0.5 text-[10px]">macro {signal.macro_relation}</span>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm">盘前计划</div>
-                      <div className="text-xs text-muted-foreground">每天 09:00 推送当日候选列表</div>
-                    </div>
-                    <Switch checked={notifyPremarket} onCheckedChange={setNotifyPremarket} />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm">日终摘要</div>
-                      <div className="text-xs text-muted-foreground">每天 15:30 推送当日操作汇总</div>
-                    </div>
-                    <Switch checked={notifySummary} onCheckedChange={setNotifySummary} />
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    {dateTime(signal.observed_at)} · spot {num(signal.price)}
                   </div>
                 </div>
-              </>
-            )}
-
-            {/* 操作按钮 */}
-            <div className="flex items-center gap-2 pt-2">
-              <Button size="sm" onClick={handleSaveNotify} disabled={notifySaving}>
-                {notifySaving ? '保存中...' : '保存'}
-              </Button>
-              {notifyEnabled && (
-                <Button variant="outline" size="sm" onClick={handleTestNotify} disabled={notifyTesting}>
-                  {notifyTesting ? '发送中...' : '测试通知'}
-                </Button>
-              )}
-            </div>
+                <div className={`text-[11px] font-semibold ${signal.accepted ? 'text-emerald-500' : 'text-amber-500'}`}>
+                  {signal.accepted ? 'ACCEPTED' : `REJECTED · ${human(signal.rejection_reason)}`}
+                </div>
+              </div>
+            ))}
           </div>
-        </DialogContent>
-      </Dialog>
+        )}
+      </div>
     </div>
   )
 }

@@ -1,0 +1,11 @@
+# Keep the structural graph focused on production architecture.
+tests/
+ci_tests/
+frontend/node_modules/
+frontend/dist/
+static/
+data/
+.graphify-venv/
+graphify-out/
+docs/screenshots/
+*.lock

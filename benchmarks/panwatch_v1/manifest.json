@@ -1,0 +1,162 @@
+{
+  "benchmark": "PanWatch Benchmark v1",
+  "version": "1.7.0",
+  "purpose": "Measure current PanWatch decision integrity without confusing implemented core behavior with future research-engine capabilities.",
+  "tracks": [
+    {
+      "id": "xau_decision_core",
+      "status": "automated",
+      "tasks": [
+        "event_risk_veto",
+        "stale_data_veto",
+        "memory_calibration_direction",
+        "overextension_counter_evidence",
+        "probabilistic_regime_consistency",
+        "sensor_disagreement_penalty",
+        "research_prior_sample_guard",
+        "research_prior_integrity_guard",
+        "conflicting_research_priors_damped",
+        "realized_trade_evidence_priority",
+        "market_closed_fill_isolation",
+        "adaptive_threshold_on_bad_calibration",
+        "source_family_discrimination",
+        "state_similarity_discrimination",
+        "live_execution_disabled"
+      ]
+    },
+    {
+      "id": "economic_research",
+      "status": "automated_evidence_integrity",
+      "tasks": [
+        "actual_vs_forecast_macro_release",
+        "revision_vs_original_release",
+        "duplicate_wire_source_independence",
+        "stale_macro_report_trap",
+        "conflicting_numeric_claims",
+        "event_chronology_reconstruction",
+        "policy_statement_vs_market_pricing",
+        "oil_shock_delayed_transmission",
+        "forecast_to_realization_update",
+        "confidence_change_after_new_evidence"
+      ],
+      "runner": "benchmarks.panwatch_v1.economic_runner",
+      "scope_note": "Automated frozen-fixture checks for evidence semantics; not a live research superiority benchmark."
+    },
+    {
+      "id": "claim_graph_falsification",
+      "status": "automated",
+      "tasks": [
+        "multi_hop_support_propagation",
+        "required_dependency_collapse",
+        "hard_numeric_falsifier",
+        "counterclaim_falsifier",
+        "reasoning_cycle_rejected",
+        "untestable_rule_generates_probe",
+        "unfalsifiable_supported_claim_guard",
+        "numeric_conflict_blocks_false_falsification"
+      ],
+      "runner": "benchmarks.panwatch_v1.reasoning_runner",
+      "scope_note": "Deterministic graph/falsification integrity; generated probes are now executable through the separately scored Automatic Research Loop."
+    },
+    {
+      "id": "persistent_belief_state",
+      "status": "automated",
+      "tasks": [
+        "restart_continuity",
+        "unchanged_cycle_no_noise",
+        "confidence_drop_explained",
+        "falsification_transition",
+        "revision_recovery",
+        "no_lookahead_rewrite",
+        "required_dependency_propagation",
+        "cycle_persistence_idempotency"
+      ],
+      "runner": "benchmarks.panwatch_v1.belief_runner",
+      "scope_note": "Persistent claim beliefs, append-only change events, temporal integrity and PanWatch dependency propagation."
+    },
+    {
+      "id": "automatic_research_loop",
+      "status": "automated",
+      "tasks": [
+        "grounded_quote",
+        "hallucinated_quote_rejected",
+        "probe_to_evidence_to_belief",
+        "cooldown_suppresses_repeat",
+        "tool_budget_enforced",
+        "no_claims_no_calls"
+      ],
+      "runner": "benchmarks.panwatch_v1.automatic_research_runner",
+      "scope_note": "Bounded automatic falsification research with quote-grounded evidence ingestion, cooldowns and tool-call budgets."
+    },
+    {
+      "id": "general_claim_acquisition",
+      "status": "automated",
+      "tasks": [
+        "quote_grounding",
+        "duplicate_reuse",
+        "revision_semantics",
+        "false_supersession_blocked",
+        "domain_neutral"
+      ],
+      "runner": "benchmarks.panwatch_v1.claim_acquisition_runner",
+      "scope_note": "Domain-neutral grounded claim admission, exact deduplication, conservative revision/versioning and automatic falsification-rule initialization."
+    },
+    {
+      "id": "semantic_claim_resolution",
+      "status": "automated",
+      "tasks": [
+        "paraphrase_merge",
+        "numeric_conflict",
+        "period_separation",
+        "polarity_conflict",
+        "explicit_revision"
+      ],
+      "runner": "benchmarks.panwatch_v1.semantic_resolution_runner",
+      "scope_note": "Conservative cross-document claim resolution using semantic keys, lexical overlap, numeric/period consistency, polarity, and explicit revision cues."
+    },
+    {
+      "id": "company_sector_research",
+      "status": "automated",
+      "tasks": [
+        "earnings_release_vs_secondary_summary",
+        "guidance_vs_consensus",
+        "duplicate_press_release_independence",
+        "restatement_correction",
+        "filing_vs_acquisition_rumor",
+        "cross_company_kpi_definition",
+        "period_mismatch_detection",
+        "contradictory_revenue_numbers",
+        "source_recency_precedence",
+        "thesis_update_after_new_filing"
+      ],
+      "runner": "benchmarks.panwatch_v1.company_sector_runner",
+      "scope_note": "Frozen-fixture comparative research integrity across source precedence, guidance, source independence, restatements, rumors, entity isolation, periods, numeric conflicts, recency and thesis updates."
+    }
+  ],
+  "future_research_rubric": {
+    "fact_accuracy": 25,
+    "citation_coverage": 15,
+    "freshness": 10,
+    "source_independence": 10,
+    "conflict_handling": 10,
+    "uncertainty_calibration": 10,
+    "change_detection": 10,
+    "falsification": 10
+  },
+  "comparison_targets": [
+    "PanWatch",
+    "general_web_llm",
+    "human_researcher"
+  ],
+  "notes": [
+    "xau_decision_core is automated as a deterministic decision-core regression track.",
+    "economic_research is automated for evidence-integrity semantics using frozen fixtures.",
+    "claim_graph_falsification is automated for dependency propagation, falsifiability and adversarial failure conditions.",
+    "persistent_belief_state is automated for cross-run memory, change explanation, temporal integrity and PanWatch integration.",
+    "automatic_research_loop is automated for quote-grounded probe execution, tool-call budgets, cooldowns and belief re-evaluation.",
+    "general_claim_acquisition is automated for grounded admission, deduplication, conservative supersession and domain-neutral ingestion.",
+    "semantic_claim_resolution is automated for paraphrase reuse, conflict separation, period integrity and conservative revision matching.",
+    "External baseline comparison is intentionally not faked without configured model access, frozen/live source packets and human labels.",
+    "company_sector_research is automated with entity-isolation, source-quality, period, conflict, recency and thesis-update cases."
+  ]
+}

@@ -1,4 +1,96 @@
-"""Research capability: analysis history, context, evidence and outcomes.
+"""Research capability: evidence, claims, falsification and outcomes.
 
-It provides read models and evidence-building services to other capabilities.
+It provides source provenance, append-only evidence, an inspectable Claim Graph,
+and explicit falsification rules to other PanWatch capabilities.
 """
+
+from .belief_state import (
+    BeliefEvent,
+    BeliefEventType,
+    BeliefSnapshot,
+    BeliefStateEngine,
+    BeliefUpdate,
+)
+from .claim_graph import (
+    ClaimAssessment,
+    ClaimEdge,
+    ClaimEvidenceLink,
+    ClaimGraph,
+    ClaimKind,
+    ClaimNode,
+    ClaimRelation,
+    ClaimStatus,
+    build_claim,
+)
+from .entity_identity import (
+    EntityComparison,
+    EntityIdentity,
+    EntityIdentityLayer,
+    EntityType,
+    normalize_entity_name,
+)
+from .evidence import (
+    EvidenceRecord,
+    EvidenceRelation,
+    ObservationKind,
+    SourceProvenance,
+    SourceTier,
+    build_evidence,
+    build_source,
+    canonicalize_url,
+)
+from .falsification import (
+    FalsificationEngine,
+    FalsificationProbe,
+    FalsificationReport,
+    FalsificationResult,
+    FalsificationRule,
+    FalsificationRuleType,
+    FalsificationState,
+    build_falsification_rule,
+)
+from .ledger import EvidenceLedger, GuardResult, NumericResolution
+from .panwatch_monitor import PanWatchBeliefCycle, PanWatchBeliefMonitor
+
+__all__ = [
+    "BeliefEvent",
+    "BeliefEventType",
+    "BeliefSnapshot",
+    "BeliefStateEngine",
+    "BeliefUpdate",
+    "ClaimAssessment",
+    "ClaimEdge",
+    "ClaimEvidenceLink",
+    "ClaimGraph",
+    "ClaimKind",
+    "ClaimNode",
+    "ClaimRelation",
+    "ClaimStatus",
+    "EntityComparison",
+    "EntityIdentity",
+    "EntityIdentityLayer",
+    "EntityType",
+    "EvidenceLedger",
+    "EvidenceRecord",
+    "EvidenceRelation",
+    "FalsificationEngine",
+    "FalsificationProbe",
+    "FalsificationReport",
+    "FalsificationResult",
+    "FalsificationRule",
+    "FalsificationRuleType",
+    "FalsificationState",
+    "GuardResult",
+    "NumericResolution",
+    "ObservationKind",
+    "PanWatchBeliefCycle",
+    "PanWatchBeliefMonitor",
+    "SourceProvenance",
+    "SourceTier",
+    "build_claim",
+    "build_evidence",
+    "build_falsification_rule",
+    "build_source",
+    "canonicalize_url",
+    "normalize_entity_name",
+]
