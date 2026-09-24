@@ -134,13 +134,25 @@ def _provision_replay_table(engine) -> bool:
 
 
 def init_xau_paper_store(settings: Settings | None = None) -> bool:
-    """Initialize the paper store. Returns True when external PostgreSQL is used."""
+    """Initialize the paper store without making PanWatch startup depend on PostgreSQL.
 
-    global _external_engine, _external_replay_available, XAUPaperSessionLocal, XAUReplaySessionLocal
+    Returns True only when the configured external PostgreSQL store is healthy.
+    Connectivity, quota, or provisioning failures degrade to the local SQLite
+    compatibility store so the API and Ahmed Toolbox integration can still start.
+    """
+
+    global _external_engine, _external_replay_available, _replay_provisioning_error
+    global XAUPaperSessionLocal, XAUReplaySessionLocal
 
     settings = settings or Settings()
     raw_url = (settings.xau_paper_database_url or "").strip()
     if not raw_url:
+        if _external_engine is not None:
+            try:
+                _external_engine.dispose()
+            except Exception:
+                pass
+        _external_engine = None
         XAUPaperSessionLocal = SessionLocal
         XAUReplaySessionLocal = SessionLocal
         _external_replay_available = False
@@ -150,8 +162,12 @@ def init_xau_paper_store(settings: Settings | None = None) -> bool:
         )
         return False
 
-    if _external_engine is None:
-        _external_engine = create_engine(
+    if _external_engine is not None:
+        return True
+
+    candidate_engine = None
+    try:
+        candidate_engine = create_engine(
             _sqlalchemy_url(raw_url),
             pool_pre_ping=True,
             pool_recycle=300,
@@ -167,27 +183,51 @@ def init_xau_paper_store(settings: Settings | None = None) -> bool:
             XAUPaperPosition.__table__,
             XAUPaperTrade.__table__,
         ]
-        Base.metadata.create_all(bind=_external_engine, tables=paper_tables)
-        XAUPaperSessionLocal = sessionmaker(bind=_external_engine, expire_on_commit=False)
+        Base.metadata.create_all(bind=candidate_engine, tables=paper_tables)
 
-        _external_replay_available = _provision_replay_table(_external_engine)
-        if _external_replay_available:
-            XAUReplaySessionLocal = sessionmaker(
-                bind=_external_engine,
-                expire_on_commit=False,
-            )
-            logger.info("XAU replay store initialized on external PostgreSQL")
-        else:
-            # Dedicated replay-table DDL is optional. Replay persistence falls
-            # back to XAUPaperSignal in the same external PostgreSQL store.
-            XAUReplaySessionLocal = SessionLocal
-            logger.warning(
-                "XAU replay dedicated table is unavailable; "
-                "storage_mode=external_paper_signal_compat durable_external_store=true"
-            )
+        paper_session_local = sessionmaker(
+            bind=candidate_engine,
+            expire_on_commit=False,
+        )
+        replay_available = _provision_replay_table(candidate_engine)
+        replay_session_local = (
+            sessionmaker(bind=candidate_engine, expire_on_commit=False)
+            if replay_available
+            else SessionLocal
+        )
+    except SQLAlchemyError as exc:
+        _replay_provisioning_error = f"{type(exc).__name__}: {exc}"
+        if candidate_engine is not None:
+            try:
+                candidate_engine.dispose()
+            except Exception:
+                pass
+        _external_engine = None
+        _external_replay_available = False
+        XAUPaperSessionLocal = SessionLocal
+        XAUReplaySessionLocal = SessionLocal
+        logger.error(
+            "XAU paper store external initialization failed (%s); "
+            "falling back to local SQLite so PanWatch can continue. "
+            "Paper/replay history is temporarily non-durable unless /app/data is persisted.",
+            type(exc).__name__,
+        )
+        return False
 
-        logger.info("XAU paper store initialized on external PostgreSQL")
+    _external_engine = candidate_engine
+    XAUPaperSessionLocal = paper_session_local
+    _external_replay_available = replay_available
+    XAUReplaySessionLocal = replay_session_local
 
+    if _external_replay_available:
+        logger.info("XAU replay store initialized on external PostgreSQL")
+    else:
+        logger.warning(
+            "XAU replay dedicated table is unavailable; "
+            "storage_mode=external_paper_signal_compat durable_external_store=true"
+        )
+
+    logger.info("XAU paper store initialized on external PostgreSQL")
     return True
 
 
