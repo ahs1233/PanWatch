@@ -16,16 +16,20 @@ GTG logic is a pure domain layer.
 Reason:
 Testing, deterministic replay, portability, and reduced vendor/runtime lock-in.
 
-## ADR-003 — Prefer NautilusTrader as runtime spine candidate
+## ADR-003 — RuntimePort over runtime vendor
 
 Decision:
-Do not build a custom clock/event/replay runtime unless compatibility review rejects NautilusTrader.
+Freeze a runtime capability contract (RuntimePort), not a specific vendor/version.
+
+NautilusTrader is Candidate A.
+LEAN is Candidate B and independent verifier.
+A custom runtime is a last resort only after both mature candidates fail documented critical acceptance requirements.
 
 Why:
-It already provides event-driven architecture, clock abstraction, shared backtest/live semantics, data adapters/catalog concepts, deterministic simulation work, and recovery/reconciliation patterns.
+NautilusTrader is architecturally strong, but current 2.x releases are prerelease/RC and current inspected distributions require Python 3.12+. GTG must not inherit vendor lifecycle risk.
 
 Constraint:
-GTG Domain Core must remain independent so NautilusTrader can be replaced if required.
+GTG Domain Core remains framework-independent and contains no Nautilus/LEAN-specific objects.
 
 ## ADR-004 — vectorbt is research-only authority
 
@@ -94,3 +98,38 @@ No new infrastructure component enters architecture without:
 - a measurable requirement,
 - a simpler alternative analysis,
 - an exit/removal plan.
+
+
+## ADR-014 — Runtime qualification is a golden-test gate
+
+Decision:
+A runtime candidate is accepted only after deterministic replay, time-boundary, duplicate, late-event, restart/recovery, custom-data, catalog round-trip and Domain-Core isolation tests pass.
+
+Reason:
+A mature framework reduces infrastructure risk but does not automatically prove semantic compatibility with GTG.
+
+## ADR-015 — Forward stopping rules must be preregistered
+
+Decision:
+Forward campaigns use either a fixed preregistered information horizon or an explicitly anytime-valid sequential inference method.
+
+Ordinary repeated confidence intervals cannot justify early promotion.
+
+Reason:
+Continuous peeking can create false confidence even with fresh data.
+
+## ADR-016 — Path quality is an independent promotion gate
+
+Decision:
+If GTG publishes MFE/MAE/path forecasts, path performance must beat a locked baseline with uncertainty bounds, not just point estimates.
+
+Reason:
+Directional classification can improve while path prediction remains worse than a simple baseline.
+
+## ADR-017 — No fixed universal event-count promotion threshold
+
+Decision:
+Required forward sample/information size is derived per campaign from effect size, precision/power, dependence and regime/session coverage.
+
+Reason:
+A fixed event count such as 60 can be either grossly insufficient or unnecessarily large depending on the process.
