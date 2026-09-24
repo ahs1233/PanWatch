@@ -81,6 +81,7 @@ It never emits an executable order.
 - feature_snapshot_id
 - feature_schema_hash
 - regime_snapshot_id
+- liquidity_behavior_snapshot_id
 - evidence_snapshot_id
 - data_quality_snapshot_id
 - model_manifest_id
