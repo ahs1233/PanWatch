@@ -105,11 +105,21 @@ def _frame_state(bars: list[XAUBar]) -> dict[str, Any] | None:
             slopes[p] = (float(emas[p]) - float(older[p])) / atr
 
     cross_14_50 = 0
+    price_break_14_50 = 0
     if None not in (emas[14], emas[50], prev[14], prev[50]):
         if float(prev[14]) <= float(prev[50]) and float(emas[14]) > float(emas[50]):
             cross_14_50 = 1
         elif float(prev[14]) >= float(prev[50]) and float(emas[14]) < float(emas[50]):
             cross_14_50 = -1
+
+        current_upper = max(float(emas[14]), float(emas[50]))
+        current_lower = min(float(emas[14]), float(emas[50]))
+        previous_upper = max(float(prev[14]), float(prev[50]))
+        previous_lower = min(float(prev[14]), float(prev[50]))
+        if closes[-1] > current_upper and closes[-2] <= previous_upper:
+            price_break_14_50 = 1
+        elif closes[-1] < current_lower and closes[-2] >= previous_lower:
+            price_break_14_50 = -1
 
     accepted_200 = 0
     if None not in (emas[200], prev[200], prev2[200]) and len(closes) >= 3:
@@ -178,6 +188,7 @@ def _frame_state(bars: list[XAUBar]) -> dict[str, Any] | None:
         "slope": slopes,
         "spacing_14_50_atr": spacing,
         "cross_14_50": cross_14_50,
+        "price_break_14_50": price_break_14_50,
         "accepted_200": accepted_200,
         "barrier_rejection": barrier_rejection,
         "swing_high": swing_high,
@@ -308,12 +319,12 @@ def _select_setup(
     target = None
     barrier_period = None
 
-    cross = int(m5["cross_14_50"])
-    if cross:
+    price_break = int(m5["price_break_14_50"])
+    if price_break:
         ma200 = m5["ema"].get(200)
-        if _target_ahead(cross, px, ma200):
-            setup = "ladder_14_50_to_200"
-            side = cross
+        if _target_ahead(price_break, px, ma200):
+            setup = "ladder_price_14_50_to_200"
+            side = price_break
             target = float(ma200)
 
     if setup is None:
@@ -659,8 +670,15 @@ def main() -> None:
 
     diagnostics: dict[str, int] = defaultdict(int)
     trades: list[dict[str, Any]] = []
-    ladder_14_50: list[dict[str, Any]] = []
-    ladder_200_1000: list[dict[str, Any]] = []
+    ladder_price_14_50: dict[str, list[dict[str, Any]]] = {
+        tf.value: [] for tf in TF_ORDER
+    }
+    ladder_ma_cross_14_50: dict[str, list[dict[str, Any]]] = {
+        tf.value: [] for tf in TF_ORDER
+    }
+    ladder_200_1000: dict[str, list[dict[str, Any]]] = {
+        tf.value: [] for tf in TF_ORDER
+    }
     rejection_200: list[dict[str, Any]] = []
     rejection_1000: list[dict[str, Any]] = []
     busy_until = TEST_START
@@ -687,27 +705,75 @@ def main() -> None:
             continue
 
         # Hypothesis measurements are independent from trade filters.
-        cross = int(m5["cross_14_50"])
-        if cross:
-            target = m5["ema"].get(200)
-            if _target_ahead(cross, float(m5["close"]), target):
-                outcome = _future_target(m1, m1_available, at, cross, float(target), 240)
-                ladder_14_50.append({
+        # The primary event is PRICE crossing/reclaiming the MA14/MA50 pair.
+        # MA14 crossing MA50 is preserved separately as a secondary dynamic event.
+        horizon_minutes = {
+            "1m": 120,
+            "5m": 240,
+            "15m": 720,
+            "1h": 1440,
+            "4h": 4320,
+        }
+        target_1000_minutes = {
+            "1m": 240,
+            "5m": 480,
+            "15m": 1440,
+            "1h": 2880,
+            "4h": 8640,
+        }
+        for tf_key, state in states.items():
+            pb = int(state.get("price_break_14_50", 0))
+            target200 = state["ema"].get(200)
+            h200 = int(horizon_minutes[tf_key])
+            if (
+                pb
+                and target200 is not None
+                and _target_ahead(pb, float(state["close"]), target200)
+                and at + timedelta(minutes=h200) <= TEST_END
+            ):
+                outcome = _future_target(
+                    m1, m1_available, at, pb, float(target200), h200
+                )
+                ladder_price_14_50[tf_key].append({
                     "time": at,
-                    "side": cross,
-                    "target": float(target),
+                    "side": pb,
+                    "target": float(target200),
                     **outcome,
                 })
 
-        acc = int(m5["accepted_200"])
-        if acc:
-            target = m5["ema"].get(1000)
-            if _target_ahead(acc, float(m5["close"]), target):
-                outcome = _future_target(m1, m1_available, at, acc, float(target), 480)
-                ladder_200_1000.append({
+            cross = int(state.get("cross_14_50", 0))
+            if (
+                cross
+                and target200 is not None
+                and _target_ahead(cross, float(state["close"]), target200)
+                and at + timedelta(minutes=h200) <= TEST_END
+            ):
+                outcome = _future_target(
+                    m1, m1_available, at, cross, float(target200), h200
+                )
+                ladder_ma_cross_14_50[tf_key].append({
+                    "time": at,
+                    "side": cross,
+                    "target": float(target200),
+                    **outcome,
+                })
+
+            acc = int(state.get("accepted_200", 0))
+            target1000 = state["ema"].get(1000)
+            h1000 = int(target_1000_minutes[tf_key])
+            if (
+                acc
+                and target1000 is not None
+                and _target_ahead(acc, float(state["close"]), target1000)
+                and at + timedelta(minutes=h1000) <= TEST_END
+            ):
+                outcome = _future_target(
+                    m1, m1_available, at, acc, float(target1000), h1000
+                )
+                ladder_200_1000[tf_key].append({
                     "time": at,
                     "side": acc,
-                    "target": float(target),
+                    "target": float(target1000),
                     **outcome,
                 })
 
@@ -763,7 +829,7 @@ def main() -> None:
     by_setup = {
         name: _metrics([t for t in trades if t["setup_type"] == name])
         for name in (
-            "ladder_14_50_to_200",
+            "ladder_price_14_50_to_200",
             "ladder_200_to_1000",
             "ma_barrier_rejection",
         )
@@ -793,6 +859,7 @@ def main() -> None:
             "rsi_period": 14,
             "timeframes": [tf.value for tf in TF_ORDER],
             "scan_step_minutes": STEP_MINUTES,
+            "price_14_50_break_rule": "first close beyond BOTH MA14 and MA50 after prior close was not beyond both in that direction",
             "acceptance_rule": "two consecutive closes beyond MA200 after a prior close on the other side",
             "same_bar_tp_sl_policy": "conservative_stop",
             "one_position_at_a_time": True,
@@ -811,8 +878,18 @@ def main() -> None:
             "sessions": "covered",
         },
         "hypotheses": {
-            "m5_14_50_cross_to_200_within_240m": _event_metrics(ladder_14_50),
-            "m5_accepted_200_to_1000_within_480m": _event_metrics(ladder_200_1000),
+            "price_break_14_50_to_200_by_timeframe": {
+                tf: _event_metrics(rows)
+                for tf, rows in ladder_price_14_50.items()
+            },
+            "secondary_ma14_cross_ma50_to_200_by_timeframe": {
+                tf: _event_metrics(rows)
+                for tf, rows in ladder_ma_cross_14_50.items()
+            },
+            "accepted_200_to_1000_by_timeframe": {
+                tf: _event_metrics(rows)
+                for tf, rows in ladder_200_1000.items()
+            },
             "m5_ma200_rejection_one_atr_before_recross_120m": _event_metrics(rejection_200),
             "m5_ma1000_rejection_one_atr_before_recross_120m": _event_metrics(rejection_1000),
         },
@@ -836,8 +913,12 @@ def main() -> None:
 
     (OUT / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
     _write_csv(OUT / "trades.csv", trades)
-    _write_csv(OUT / "hypothesis_14_50_to_200.csv", ladder_14_50)
-    _write_csv(OUT / "hypothesis_200_to_1000.csv", ladder_200_1000)
+    for tf, rows in ladder_price_14_50.items():
+        _write_csv(OUT / f"hypothesis_price_14_50_to_200_{tf}.csv", rows)
+    for tf, rows in ladder_ma_cross_14_50.items():
+        _write_csv(OUT / f"hypothesis_ma_cross_14_50_to_200_{tf}.csv", rows)
+    for tf, rows in ladder_200_1000.items():
+        _write_csv(OUT / f"hypothesis_200_to_1000_{tf}.csv", rows)
     _write_csv(OUT / "rejection_200.csv", rejection_200)
     _write_csv(OUT / "rejection_1000.csv", rejection_1000)
     (OUT / "SUMMARY.md").write_text(
@@ -851,8 +932,8 @@ def main() -> None:
             f"- Profit factor: {report['overall'].get('profit_factor')}",
             f"- Max drawdown bps: {report['overall'].get('max_drawdown_bps')}",
             "",
-            f"- 14/50 -> 200: {report['hypotheses']['m5_14_50_cross_to_200_within_240m']}",
-            f"- accepted 200 -> 1000: {report['hypotheses']['m5_accepted_200_to_1000_within_480m']}",
+            f"- PRICE breaks 14/50 -> 200 by timeframe: {report['hypotheses']['price_break_14_50_to_200_by_timeframe']}",
+            f"- accepted 200 -> 1000 by timeframe: {report['hypotheses']['accepted_200_to_1000_by_timeframe']}",
             f"- MA200 rejection: {report['hypotheses']['m5_ma200_rejection_one_atr_before_recross_120m']}",
             f"- MA1000 rejection: {report['hypotheses']['m5_ma1000_rejection_one_atr_before_recross_120m']}",
             "",
