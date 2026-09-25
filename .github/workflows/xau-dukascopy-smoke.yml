@@ -6,6 +6,7 @@ on:
       - "src/platform/marketdata/xau_dukascopy.py"
       - "src/platform/marketdata/xau_provider_audit.py"
       - "benchmarks/xau_dukascopy_v1/**"
+      - "benchmarks/gen1_gold_2y_real_v1/**"
       - ".github/workflows/xau-dukascopy-smoke.yml"
   workflow_dispatch:
 

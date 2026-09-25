@@ -1,9 +1,11 @@
 name: XAU Native vs LEAN Parity
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - "benchmarks/xau_engine_parity_v1/**"
+      - "benchmarks/gen1_gold_2y_real_v1/**"
       - "src/modules/strategy/xau_intraday.py"
       - "src/modules/strategy/xau_strategy_exporter.py"
       - ".github/workflows/xau-engine-parity.yml"
