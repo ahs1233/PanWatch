@@ -9,6 +9,7 @@ from typing import Any
 from src.modules.xau.gold_market_fusion import analyze_okx_venue, build_gold_market_fusion
 from src.modules.xau.gold_tape_store import GoldTapeStore
 from src.modules.xau.xaut_runtime import get_xaut_order_flow
+from src.platform.marketdata.gold_binance import BinanceGoldPublicProvider
 from src.platform.marketdata.gold_okx import OKXGoldPublicProvider
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ def _tape_store() -> GoldTapeStore:
     return _store
 
 
-async def _fetch_okx(provider: OKXGoldPublicProvider, *, force: bool) -> tuple[Any, list[Any]]:
+async def _fetch_centralized(provider: Any, *, force: bool) -> tuple[Any, list[Any]]:
     snapshot = await asyncio.to_thread(provider.fetch_snapshot, trade_limit=500, book_depth=400)
     store = _tape_store()
     await asyncio.to_thread(store.ingest_okx, snapshot.source, snapshot.trades)
@@ -45,7 +46,7 @@ async def _fetch_okx(provider: OKXGoldPublicProvider, *, force: bool) -> tuple[A
             )
             await asyncio.to_thread(store.ingest_okx, snapshot.source, history)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("OKX history warm-start failed venue=%s error=%s", snapshot.source, type(exc).__name__)
+            logger.warning("Gold venue history warm-start failed venue=%s error=%s", snapshot.source, type(exc).__name__)
         finally:
             _warmed.add(snapshot.source)
 
@@ -73,8 +74,10 @@ async def get_gold_market_fusion(
 
         swap_provider = OKXGoldPublicProvider.xau_swap()
         xaut_provider = OKXGoldPublicProvider.xaut_spot()
-        swap_task = asyncio.create_task(_fetch_okx(swap_provider, force=force))
-        xaut_task = asyncio.create_task(_fetch_okx(xaut_provider, force=force))
+        binance_provider = BinanceGoldPublicProvider()
+        swap_task = asyncio.create_task(_fetch_centralized(swap_provider, force=force))
+        xaut_task = asyncio.create_task(_fetch_centralized(xaut_provider, force=force))
+        binance_task = asyncio.create_task(_fetch_centralized(binance_provider, force=force))
         bitfinex_task = asyncio.create_task(
             get_xaut_order_flow(xau_spot_price=xau_spot_price, force=force)
         )
@@ -82,6 +85,7 @@ async def get_gold_market_fusion(
         stage_errors: dict[str, str] = {}
         swap_analysis = None
         xaut_analysis = None
+        binance_analysis = None
         bitfinex = None
 
         try:
@@ -105,6 +109,16 @@ async def get_gold_market_fusion(
             stage_errors["okx_xaut_spot"] = type(exc).__name__
 
         try:
+            snap, trades = await binance_task
+            binance_analysis = analyze_okx_venue(
+                snap,
+                trades=trades,
+                xau_spot_price=xau_spot_price,
+            )
+        except Exception as exc:  # noqa: BLE001
+            stage_errors["binance_xau_perp"] = type(exc).__name__
+
+        try:
             bitfinex = await bitfinex_task
         except Exception as exc:  # noqa: BLE001
             stage_errors["bitfinex_xaut"] = type(exc).__name__
@@ -113,6 +127,7 @@ async def get_gold_market_fusion(
             okx_xau=swap_analysis,
             okx_xaut=xaut_analysis,
             bitfinex_xaut=bitfinex,
+            binance_xau=binance_analysis,
         )
         result["stage_errors"] = stage_errors
         result["source_health"] = {
@@ -125,6 +140,11 @@ async def get_gold_market_fusion(
                 "available": bool(xaut_analysis),
                 "status": "ready" if xaut_analysis else "unavailable",
                 "error": stage_errors.get("okx_xaut_spot"),
+            },
+            "binance_xau_perp": {
+                "available": bool(binance_analysis),
+                "status": "ready" if binance_analysis else "unavailable",
+                "error": stage_errors.get("binance_xau_perp"),
             },
             "bitfinex_xaut": {
                 "available": bool(bitfinex),

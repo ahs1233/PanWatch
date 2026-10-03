@@ -393,7 +393,7 @@ def analyze_okx_venue(
         "available": True,
         "status": "ready",
         "venue": snapshot.source,
-        "source_family": "okx",
+        "source_family": str(snapshot.source).split(":", 1)[0],
         "instrument_id": snapshot.instrument_id,
         "market_kind": snapshot.market_kind,
         "centralized_proxy_market": True,
@@ -606,8 +606,12 @@ def build_gold_market_fusion(
     okx_xau: dict[str, Any] | None,
     okx_xaut: dict[str, Any] | None,
     bitfinex_xaut: dict[str, Any] | None,
+    binance_xau: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    venues = [v for v in [okx_xau, okx_xaut, _bitfinex_standard(bitfinex_xaut or {})] if v and v.get("available")]
+    venues = [
+        v for v in [okx_xau, okx_xaut, binance_xau, _bitfinex_standard(bitfinex_xaut or {})]
+        if v and v.get("available")
+    ]
     flows = {tf: _weighted_venue_signal(venues, tf) for tf in WINDOWS_MINUTES}
     profiles = {tf: _profile_cluster(venues, tf) for tf in PROFILE_WINDOWS}
 
