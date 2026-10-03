@@ -1,0 +1,43 @@
+name: GTG Event v3 Forward Shadow Contract
+
+on:
+  push:
+    branches:
+      - "codex/gtg-event-v3-forward-shadow"
+    paths:
+      - ".github/workflows/gtg-event-v3-forward-shadow.yml"
+      - "src/modules/xau/gtg_event_v3_forward.py"
+      - "ci_tests/test_gtg_event_v3_forward.py"
+      - "docs/GTG_EVENT_V3_FORWARD_SHADOW.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gtg-event-v3-forward-shadow-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+
+jobs:
+  forward-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+
+      - name: Compile forward shadow contract
+        run: python -m py_compile src/modules/xau/gtg_event_v3_forward.py
+
+      - name: Run forward shadow regression tests
+        run: pytest -q ci_tests/test_gtg_event_v3_forward.py

@@ -7,9 +7,9 @@ interface AssistantWelcomeProps {
 }
 
 const QUICK_QUESTIONS = [
-  { label: '分析一只股票', question: '分析一只股票的基本面、行情和近期新闻', icon: Search },
-  { label: '诊断我的持仓', question: '诊断我的持仓风险和关键关注点', icon: Briefcase },
-  { label: '发现今日机会', question: '结合今天的市场行情，帮我寻找值得研究的机会', icon: Sparkles },
+  { label: 'Analyze XAUUSD', question: 'Analyze XAUUSD using current market context, recent news and technical structure.', icon: Search },
+  { label: 'Diagnose my portfolio', question: 'Diagnose my portfolio risk and identify the most important things I should monitor.', icon: Briefcase },
+  { label: 'Find today\'s opportunities', question: 'Use today\'s market conditions to find opportunities worth researching.', icon: Sparkles },
 ]
 
 /** First-run surface for the full-page assistant before a conversation exists. */
@@ -29,10 +29,10 @@ export function AssistantWelcome({ onSubmit, disabled = false }: AssistantWelcom
         PANWATCH · AI INVESTING RESEARCH
       </p>
       <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl md:text-5xl">
-        今天想研究什么？
+        What do you want to research?
       </h1>
       <p className="mt-5 max-w-2xl text-[15px] leading-7 text-muted-foreground md:text-[17px]">
-        输入一只股票、一个市场问题，或让 PanWatch 诊断你的持仓。助手会先查询可用数据，再给出有依据的结论。
+        Ask about an asset, a market question, or your portfolio. PanWatch will research available evidence before answering.
       </p>
 
       <form
@@ -48,14 +48,14 @@ export function AssistantWelcome({ onSubmit, disabled = false }: AssistantWelcom
           onChange={(event) => setQuestion(event.target.value)}
           disabled={disabled}
           className="h-12 min-w-0 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground/80"
-          placeholder="搜索股票，或问：我的持仓风险怎么样？"
-          aria-label="开始一项研究"
+          placeholder="Ask about XAUUSD, markets, your portfolio, or a research question…"
+          aria-label="Start research"
         />
         <button
           type="submit"
           disabled={disabled || !question.trim()}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
-          aria-label="发送研究问题"
+          aria-label="Send research question"
         >
           <ArrowUpRight className="h-4 w-4" />
         </button>
@@ -78,9 +78,9 @@ export function AssistantWelcome({ onSubmit, disabled = false }: AssistantWelcom
 
       <div className="mt-16 grid w-full max-w-3xl gap-3 text-left sm:grid-cols-3">
         {[
-          ['01', '从标的开始', '输入代码或公司名，生成综合、短线或事件驱动分析。'],
-          ['02', '从持仓开始', '调用你的实盘和模拟盘数据，识别集中度与风险敞口。'],
-          ['03', '从问题开始', '让助手串联行情、K 线和新闻，给出下一步研究方向。'],
+          ['01', 'Start with an asset', 'Enter a symbol or asset name for comprehensive, short-term or event-driven research.'],
+          ['02', 'Start with your portfolio', 'Use your live and paper portfolio data to identify concentration and risk exposure.'],
+          ['03', 'Start with a question', 'Let the assistant connect price action, technicals and news into the next research steps.'],
         ].map(([index, title, description]) => (
           <div key={index} className="rounded-2xl border border-border/60 bg-card/70 p-5">
             <span className="inline-flex rounded-lg bg-primary/10 px-2 py-1 text-[12px] font-semibold text-primary">{index}</span>

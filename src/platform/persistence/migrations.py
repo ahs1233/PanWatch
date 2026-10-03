@@ -1965,6 +1965,498 @@ def _m126_assistant_task_events(conn: Connection) -> None:
     )
 
 
+
+def _m127_research_evidence_foundation(conn: Connection) -> None:
+    """Persist immutable source provenance and append-only evidence."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_sources (
+            source_id TEXT PRIMARY KEY,
+            url TEXT NOT NULL DEFAULT '',
+            canonical_url TEXT NOT NULL DEFAULT '',
+            domain TEXT NOT NULL DEFAULT '',
+            publisher TEXT DEFAULT '',
+            title TEXT DEFAULT '',
+            source_tier TEXT NOT NULL DEFAULT 'unknown',
+            source_family TEXT NOT NULL DEFAULT '',
+            independence_key TEXT NOT NULL DEFAULT '',
+            published_at DATETIME,
+            retrieved_at DATETIME NOT NULL,
+            observed_at DATETIME NOT NULL,
+            content_hash TEXT NOT NULL,
+            parent_source_id TEXT,
+            tool_name TEXT DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            claim_key TEXT NOT NULL,
+            source_id TEXT NOT NULL REFERENCES research_sources(source_id) ON DELETE RESTRICT,
+            statement TEXT NOT NULL,
+            relation TEXT NOT NULL DEFAULT 'supports',
+            observation_kind TEXT NOT NULL DEFAULT 'actual',
+            event_time DATETIME,
+            observed_at DATETIME NOT NULL,
+            recorded_at DATETIME NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            content_hash TEXT NOT NULL,
+            numeric_value REAL,
+            unit TEXT DEFAULT '',
+            period TEXT DEFAULT '',
+            revision_of TEXT,
+            supersedes TEXT,
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_source_domain_published",
+        "CREATE INDEX ix_research_source_domain_published "
+        "ON research_sources(domain, published_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_source_independence",
+        "CREATE INDEX ix_research_source_independence "
+        "ON research_sources(independence_key)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_source_content_hash",
+        "CREATE INDEX ix_research_source_content_hash "
+        "ON research_sources(content_hash)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_evidence_claim_kind_time",
+        "CREATE INDEX ix_research_evidence_claim_kind_time "
+        "ON research_evidence(claim_key, observation_kind, event_time)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_evidence_source",
+        "CREATE INDEX ix_research_evidence_source "
+        "ON research_evidence(source_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_evidence_recorded",
+        "CREATE INDEX ix_research_evidence_recorded "
+        "ON research_evidence(recorded_at)",
+    )
+
+
+
+def _m128_claim_graph_and_falsification(conn: Connection) -> None:
+    """Persist claim dependencies, evidence links and falsification rules."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claims (
+            claim_id TEXT PRIMARY KEY,
+            claim_key TEXT NOT NULL,
+            statement TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'hypothesis',
+            prior_confidence REAL NOT NULL DEFAULT 0.5,
+            created_at DATETIME NOT NULL,
+            valid_from DATETIME,
+            valid_until DATETIME,
+            supersedes TEXT REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            meta JSON DEFAULT '{}'
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claim_edges (
+            edge_id TEXT PRIMARY KEY,
+            source_claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            target_claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            relation TEXT NOT NULL,
+            weight REAL NOT NULL DEFAULT 1.0,
+            required INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            meta JSON DEFAULT '{}'
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claim_evidence_links (
+            link_id TEXT PRIMARY KEY,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            evidence_id TEXT NOT NULL REFERENCES research_evidence(evidence_id) ON DELETE RESTRICT,
+            relation TEXT NOT NULL DEFAULT 'supports',
+            weight REAL NOT NULL DEFAULT 1.0,
+            created_at DATETIME NOT NULL,
+            meta JSON DEFAULT '{}'
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_falsification_rules (
+            rule_id TEXT PRIMARY KEY,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            description TEXT NOT NULL,
+            rule_type TEXT NOT NULL,
+            hard_fail INTEGER NOT NULL DEFAULT 0,
+            weight REAL NOT NULL DEFAULT 1.0,
+            evidence_claim_key TEXT DEFAULT '',
+            operator TEXT DEFAULT '',
+            threshold REAL,
+            min_sources INTEGER NOT NULL DEFAULT 1,
+            max_age_seconds INTEGER,
+            related_claim_id TEXT REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            required_kinds JSON DEFAULT '[]',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_key_kind",
+        "CREATE INDEX ix_research_claim_key_kind "
+        "ON research_claims(claim_key, kind)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_validity",
+        "CREATE INDEX ix_research_claim_validity "
+        "ON research_claims(valid_from, valid_until)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_edge_source",
+        "CREATE INDEX ix_research_claim_edge_source "
+        "ON research_claim_edges(source_claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_edge_target",
+        "CREATE INDEX ix_research_claim_edge_target "
+        "ON research_claim_edges(target_claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_edge_relation",
+        "CREATE INDEX ix_research_claim_edge_relation "
+        "ON research_claim_edges(relation)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_evidence_claim",
+        "CREATE INDEX ix_research_claim_evidence_claim "
+        "ON research_claim_evidence_links(claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_claim_evidence_evidence",
+        "CREATE INDEX ix_research_claim_evidence_evidence "
+        "ON research_claim_evidence_links(evidence_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_falsification_claim",
+        "CREATE INDEX ix_research_falsification_claim "
+        "ON research_falsification_rules(claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_falsification_type",
+        "CREATE INDEX ix_research_falsification_type "
+        "ON research_falsification_rules(rule_type)",
+    )
+
+
+
+def _m129_persistent_belief_state(conn: Connection) -> None:
+    """Persist PanWatch belief history and material state transitions."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_belief_cycles (
+            cycle_id TEXT PRIMARY KEY,
+            started_at DATETIME NOT NULL,
+            completed_at DATETIME NOT NULL,
+            claim_count INTEGER NOT NULL DEFAULT 0,
+            changed_count INTEGER NOT NULL DEFAULT 0,
+            falsified_count INTEGER NOT NULL DEFAULT 0,
+            probe_count INTEGER NOT NULL DEFAULT 0,
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_belief_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL REFERENCES research_belief_cycles(cycle_id) ON DELETE RESTRICT,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            claim_key TEXT NOT NULL,
+            evaluated_at DATETIME NOT NULL,
+            base_status TEXT NOT NULL,
+            final_status TEXT NOT NULL,
+            base_confidence REAL NOT NULL,
+            final_confidence REAL NOT NULL,
+            support_score REAL NOT NULL DEFAULT 0.0,
+            contradiction_score REAL NOT NULL DEFAULT 0.0,
+            falsification_coverage REAL NOT NULL DEFAULT 0.0,
+            evidence_ids JSON DEFAULT '[]',
+            triggered_rules JSON DEFAULT '[]',
+            untestable_rules JSON DEFAULT '[]',
+            dependency_failures JSON DEFAULT '[]',
+            reasons JSON DEFAULT '[]',
+            input_fingerprint TEXT NOT NULL,
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_belief_events (
+            event_id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL REFERENCES research_belief_cycles(cycle_id) ON DELETE RESTRICT,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            event_type TEXT NOT NULL,
+            occurred_at DATETIME NOT NULL,
+            previous_snapshot_id TEXT REFERENCES research_belief_snapshots(snapshot_id) ON DELETE RESTRICT,
+            current_snapshot_id TEXT NOT NULL REFERENCES research_belief_snapshots(snapshot_id) ON DELETE RESTRICT,
+            previous_status TEXT,
+            current_status TEXT NOT NULL,
+            confidence_delta REAL NOT NULL DEFAULT 0.0,
+            detail TEXT NOT NULL DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_cycle_started",
+        "CREATE INDEX ix_research_belief_cycle_started "
+        "ON research_belief_cycles(started_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_claim_evaluated",
+        "CREATE INDEX ix_research_belief_claim_evaluated "
+        "ON research_belief_snapshots(claim_id, evaluated_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_cycle",
+        "CREATE INDEX ix_research_belief_cycle "
+        "ON research_belief_snapshots(cycle_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_final_status",
+        "CREATE INDEX ix_research_belief_final_status "
+        "ON research_belief_snapshots(final_status)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_fingerprint",
+        "CREATE INDEX ix_research_belief_fingerprint "
+        "ON research_belief_snapshots(input_fingerprint)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_event_claim_time",
+        "CREATE INDEX ix_research_belief_event_claim_time "
+        "ON research_belief_events(claim_id, occurred_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_event_type",
+        "CREATE INDEX ix_research_belief_event_type "
+        "ON research_belief_events(event_type)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_belief_event_cycle",
+        "CREATE INDEX ix_research_belief_event_cycle "
+        "ON research_belief_events(cycle_id)",
+    )
+
+
+
+def _m130_automatic_research_loop(conn: Connection) -> None:
+    """Persist bounded automatic-research runs and probe cooldown attempts."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_loop_runs (
+            run_id TEXT PRIMARY KEY,
+            started_at DATETIME NOT NULL,
+            completed_at DATETIME,
+            status TEXT NOT NULL DEFAULT 'running',
+            probes_planned INTEGER NOT NULL DEFAULT 0,
+            probes_executed INTEGER NOT NULL DEFAULT 0,
+            tool_calls INTEGER NOT NULL DEFAULT 0,
+            documents_read INTEGER NOT NULL DEFAULT 0,
+            evidence_added INTEGER NOT NULL DEFAULT 0,
+            beliefs_changed INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_probe_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES research_loop_runs(run_id) ON DELETE RESTRICT,
+            probe_key TEXT NOT NULL,
+            rule_id TEXT NOT NULL,
+            claim_id TEXT NOT NULL REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            attempted_at DATETIME NOT NULL,
+            status TEXT NOT NULL,
+            query TEXT NOT NULL DEFAULT '',
+            tool_name TEXT NOT NULL DEFAULT '',
+            source_count INTEGER NOT NULL DEFAULT 0,
+            evidence_count INTEGER NOT NULL DEFAULT 0,
+            error_code TEXT NOT NULL DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_loop_run_started",
+        "CREATE INDEX ix_research_loop_run_started ON research_loop_runs(started_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_loop_run_status",
+        "CREATE INDEX ix_research_loop_run_status ON research_loop_runs(status)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_probe_key_attempted",
+        "CREATE INDEX ix_research_probe_key_attempted "
+        "ON research_probe_attempts(probe_key, attempted_at)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_probe_run",
+        "CREATE INDEX ix_research_probe_run ON research_probe_attempts(run_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_probe_status",
+        "CREATE INDEX ix_research_probe_status ON research_probe_attempts(status)",
+    )
+
+
+
+def _m131_general_claim_acquisition(conn: Connection) -> None:
+    """Persist bounded claim acquisition runs and candidate admission decisions."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_acquisition_runs (
+            run_id TEXT PRIMARY KEY,
+            started_at DATETIME NOT NULL,
+            completed_at DATETIME,
+            status TEXT NOT NULL DEFAULT 'running',
+            seed_topic TEXT NOT NULL DEFAULT '',
+            documents_seen INTEGER NOT NULL DEFAULT 0,
+            candidates_extracted INTEGER NOT NULL DEFAULT 0,
+            claims_accepted INTEGER NOT NULL DEFAULT 0,
+            duplicates INTEGER NOT NULL DEFAULT 0,
+            rejected INTEGER NOT NULL DEFAULT 0,
+            superseded INTEGER NOT NULL DEFAULT 0,
+            tool_calls INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claim_candidates (
+            candidate_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES research_acquisition_runs(run_id) ON DELETE RESTRICT,
+            source_id TEXT NOT NULL REFERENCES research_sources(source_id) ON DELETE RESTRICT,
+            fingerprint TEXT NOT NULL,
+            quote TEXT NOT NULL,
+            statement TEXT NOT NULL,
+            proposed_claim_key TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            observation_kind TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0.5,
+            valid_from DATETIME,
+            valid_until DATETIME,
+            supersedes_previous INTEGER NOT NULL DEFAULT 0,
+            decision TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            accepted_claim_id TEXT REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            meta JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn, "ix_research_acquisition_started",
+        "CREATE INDEX ix_research_acquisition_started ON research_acquisition_runs(started_at)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_acquisition_status",
+        "CREATE INDEX ix_research_acquisition_status ON research_acquisition_runs(status)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_run",
+        "CREATE INDEX ix_research_candidate_run ON research_claim_candidates(run_id)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_source",
+        "CREATE INDEX ix_research_candidate_source ON research_claim_candidates(source_id)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_decision",
+        "CREATE INDEX ix_research_candidate_decision ON research_claim_candidates(decision)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_key",
+        "CREATE INDEX ix_research_candidate_key ON research_claim_candidates(proposed_claim_key)",
+    )
+    _create_index_if_missing(
+        conn, "ix_research_candidate_fingerprint",
+        "CREATE INDEX ix_research_candidate_fingerprint ON research_claim_candidates(fingerprint)",
+    )
+
+
+
+def _m132_semantic_claim_resolution(conn: Connection) -> None:
+    """Persist semantic claim-resolution decisions for acquired candidates."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS research_claim_resolutions (
+            resolution_id TEXT PRIMARY KEY,
+            candidate_id TEXT NOT NULL REFERENCES research_claim_candidates(candidate_id) ON DELETE RESTRICT,
+            matched_claim_id TEXT REFERENCES research_claims(claim_id) ON DELETE RESTRICT,
+            relation TEXT NOT NULL,
+            score REAL NOT NULL DEFAULT 0.0,
+            lexical_score REAL NOT NULL DEFAULT 0.0,
+            key_match INTEGER NOT NULL DEFAULT 0,
+            numeric_match INTEGER NOT NULL DEFAULT 0,
+            period_match INTEGER NOT NULL DEFAULT 0,
+            polarity_match INTEGER NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL DEFAULT '',
+            signals JSON DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    _create_index_if_missing(
+        conn,
+        "ix_research_resolution_candidate",
+        "CREATE INDEX ix_research_resolution_candidate "
+        "ON research_claim_resolutions(candidate_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_resolution_matched_claim",
+        "CREATE INDEX ix_research_resolution_matched_claim "
+        "ON research_claim_resolutions(matched_claim_id)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_resolution_relation",
+        "CREATE INDEX ix_research_resolution_relation "
+        "ON research_claim_resolutions(relation)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_research_resolution_created",
+        "CREATE INDEX ix_research_resolution_created "
+        "ON research_claim_resolutions(created_at)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -1992,6 +2484,12 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(124, "assistant_context_snapshots", _m124_assistant_context_snapshots),
     Migration(125, "assistant_task_protocol", _m125_assistant_task_protocol),
     Migration(126, "assistant_task_events", _m126_assistant_task_events),
+    Migration(127, "research_evidence_foundation", _m127_research_evidence_foundation),
+    Migration(128, "claim_graph_and_falsification", _m128_claim_graph_and_falsification),
+    Migration(129, "persistent_belief_state", _m129_persistent_belief_state),
+    Migration(130, "automatic_research_loop", _m130_automatic_research_loop),
+    Migration(131, "general_claim_acquisition", _m131_general_claim_acquisition),
+    Migration(132, "semantic_claim_resolution", _m132_semantic_claim_resolution),
 )
 
 

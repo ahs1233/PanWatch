@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -29,6 +30,12 @@ from src.platform.ai.ai_failover import (
     build_failover_client,
     get_configured_failover_client,
 )
+from src.platform.external_tools import (
+    AhmedToolboxClient,
+    GraphifyClient,
+    register_ahmed_toolbox_tools,
+    register_graphify_tools,
+)
 from src.platform.persistence.models import AIModel, AIService, AppSettings
 from src.platform.runtime.config import Settings
 
@@ -52,6 +59,10 @@ from .schemas import (
 )
 from .tool_descriptors import PANWATCH_TOOL_DESCRIPTORS
 from .tools import build_panwatch_tool_registry
+from .xau_tools import register_xau_research_tools
+
+
+logger = logging.getLogger(__name__)
 
 
 class AssistantNotFoundError(LookupError):
@@ -362,9 +373,65 @@ class AssistantService:
             task=task, checkpoint=checkpoint, decisions=decisions
         )
 
+    def _build_tool_registry(self):
+        """Compose local, external research, and project-knowledge tools."""
+        tools = build_panwatch_tool_registry(self._repository.session)
+        descriptors = list(PANWATCH_TOOL_DESCRIPTORS)
+        descriptors.extend(register_xau_research_tools(tools))
+
+        graphify_url = self._settings.graphify_mcp_url.strip()
+        if graphify_url:
+            try:
+                knowledge_descriptors = register_graphify_tools(
+                    tools,
+                    GraphifyClient(
+                        graphify_url,
+                        token=self._settings.graphify_mcp_token,
+                        timeout_seconds=self._settings.graphify_mcp_timeout_seconds,
+                    ),
+                )
+                descriptors.extend(knowledge_descriptors)
+                logger.info(
+                    "Graphify knowledge discovery ready: tools=%s tool_research=%s",
+                    len(knowledge_descriptors),
+                    bool(self._settings.tool_research_enabled),
+                )
+            except Exception as exc:  # noqa: BLE001 - knowledge lookup must fail soft
+                logger.warning(
+                    "Graphify knowledge discovery unavailable; continuing without it: %s",
+                    exc,
+                )
+
+        toolbox_url = self._settings.ahmed_toolbox_url.strip()
+        if toolbox_url:
+            try:
+                external_descriptors = register_ahmed_toolbox_tools(
+                    tools,
+                    AhmedToolboxClient(
+                        toolbox_url,
+                        token=self._settings.ahmed_toolbox_token,
+                        refresh_token=self._settings.ahmed_toolbox_refresh_token,
+                        access_ttl_seconds=self._settings.ahmed_toolbox_access_ttl_seconds,
+                        timeout_seconds=self._settings.ahmed_toolbox_timeout_seconds,
+                    ),
+                )
+                descriptors.extend(external_descriptors)
+                logger.info(
+                    "Ahmed ToolBox discovery ready: external_tools=%s tool_research=%s",
+                    len(external_descriptors),
+                    bool(self._settings.tool_research_enabled),
+                )
+            except Exception as exc:  # noqa: BLE001 - external research must fail soft
+                logger.warning(
+                    "Ahmed ToolBox discovery unavailable; continuing with local tools: %s",
+                    exc,
+                )
+
+        return tools, descriptors
+
     def build_runtime(self, failover_client) -> AgentRuntime:
         """Compose host adapters into the business-agnostic PanAgent runtime."""
-        tools = build_panwatch_tool_registry(self._repository.session)
+        tools, descriptors = self._build_tool_registry()
         return AgentRuntime(
             FailoverModelAdapter(failover_client),
             tools,
@@ -374,7 +441,7 @@ class AssistantService:
                     ToolResearchPlugin(
                         ToolResearchService(
                             tools,
-                            descriptors=list(PANWATCH_TOOL_DESCRIPTORS),
+                            descriptors=descriptors,
                         ),
                         mode="active",
                     )
@@ -416,9 +483,7 @@ class AssistantService:
                 ).mode.value,
                 "confirmation_required": tool.confirmation_required,
             }
-            for tool in build_panwatch_tool_registry(
-                self._repository.session
-            ).registered_tools()
+            for tool in self._build_tool_registry()[0].registered_tools()
         ]
         return {
             "defaults": defaults,
@@ -448,9 +513,7 @@ class AssistantService:
         elif selector_kind == "tool" and resolved_risk is None:
             registered = {
                 tool.name: tool
-                for tool in build_panwatch_tool_registry(
-                    self._repository.session
-                ).registered_tools()
+                for tool in self._build_tool_registry()[0].registered_tools()
             }
             if selector_value not in registered:
                 raise ValueError("未知工具必须携带风险类别")
@@ -541,10 +604,17 @@ class AssistantService:
         return AssistantConfigUpdate(**defaults).model_dump()
 
     def _context_tool_schemas(self) -> list[dict]:
-        """Estimate the definitions registered for the assistant model input."""
+        """Estimate the initial local model tool surface without remote discovery.
+
+        Ahmed ToolBox and XAU research tools are deferred behind ToolResearch,
+        so contacting remote MCP servers here would add latency to ordinary
+        context measurement without improving the estimate of the first turn.
+        """
         return [
             tool.openai_schema()
-            for tool in build_panwatch_tool_registry(self._repository.session).registered_tools()
+            for tool in build_panwatch_tool_registry(
+                self._repository.session
+            ).registered_tools()
         ]
 
     @staticmethod

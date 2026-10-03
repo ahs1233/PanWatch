@@ -25,7 +25,7 @@ from pan_agent import (
 from src.platform.persistence.database import SessionLocal
 from src.platform.tasking.contracts import TaskEventType, TaskStatus
 
-from .prompt import build_assistant_messages
+from .prompt import build_assistant_messages, gen1_trade_gold_request_context
 from .repository import AssistantRepository
 from .service import AssistantService
 
@@ -241,22 +241,25 @@ class AssistantTaskRunner:
                     ]
                 )
             )
+            request_context = (
+                {
+                    "context_usage": context_result.usage_after.model_dump(mode="json"),
+                    "context_compressed": context_result.compressed,
+                }
+                if context_result is not None
+                else {}
+            )
+            gen1_context = gen1_trade_gold_request_context(messages)
+            request_context.update(gen1_context)
             request = RunRequest(
                 run_id=str(task_id),
                 messages=messages,
-                context=(
-                    {
-                        "context_usage": context_result.usage_after.model_dump(mode="json"),
-                        "context_compressed": context_result.compressed,
-                    }
-                    if context_result is not None
-                    else {}
-                ),
+                context=request_context,
                 limits=RunLimits(
                     max_steps=ASSISTANT_MAX_STEPS,
                     max_tool_calls=ASSISTANT_MAX_TOOL_CALLS,
                     run_timeout_seconds=ASSISTANT_RUN_TIMEOUT_SECONDS,
-                    tool_timeout_seconds=ASSISTANT_TOOL_TIMEOUT_SECONDS,
+                    tool_timeout_seconds=(120 if gen1_context else ASSISTANT_TOOL_TIMEOUT_SECONDS),
                 ),
             )
             sink = DurableRuntimeEventSink(service, task_id, context_result)

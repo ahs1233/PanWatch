@@ -1,4 +1,4 @@
-.PHONY: help setup-backend dev-api dev-web build test test-notify eval doctor install-hooks clean-venv
+.PHONY: help setup-backend dev-api dev-web build test test-notify eval doctor install-hooks clean-venv knowledge-install knowledge-build knowledge-update knowledge-serve knowledge-hook
 
 # 端口约定：
 #   - 后端：:8000（Docker / 本地 dev 统一，避免存量用户升级困惑）
@@ -107,3 +107,19 @@ ifeq ($(WINDOWS),1)
 else
 	rm -rf .venv
 endif
+
+# Graphify runs in its own venv to avoid coupling its MCP/Starlette stack to FastAPI.
+knowledge-install:
+	@$(PYTHON) scripts/graphify_knowledge.py install
+
+knowledge-build:
+	@$(PYTHON) scripts/graphify_knowledge.py build
+
+knowledge-update:
+	@$(PYTHON) scripts/graphify_knowledge.py update
+
+knowledge-serve:
+	@$(PYTHON) scripts/graphify_knowledge.py serve
+
+knowledge-hook:
+	@$(PYTHON) scripts/graphify_knowledge.py hook

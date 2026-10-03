@@ -1,6 +1,6 @@
 import { Suspense, useState, useEffect, useRef } from 'react'
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom'
-import { TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, ClipboardCheck, MessageCircle } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, Database, Clock, LayoutDashboard, Github, MessageCircle, Activity, Crosshair } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { appApi } from '@panwatch/api/app'
 import { fetchAPI, isAuthenticated } from '@panwatch/api/client'
@@ -28,25 +28,22 @@ const {
   PaperTradingPage,
   EvaluationsPage,
   AssistantPage,
+  Gen1GoldPage,
 } = routePages
 
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: '首页' },
-  { to: '/portfolio', icon: List, label: '持仓' },
-  { to: '/opportunities', icon: Sparkles, label: '机会' },
-  { to: '/paper-trading', icon: Activity, label: '模拟盘' },
-  { to: '/assistant', icon: MessageCircle, label: '助手' },
-  { to: '/alerts', icon: BellRing, label: '提醒' },
-  { to: '/agents', icon: Bot, label: 'Agent' },
-  { to: '/evaluations', icon: ClipboardCheck, label: '验证中心' },
-  { to: '/history', icon: Clock, label: '历史' },
-  { to: '/datasources', icon: Database, label: '数据源' },
-  { to: '/settings', icon: Settings, label: '设置' },
+  { to: '/', icon: LayoutDashboard, label: 'Gold' },
+  { to: '/gen1-gold', icon: Crosshair, label: 'GEN1 Gold' },
+  { to: '/paper-trading', icon: Activity, label: 'Paper $10k' },
+  { to: '/assistant', icon: MessageCircle, label: 'AI Research' },
+  { to: '/history', icon: Clock, label: 'History' },
+  { to: '/datasources', icon: Database, label: 'Data Sources' },
+  { to: '/settings', icon: Settings, label: 'Settings' },
 ]
-const desktopPrimaryNavItems = navItems.slice(0, 5)
-const desktopMoreNavItems = navItems.slice(5)
-const mobilePrimaryNavItems = navItems.slice(0, 5)
-const mobileMoreNavItems = navItems.slice(5)
+const desktopPrimaryNavItems = navItems
+const desktopMoreNavItems: typeof navItems = []
+const mobilePrimaryNavItems = navItems
+const mobileMoreNavItems: typeof navItems = []
 
 // 认证守卫组件
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -89,7 +86,7 @@ function App() {
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [upgradeInfo, setUpgradeInfo] = useState<{ latest: string; url: string } | null>(null)
   const checkedUpdateRef = useRef(false)
-  const repoUrl = 'https://github.com/TNT-Likely/PanWatch'
+  const repoUrl = 'https://github.com/ahs1233/PanWatch'
 
   useEffect(() => {
     appApi.version()
@@ -139,7 +136,7 @@ function App() {
     >
       <AmbientBackground />
       {/* Desktop Floating Nav */}
-      <div className="sticky top-0 z-50 px-4 md:px-6 pt-3 md:pt-4 pb-2 hidden md:block">
+      <div className="relative z-40 px-4 md:px-6 pt-3 md:pt-4 pb-2 hidden md:block">
         <header className="card px-4 md:px-5">
           <div className="h-14 flex items-center justify-between">
             {/* Logo */}
@@ -284,6 +281,7 @@ function App() {
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route path="/" element={<DashboardPage />} />
+              <Route path="/gen1-gold" element={<Gen1GoldPage />} />
               <Route path="/opportunities" element={<OpportunitiesPage />} />
               <Route path="/portfolio" element={<StocksPage />} />
               <Route path="/agents" element={<AgentsPage />} />

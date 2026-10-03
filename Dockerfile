@@ -85,6 +85,9 @@ COPY packages/ ./packages/
 # 安装 Python 依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
+# XAU intelligence dependency smoke
+RUN python -c "import pyvsmc, smartmoneyconcepts, market_profile, pandas_ta_classic, vectorbt; import smc_mcp.smc; print('XAU_INTELLIGENCE_LIBS_OK')"
+
 # 注意: Playwright 浏览器将在首次启动时自动安装到 data 目录
 # 这样可以减小镜像体积，并支持跨版本持久化
 
@@ -92,6 +95,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY server.py ./
 COPY prompts/ ./prompts/
+
+# Functional smoke: exercise SMC engines, TA oracle, volume profile and vectorbt.
+RUN python -m src.modules.xau.library_smoke
 
 # 写入版本号
 RUN echo "${VERSION}" > VERSION

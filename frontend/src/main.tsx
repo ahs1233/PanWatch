@@ -4,6 +4,9 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
 import './index.css'
+import { installEnglishUI } from './ui-language'
+
+installEnglishUI()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -1,0 +1,43 @@
+name: XAU Dukascopy Deep History Smoke
+
+on:
+  pull_request:
+    paths:
+      - "src/platform/marketdata/xau_dukascopy.py"
+      - "src/platform/marketdata/xau_provider_audit.py"
+      - "benchmarks/xau_dukascopy_v1/**"
+      - ".github/workflows/xau-dukascopy-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deep-history-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install network dependency
+        run: python -m pip install --disable-pip-version-check httpx
+
+      - name: Verify old and recent Dukascopy XAUUSD BI5 data
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          python benchmarks/xau_dukascopy_v1/run.py | tee xau-dukascopy-smoke.json
+
+      - name: Upload Dukascopy smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xau-dukascopy-deep-history-smoke-v1
+          path: xau-dukascopy-smoke.json

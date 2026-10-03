@@ -43,3 +43,20 @@ PR 正文至少包含以下部分：
 - 除非用户明确要求直接推送 `main`，否则在 `codex/` 前缀分支上开发并通过 Pull Request 合并。
 - Pull Request 默认使用 squash merge。
 - 创建或更新 PR 前先运行与变更相关的测试，并执行 `git diff --check`。
+
+## GTG / PanWatch Production Safety
+
+For any GTG-related work, first read and follow:
+
+- `docs/GTG_DEVELOPMENT_POLICY.md`
+
+Mandatory rules:
+
+- `production/panwatch-stable` is the Production release branch and is read-only during normal GTG development.
+- GTG experimentation and implementation stays on `feat/ahmed-toolbox-xau` or a child development branch.
+- Never deploy ordinary GTG commits directly to Railway Production.
+- Promote only an exact candidate SHA that has passed the required CI, real-data, parity, historical-data, backtest, storage, startup, and Ahmed Toolbox gates defined in the policy.
+- Do not modify stable Auth/Storage/Railway boundaries merely to make a GTG experiment pass.
+- Production XAU storage authority remains local SQLite on the persistent `/app/data` volume; the external database is one-way replica/archive only.
+- A replica outage or quota failure must remain non-blocking and must never change the Production primary automatically.
+- When validating Production, report the production branch, exact production SHA, CI state, Railway deployment ID/status, and health evidence. Do not use a moving development HEAD as the Production acceptance target.

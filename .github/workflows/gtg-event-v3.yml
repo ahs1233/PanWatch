@@ -1,0 +1,95 @@
+name: GTG Event-Conditioned Directional Experience v3
+
+on:
+  push:
+    branches:
+      - "codex/gtg-event-v3"
+    paths:
+      - ".github/workflows/gtg-event-v3.yml"
+      - "src/modules/xau/gtg_event_v3.py"
+      - "src/modules/xau/gtg_event_v3_data.py"
+      - "benchmarks/gtg_event_v3/**"
+      - "ci_tests/test_gtg_event_v3.py"
+      - "docs/GTG_EVENT_V3.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gtg-event-v3-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  GTG_V3_START: "2024-09-23"
+  GTG_V3_TRAIN_END: "2025-07-23"
+  GTG_V3_VALID_END: "2025-09-23"
+  GTG_V3_TEST_END: "2026-09-23"
+  GTG_V3_OUT: "artifacts/gtg_event_v3"
+  GTG_V3_DATASET_ID: "gen1-xau-2y-dataset-v2-20240923-20260923"
+  GEN1_2Y_DATASET_TAG: "gen1-xau-2y-dataset-v2-20240923-20260923"
+  GEN1_2Y_SHARD_GLOB: "/tmp/gtg-event-v3-data/m*.pkl.gz"
+
+jobs:
+  train-evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check numpy pytest httpx sqlalchemy pydantic pydantic-settings pyyaml openai apscheduler websockets
+          python -m pip install --disable-pip-version-check torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
+
+      - name: Compile and focused regression tests
+        run: |
+          python -m py_compile             src/modules/xau/gtg_event_v3.py             src/modules/xau/gtg_event_v3_data.py             benchmarks/gtg_event_v3/run.py
+          pytest -q ci_tests/test_gtg_event_v3.py
+
+      - name: Download frozen two-year dataset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gtg-event-v3-data
+          gh release download "$GEN1_2Y_DATASET_TAG" --pattern 'm*.pkl.gz' --dir /tmp/gtg-event-v3-data
+          COUNT="$(find /tmp/gtg-event-v3-data -maxdepth 1 -name 'm*.pkl.gz' | wc -l | tr -d ' ')"
+          echo "shards=$COUNT"
+          test "$COUNT" = "24"
+          sha256sum /tmp/gtg-event-v3-data/m*.pkl.gz > /tmp/gtg-event-v3-data/sha256.txt
+
+      - name: Train independent event experts and evaluate untouched OOS
+        run: |
+          set -o pipefail
+          python benchmarks/gtg_event_v3/run.py 2>&1 | tee gtg-event-v3-console.log
+
+      - name: Emit machine-readable report into job log
+        if: always()
+        run: |
+          if test -f artifacts/gtg_event_v3/report.json; then
+            echo "===== GTG_EVENT_V3_REPORT_JSON_BEGIN ====="
+            cat artifacts/gtg_event_v3/report.json
+            echo "===== GTG_EVENT_V3_REPORT_JSON_END ====="
+          fi
+
+      - name: Upload immutable benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtg-event-v3-${{ github.sha }}
+          retention-days: 30
+          path: |
+            artifacts/gtg_event_v3/**
+            gtg-event-v3-console.log
+            /tmp/gtg-event-v3-data/sha256.txt

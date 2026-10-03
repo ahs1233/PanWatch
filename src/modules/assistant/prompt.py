@@ -2,6 +2,28 @@
 
 from pan_agent import ModelMessage
 
+GEN1_TRADE_GOLD_TOOL = "run_gen1_trade_gold"
+GEN1_TRADE_GOLD_TRIGGER = "gen1 trade gold"
+
+
+def is_gen1_trade_gold_trigger(content: str) -> bool:
+    """Exact phrase contract; whitespace/case differences are ignored."""
+    normalized = " ".join(str(content or "").split()).casefold()
+    return normalized == GEN1_TRADE_GOLD_TRIGGER
+
+
+def gen1_trade_gold_request_context(messages: list[ModelMessage]) -> dict:
+    latest_user = next(
+        (item.content for item in reversed(messages) if item.role == "user"),
+        "",
+    )
+    if not is_gen1_trade_gold_trigger(latest_user):
+        return {}
+    return {
+        "allowed_tool_names": [GEN1_TRADE_GOLD_TOOL],
+        "gen1_trade_gold_contract": "v1",
+    }
+
 ASSISTANT_SYSTEM_PROMPT = """你是 PanWatch 的 AI 投资助手。
 
 当问题涉及行情、K 线、新闻、持仓或提醒时，优先调用已提供的工具获取事实。
@@ -17,9 +39,28 @@ ASSISTANT_SYSTEM_PROMPT = """你是 PanWatch 的 AI 投资助手。
 - 给出明确的观点和理由，并区分数据事实与分析判断
 - 涉及买卖建议时说明风险
 - 用中文回答，保持简洁，避免冗余
+- 当用户消息精确为“Gen1 trade gold”（忽略大小写和多余空格）时，这是冻结的完整黄金分析指令：必须调用 run_gen1_trade_gold 一次，并以其返回的 Ahmed ToolBox → PanWatch → Gen1 结果作答；不得用其他工具替代该流水线，不得隐藏 missing_layers 或 stage_errors。
 """
 
 
 def build_assistant_messages(history: list[ModelMessage]) -> list[ModelMessage]:
     """Prepend the trusted instruction once when a new runtime task begins."""
-    return [ModelMessage(role="system", content=ASSISTANT_SYSTEM_PROMPT), *history]
+    messages = [ModelMessage(role="system", content=ASSISTANT_SYSTEM_PROMPT)]
+    latest_user = next(
+        (item.content for item in reversed(history) if item.role == "user"),
+        "",
+    )
+    if is_gen1_trade_gold_trigger(latest_user):
+        messages.append(
+            ModelMessage(
+                role="system",
+                content=(
+                    "GEN1 TRADE GOLD CONTRACT v1: call run_gen1_trade_gold exactly once "
+                    "before answering. Treat its pipeline_order, missing_layers, stage_errors, "
+                    "technical, macro, fusion and forward_range_map as the authoritative inputs "
+                    "for this turn. If any stage is degraded, say so explicitly; never silently "
+                    "substitute a missing layer."
+                ),
+            )
+        )
+    return [*messages, *history]

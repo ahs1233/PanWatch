@@ -86,6 +86,7 @@ def _init_db_once() -> None:
     _migrate(engine)
     _migrate_old_providers(engine)
     _migrate_settings_to_models(engine)
+    _sync_env_ai_provider(engine)
     _migrate_positions_to_accounts(engine)
     _migrate_remove_stock_enabled(engine)
     if has_pending_migrations(engine):
@@ -459,6 +460,96 @@ def _migrate_settings_to_models(engine):
                 )
 
         conn.commit()
+
+
+def _sync_env_ai_provider(engine) -> None:
+    """Upsert the environment-configured AI provider/model as PanWatch default.
+
+    Railway deployments should not require manual provider/model setup in the UI.
+    When AI_API_KEY (or its Settings alias ATRIA_API_KEY) is present, Settings
+    supplies the endpoint/model and this function persists them into the normal
+    ai_services + ai_models tables used by the assistant and failover layer.
+
+    With no key configured this is a no-op, preserving upstream behavior.
+    """
+    from src.platform.runtime.config import Settings
+
+    settings = Settings()
+    api_key = settings.ai_api_key.strip()
+    base_url = settings.ai_base_url.strip().rstrip("/")
+    model = settings.ai_model.strip()
+    if not api_key or not base_url or not model:
+        return
+
+    with engine.connect() as conn:
+        if not _has_table(conn, "ai_services") or not _has_table(conn, "ai_models"):
+            return
+
+        row = conn.execute(
+            text(
+                "SELECT id FROM ai_services "
+                "WHERE rtrim(base_url, '/') = :base_url ORDER BY id LIMIT 1"
+            ),
+            {"base_url": base_url},
+        ).first()
+        if row:
+            service_id = int(row[0])
+            conn.execute(
+                text(
+                    "UPDATE ai_services SET name = :name, base_url = :base_url, "
+                    "api_key = :api_key WHERE id = :id"
+                ),
+                {
+                    "name": "Atria" if "atria-asi.ai" in base_url else "Environment AI",
+                    "base_url": base_url,
+                    "api_key": api_key,
+                    "id": service_id,
+                },
+            )
+        else:
+            conn.execute(
+                text(
+                    "INSERT INTO ai_services (name, base_url, api_key) "
+                    "VALUES (:name, :base_url, :api_key)"
+                ),
+                {
+                    "name": "Atria" if "atria-asi.ai" in base_url else "Environment AI",
+                    "base_url": base_url,
+                    "api_key": api_key,
+                },
+            )
+            service_id = int(conn.execute(text("SELECT last_insert_rowid()")).scalar())
+
+        model_row = conn.execute(
+            text(
+                "SELECT id FROM ai_models "
+                "WHERE service_id = :service_id AND model = :model "
+                "ORDER BY id LIMIT 1"
+            ),
+            {"service_id": service_id, "model": model},
+        ).first()
+
+        conn.execute(text("UPDATE ai_models SET is_default = 0"))
+        if model_row:
+            model_id = int(model_row[0])
+            conn.execute(
+                text(
+                    "UPDATE ai_models SET name = :name, is_default = 1 "
+                    "WHERE id = :id"
+                ),
+                {"name": model, "id": model_id},
+            )
+        else:
+            conn.execute(
+                text(
+                    "INSERT INTO ai_models "
+                    "(name, service_id, model, is_default) "
+                    "VALUES (:name, :service_id, :model, 1)"
+                ),
+                {"name": model, "service_id": service_id, "model": model},
+            )
+        conn.commit()
+        logger.info("AI environment provider synchronized as default model: %s", model)
 
 
 def _migrate_positions_to_accounts(engine):

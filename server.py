@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import sys
 import time
 from contextlib import asynccontextmanager
 
@@ -22,6 +23,7 @@ from src.platform.persistence.models import (
 from src.platform.observability.log_handler import DBLogHandler
 from src.platform.runtime.config import Settings, AppConfig, StockConfig
 from src.platform.marketdata.models import MarketCode
+from src.platform.external_tools.ahmed_toolbox import AhmedToolboxClient
 from src.platform.ai.ai_client import AIClient
 from src.platform.ai.ai_failover import build_failover_client
 from src.platform.notifications.notifier import NotifierManager
@@ -29,6 +31,14 @@ from src.modules.automation.agent_scheduler import AgentScheduler
 from src.modules.market.price_alert_scheduler import PriceAlertScheduler
 from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
+from src.modules.research.automatic_research_scheduler import AutomaticResearchScheduler
+from src.modules.research.claim_acquisition_scheduler import ClaimAcquisitionScheduler
+from src.modules.research.research_store import init_research_store
+from src.modules.xau.scheduler import XAUResearchScheduler
+from src.modules.xau.gen1_forward_validation import Gen1ForwardValidationScheduler
+from src.modules.xau.paper import XAUPaperTradingScheduler
+from src.modules.xau.replay import XAUReplayScheduler
+from src.modules.xau.paper_store import init_xau_paper_store
 from src.modules.automation.agent_runs import record_agent_run
 from src.platform.observability.log_context import install_log_record_factory, log_context
 from src.modules.automation.agent_catalog import (
@@ -52,6 +62,12 @@ scheduler: AgentScheduler | None = None
 price_alert_scheduler: PriceAlertScheduler | None = None
 paper_trading_scheduler: PaperTradingScheduler | None = None
 context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
+xau_research_scheduler: XAUResearchScheduler | None = None
+xau_paper_scheduler: XAUPaperTradingScheduler | None = None
+xau_replay_scheduler: XAUReplayScheduler | None = None
+xau_gen1_forward_scheduler: Gen1ForwardValidationScheduler | None = None
+automatic_research_scheduler: AutomaticResearchScheduler | None = None
+claim_acquisition_scheduler: ClaimAcquisitionScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -163,7 +179,9 @@ def setup_logging():
                 pass
 
     # 控制台输出: 按 LOG_LEVEL 过滤,且丢弃三方库的低级别噪音
-    console = logging.StreamHandler()
+    # Railway classifies stderr as error-level transport output even for INFO records.
+    # Keep application INFO/DEBUG on stdout; WARNING/ERROR retain their Python level.
+    console = logging.StreamHandler(sys.stdout)
     console._panwatch_console = True  # type: ignore[attr-defined]
     console.setLevel(console_level)
     console.addFilter(_ConsoleNoiseFilter())
@@ -209,11 +227,15 @@ class _ConsoleNoiseFilter(logging.Filter):
 
 
 def setup_playwright():
-    """检查并安装 Playwright 浏览器
+    """检查并安装 Playwright 浏览器。
 
-    本地开发时使用系统安装的 Playwright，Docker 环境下安装到 data 目录。
-    通过 DOCKER 环境变量或显式设置的 PLAYWRIGHT_BROWSERS_PATH 来判断。
+    XAU profile uses Scrapling/Agent-Reach for web research and does not need
+    the legacy stock chart screenshot browser in the hot path.
     """
+    if Settings().panwatch_profile.strip().lower() == "xau":
+        logger.info("XAU profile: skipping legacy Playwright chart browser")
+        return
+
     import subprocess
 
     # 允许通过环境变量跳过首次安装（例如不需要截图功能时）
@@ -277,7 +299,10 @@ def setup_playwright():
 
 
 def seed_sample_stocks():
-    """首次启动时添加示例股票"""
+    """首次启动时添加示例股票。XAU profile intentionally seeds none."""
+    if Settings().panwatch_profile.strip().lower() == "xau":
+        logger.info("XAU profile: legacy sample stocks disabled")
+        return
     db = SessionLocal()
     try:
         # 只在没有任何股票时才添加示例
@@ -300,8 +325,13 @@ def seed_sample_stocks():
 
 
 def seed_agents():
-    """初始化内置 Agent 配置"""
+    """初始化内置 Agent 配置.
+
+    In XAU profile the legacy stock workflows remain in the schema for
+    compatibility but are forcibly disabled and hidden.
+    """
     db = SessionLocal()
+    xau_mode = Settings().panwatch_profile.strip().lower() == "xau"
     for spec in AGENT_SEED_SPECS:
         existing = db.query(AgentConfig).filter(AgentConfig.name == spec.name).first()
         if not existing:
@@ -347,6 +377,13 @@ def seed_agents():
                 if isinstance(cfg, dict) and "event_only" not in cfg:
                     cfg["event_only"] = True
                     existing.config = cfg
+
+    if xau_mode:
+        for row in db.query(AgentConfig).all():
+            row.enabled = False
+            row.schedule = ""
+            row.visible = False
+        logger.info("XAU profile: legacy stock agents disabled")
 
     db.commit()
     db.close()
@@ -1456,6 +1493,165 @@ async def trigger_agent_for_stock(
     }
 
 
+
+async def verify_runtime_integrations() -> None:
+    """Run an opt-in harmless startup smoke test for AI + external research.
+
+    Enable with RUNTIME_SMOKE_TEST=true. The probe never logs API keys or bearer
+    tokens and failures do not block PanWatch startup.
+    """
+    if os.environ.get("RUNTIME_SMOKE_TEST", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+
+    settings = Settings()
+
+    db = SessionLocal()
+    try:
+        default_model = db.query(AIModel).filter(AIModel.is_default == True).first()
+        default_service = (
+            db.query(AIService).filter(AIService.id == default_model.service_id).first()
+            if default_model
+            else None
+        )
+        logger.info(
+            "[runtime-smoke] Default AI persisted=%s service=%s model=%s",
+            bool(default_model and default_service),
+            default_service.name if default_service else "",
+            default_model.model if default_model else "",
+        )
+    finally:
+        db.close()
+
+    if settings.ai_api_key:
+        try:
+            ai = AIClient(
+                base_url=settings.ai_base_url,
+                api_key=settings.ai_api_key,
+                model=settings.ai_model,
+            )
+            reply = await asyncio.wait_for(
+                ai.chat(
+                    "You are a connectivity probe. Reply with exactly OK.",
+                    "Reply exactly OK.",
+                    temperature=0,
+                ),
+                timeout=25,
+            )
+            logger.info(
+                "[runtime-smoke] AI ok model=%s reply_ok=%s",
+                settings.ai_model,
+                reply.strip().upper() == "OK",
+            )
+
+            probe_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "runtime_probe",
+                        "description": "Connectivity probe. Always call this function when requested.",
+                        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                    },
+                }
+            ]
+            async def _consume_tool_probe():
+                final_message = None
+                async for event_type, payload in ai.chat_stream(
+                    [
+                        {
+                            "role": "user",
+                            "content": "You must call the runtime_probe function now. Do not answer with normal text.",
+                        }
+                    ],
+                    tools=probe_tools,
+                    temperature=0,
+                    tool_choice="auto",
+                ):
+                    if event_type == "message":
+                        final_message = payload
+                return final_message
+
+            final_message = await asyncio.wait_for(
+                _consume_tool_probe(),
+                timeout=30,
+            )
+            tool_calls = (final_message or {}).get("tool_calls") or []
+            logger.info(
+                "[runtime-smoke] AI streaming tool_call_ok=%s tool_name=%s",
+                bool(tool_calls),
+                tool_calls[0].get("name", "") if tool_calls else "",
+            )
+        except Exception as exc:
+            logger.error(
+                "[runtime-smoke] AI failed model=%s error=%s",
+                settings.ai_model,
+                type(exc).__name__,
+            )
+    else:
+        logger.warning("[runtime-smoke] AI skipped: API key not configured")
+
+    if settings.ahmed_toolbox_url:
+        try:
+            client = AhmedToolboxClient(
+                settings.ahmed_toolbox_url,
+                token=settings.ahmed_toolbox_token,
+                refresh_token=settings.ahmed_toolbox_refresh_token,
+                access_ttl_seconds=settings.ahmed_toolbox_access_ttl_seconds,
+                timeout_seconds=settings.ahmed_toolbox_timeout_seconds,
+            )
+            tools = await asyncio.wait_for(asyncio.to_thread(client.list_tools), timeout=20)
+            names = [str(item.get("name") or "") for item in tools]
+            logger.info(
+                "[runtime-smoke] ToolBox ok tool_count=%s scrapling_fetch=%s reach_web_search=%s",
+                len(names),
+                "scrapling__fetch" in names,
+                "reach_web_search" in names,
+            )
+            if "reach_web_search" in names:
+                search_result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.call_tool,
+                        "reach_web_search",
+                        {"query": "OpenAI official site", "num_results": 1},
+                    ),
+                    timeout=30,
+                )
+                search_error = bool(search_result.get("isError"))
+                search_text = "\n".join(
+                    str(item.get("text") or "")
+                    for item in (search_result.get("content") or [])
+                    if isinstance(item, dict)
+                ).strip()
+                logger.info(
+                    "[runtime-smoke] Agent-Reach web search ok=%s nonempty=%s",
+                    not search_error,
+                    bool(search_text),
+                )
+            if "scrapling__fetch" in names:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.call_tool,
+                        "scrapling__fetch",
+                        {"url": "https://example.com"},
+                    ),
+                    timeout=30,
+                )
+                is_error = bool(result.get("isError"))
+                text_parts = [
+                    str(item.get("text") or "")
+                    for item in (result.get("content") or [])
+                    if isinstance(item, dict)
+                ]
+                logger.info(
+                    "[runtime-smoke] Scrapling fetch ok=%s example_domain=%s",
+                    not is_error,
+                    "Example Domain" in "\n".join(text_parts),
+                )
+        except Exception as exc:
+            logger.error("[runtime-smoke] ToolBox failed error=%s", type(exc).__name__)
+    else:
+        logger.warning("[runtime-smoke] ToolBox skipped: URL not configured")
+
+
 @asynccontextmanager
 async def lifespan(app):
     """应用生命周期: 初始化 + 启动调度器"""
@@ -1473,6 +1669,20 @@ async def lifespan(app):
     setup_ssl()
     setup_playwright()
 
+    research_store_external = await asyncio.to_thread(init_research_store)
+    logger.info(
+        "Research durable store external=%s",
+        research_store_external,
+    )
+
+    # Runtime smoke checks are observability probes, not readiness gates.
+    # Run them in the background so an external AI/research outage cannot
+    # hold the ASGI startup lifecycle and fail Railway health checks.
+    runtime_smoke_task = asyncio.create_task(
+        verify_runtime_integrations(),
+        name="runtime-integrations-smoke",
+    )
+
     # 从环境变量初始化认证（Docker 部署用）
     from src.modules.administration.api.auth import init_auth_from_env
 
@@ -1483,89 +1693,160 @@ async def lifespan(app):
     finally:
         db.close()
 
+    settings = Settings()
+    xau_mode = settings.panwatch_profile.strip().lower() == "xau"
+    logger.info("PanWatch runtime profile: %s", "xau" if xau_mode else "legacy")
+
     seed_agents()
-    try:
-        db = SessionLocal()
+
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, xau_research_scheduler, xau_paper_scheduler, xau_replay_scheduler, xau_gen1_forward_scheduler, automatic_research_scheduler, claim_acquisition_scheduler
+
+    macro_warmup_task = None
+
+    if xau_mode:
+        # Keep the process focused on XAU/USD. The original stock catalogue,
+        # CN/HK/US market scanners, stock strategy rebalancing and stock paper
+        # trading are intentionally not started.
+        seed_sample_stocks()
+        xau_research_scheduler = XAUResearchScheduler(
+            timezone=settings.app_timezone,
+            interval_seconds=settings.xau_fast_scan_seconds,
+        )
+        xau_research_scheduler.start()
+        external_paper_store = await asyncio.to_thread(init_xau_paper_store, settings)
+        logger.info("XAU paper durable store external=%s", external_paper_store)
+        xau_paper_scheduler = XAUPaperTradingScheduler(settings)
+        xau_paper_scheduler.start()
+        xau_replay_scheduler = XAUReplayScheduler(settings)
+        xau_replay_scheduler.start()
+        xau_gen1_forward_scheduler = Gen1ForwardValidationScheduler(settings)
+        xau_gen1_forward_scheduler.start()
+        # Warm the slow macro layer immediately so the dashboard does not pay
+        # the first-request latency. Other AI-heavy background jobs are delayed.
+        from src.modules.xau.service import get_macro_context
+        macro_warmup_task = asyncio.create_task(
+            get_macro_context(force=True),
+            name="xau-macro-warmup",
+        )
+        logger.info("XAU profile active: legacy stock background jobs are disabled")
+    else:
         try:
-            reconcile_data_sources(db)
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning(f"数据源对账失败,跳过(不阻断启动): {e}")
-    seed_strategies()
-    seed_sample_stocks()
+            db = SessionLocal()
+            try:
+                reconcile_data_sources(db)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"数据源对账失败,跳过(不阻断启动): {e}")
+        seed_strategies()
+        seed_sample_stocks()
 
-    # 启动时回填历史 TradingAgents 决策到建议池(stock_suggestions)
-    # 早期 TA 运行没写建议池,这次启动一次性补齐,让「AI 建议」面板能看到。
-    # 幂等:已存在不重复写;每次启动重跑代价极低(只查最近 7 天 + dedupe)。
-    try:
-        from src.modules.automation.tradingagents.operations import backfill_tradingagents_suggestions
-        backfill_tradingagents_suggestions(days=7)
-    except Exception as e:
-        logger.warning(f"TradingAgents 建议回填失败,跳过: {e}")
+        try:
+            from src.modules.automation.tradingagents.operations import backfill_tradingagents_suggestions
+            backfill_tradingagents_suggestions(days=7)
+        except Exception as e:
+            logger.warning(f"TradingAgents 建议回填失败,跳过: {e}")
 
-    # 后台刷新股票列表缓存
-    import threading
-    from src.platform.marketdata.stock_list import get_stock_list, refresh_stock_list
+        import threading
+        from src.platform.marketdata.stock_list import get_stock_list, refresh_stock_list
 
-    def refresh_stock_cache():
-        stocks = get_stock_list()
-        if not stocks or len([s for s in stocks if s["market"] == "CN"]) == 0:
-            logger.info("股票列表缓存为空或缺少 A 股，后台刷新中...")
-            refresh_stock_list()
+        def refresh_stock_cache():
+            stocks = get_stock_list()
+            if not stocks or len([s for s in stocks if s["market"] == "CN"]) == 0:
+                logger.info("股票列表缓存为空或缺少 A 股，后台刷新中...")
+                refresh_stock_list()
 
-    threading.Thread(target=refresh_stock_cache, daemon=True).start()
+        threading.Thread(target=refresh_stock_cache, daemon=True).start()
 
-    # 交易日历预热(判断周末/法定节假日是否开市)。拉取失败会自动降级为只判周末,
-    # 因此这里不阻塞启动,交给后台任务;之后每日 03:00 由上下文维护调度器刷新。
-    try:
-        from src.platform.scheduling.trading_calendar import refresh as refresh_trading_calendar
+        try:
+            from src.platform.scheduling.trading_calendar import refresh as refresh_trading_calendar
+            asyncio.create_task(refresh_trading_calendar())
+        except Exception as e:
+            logger.warning(f"交易日历预热调度失败(降级为只判周末): {e}")
 
-        asyncio.create_task(refresh_trading_calendar())
-    except Exception as e:
-        logger.warning(f"交易日历预热调度失败(降级为只判周末): {e}")
+        scheduler = build_scheduler()
+        scheduler.start()
+        logger.info("Agent 调度器已启动")
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler
-    scheduler = build_scheduler()
-    scheduler.start()
-    logger.info("Agent 调度器已启动")
-    try:
-        settings = Settings()
-        price_alert_scheduler = PriceAlertScheduler(
-            timezone=settings.app_timezone,
-            interval_seconds=60,
+        try:
+            price_alert_scheduler = PriceAlertScheduler(
+                timezone=settings.app_timezone,
+                interval_seconds=60,
+            )
+            price_alert_scheduler.start()
+        except Exception as e:
+            logger.error(f"价格提醒调度器启动失败: {e}")
+
+        try:
+            paper_trading_scheduler = PaperTradingScheduler(
+                timezone=settings.app_timezone,
+                interval_seconds=60,
+            )
+            paper_trading_scheduler.start()
+        except Exception as e:
+            logger.error(f"模拟盘调度器启动失败: {e}")
+
+        try:
+            context_maintenance_scheduler = ContextMaintenanceScheduler(
+                timezone=settings.app_timezone,
+                eval_interval_hours=6,
+                snapshot_retention_days=180,
+                outcome_retention_days=365,
+            )
+            context_maintenance_scheduler.start()
+        except Exception as e:
+            logger.error(f"上下文维护调度器启动失败: {e}")
+
+        try:
+            register_mcp_log_cleanup(scheduler)
+        except Exception as e:
+            logger.error(f"MCP 日志清理任务注册失败: {e}")
+
+    if settings.auto_research_enabled:
+        if not settings.ahmed_toolbox_url:
+            logger.warning(
+                "Automatic Research requested but Ahmed ToolBox URL is not configured"
+            )
+        elif not settings.ai_api_key:
+            logger.warning(
+                "Automatic Research requested but AI API key is not configured"
+            )
+        else:
+            try:
+                automatic_research_scheduler = AutomaticResearchScheduler(settings)
+                automatic_research_scheduler.start()
+            except Exception as exc:
+                logger.error(
+                    "Automatic Research scheduler failed to start: %s",
+                    type(exc).__name__,
+                )
+    else:
+        logger.info("Automatic Research scheduler disabled by configuration")
+
+    if settings.claim_acquisition_enabled and not xau_mode:
+        if not settings.ahmed_toolbox_url:
+            logger.warning(
+                "Claim Acquisition requested but Ahmed ToolBox URL is not configured"
+            )
+        elif not settings.ai_api_key:
+            logger.warning(
+                "Claim Acquisition requested but AI API key is not configured"
+            )
+        else:
+            try:
+                claim_acquisition_scheduler = ClaimAcquisitionScheduler(settings)
+                claim_acquisition_scheduler.start()
+            except Exception as exc:
+                logger.error(
+                    "Claim Acquisition scheduler failed to start: %s",
+                    type(exc).__name__,
+                )
+    else:
+        logger.info(
+            "Claim Acquisition scheduler disabled%s",
+            " for XAU profile" if xau_mode else " by configuration",
         )
-        price_alert_scheduler.start()
-        logger.info("价格提醒调度器已启动")
-    except Exception as e:
-        logger.error(f"价格提醒调度器启动失败: {e}")
-    try:
-        settings = Settings()
-        paper_trading_scheduler = PaperTradingScheduler(
-            timezone=settings.app_timezone,
-            interval_seconds=60,
-        )
-        paper_trading_scheduler.start()
-        logger.info("模拟盘调度器已启动")
-    except Exception as e:
-        logger.error(f"模拟盘调度器启动失败: {e}")
-    try:
-        settings = Settings()
-        context_maintenance_scheduler = ContextMaintenanceScheduler(
-            timezone=settings.app_timezone,
-            eval_interval_hours=6,
-            snapshot_retention_days=180,
-            outcome_retention_days=365,
-        )
-        context_maintenance_scheduler.start()
-        logger.info("上下文维护调度器已启动")
-    except Exception as e:
-        logger.error(f"上下文维护调度器启动失败: {e}")
-    # MCP 调用日志保留期清理:每日 04:00 清理超期审计记录
-    try:
-        register_mcp_log_cleanup(scheduler)
-    except Exception as e:
-        logger.error(f"MCP 日志清理任务注册失败: {e}")
+
     yield
     if scheduler:
         scheduler.shutdown()
@@ -1579,6 +1860,27 @@ async def lifespan(app):
     if context_maintenance_scheduler:
         context_maintenance_scheduler.shutdown()
         logger.info("上下文维护调度器已关闭")
+    if xau_research_scheduler:
+        xau_research_scheduler.shutdown()
+        logger.info("XAU research scheduler stopped")
+    if xau_paper_scheduler:
+        xau_paper_scheduler.shutdown()
+    if xau_replay_scheduler:
+        xau_replay_scheduler.shutdown()
+        logger.info("XAU replay scheduler stopped")
+    if xau_gen1_forward_scheduler:
+        xau_gen1_forward_scheduler.shutdown()
+        logger.info("GEN1 forward-validation scheduler stopped")
+    if automatic_research_scheduler:
+        automatic_research_scheduler.shutdown()
+    if claim_acquisition_scheduler:
+        claim_acquisition_scheduler.shutdown()
+    if macro_warmup_task and not macro_warmup_task.done():
+        macro_warmup_task.cancel()
+        await asyncio.gather(macro_warmup_task, return_exceptions=True)
+    if runtime_smoke_task and not runtime_smoke_task.done():
+        runtime_smoke_task.cancel()
+        await asyncio.gather(runtime_smoke_task, return_exceptions=True)
 
 
 # 模块级 app 实例，供 uvicorn reload 使用

@@ -1,0 +1,88 @@
+name: GTG v1 One-Year Historical Core
+
+on:
+  push:
+    branches:
+      - "feat/ahmed-toolbox-xau"
+    paths:
+      - ".github/workflows/gtg-year-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gtg-year-v1-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  GTG_WARMUP_START: "2024-09-23"
+  GTG_TEST_START: "2025-09-23"
+  GTG_TEST_END: "2026-09-23"
+  GTG_STEP_MINUTES: "5"
+  GTG_OUT: "artifacts/gtg_year_v1"
+  GTG_MACRO_PROXY: "1"
+  GEN1_2Y_DATASET_TAG: "gen1-xau-2y-dataset-v2-20240923-20260923"
+  GEN1_2Y_SHARD_GLOB: "/tmp/gtg-year-data/m*.pkl.gz"
+
+jobs:
+  gtg-year:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact frozen GTG revision
+        uses: actions/checkout@v4
+
+      - name: Record revision
+        run: |
+          echo "gtg_strategy_sha=$(git rev-parse HEAD)"
+          echo "GITHUB_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install benchmark dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check httpx sqlalchemy pydantic pydantic-settings pyyaml openai apscheduler websockets matplotlib
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-runtime
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-token-meter
+          python -m pip install --disable-pip-version-check -e ./packages/pan-agent-tool-research
+
+      - name: Download frozen two-year dataset for warm-up and annual test
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gtg-year-data
+          gh release view "$GEN1_2Y_DATASET_TAG" >/dev/null
+          gh release download "$GEN1_2Y_DATASET_TAG" \
+            --pattern 'm*.pkl.gz' \
+            --dir /tmp/gtg-year-data
+          COUNT="$(find /tmp/gtg-year-data -maxdepth 1 -name 'm*.pkl.gz' | wc -l | tr -d ' ')"
+          echo "gtg_year_shard_count=$COUNT"
+          test "$COUNT" = "24"
+          sha256sum /tmp/gtg-year-data/m*.pkl.gz > /tmp/gtg-year-data/sha256.txt
+
+      - name: Syntax check
+        run: python -m py_compile benchmarks/gtg_month_v1/run.py
+
+      - name: Run frozen GTG v1 one-year benchmark
+        run: |
+          set -o pipefail
+          python benchmarks/gtg_month_v1/run.py 2>&1 | tee gtg-year-console.json
+
+      - name: Upload GTG annual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtg-year-v1-${{ github.sha }}
+          retention-days: 30
+          path: |
+            artifacts/gtg_year_v1/**
+            gtg-year-console.json
+            /tmp/gtg-year-data/sha256.txt
