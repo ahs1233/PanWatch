@@ -607,9 +607,10 @@ def build_gold_market_fusion(
     okx_xaut: dict[str, Any] | None,
     bitfinex_xaut: dict[str, Any] | None,
     binance_xau: dict[str, Any] | None = None,
+    kraken_xau: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     venues = [
-        v for v in [okx_xau, okx_xaut, binance_xau, _bitfinex_standard(bitfinex_xaut or {})]
+        v for v in [okx_xau, okx_xaut, binance_xau, kraken_xau, _bitfinex_standard(bitfinex_xaut or {})]
         if v and v.get("available")
     ]
     flows = {tf: _weighted_venue_signal(venues, tf) for tf in WINDOWS_MINUTES}

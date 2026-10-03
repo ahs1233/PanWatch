@@ -10,6 +10,7 @@ from src.modules.xau.gold_market_fusion import analyze_okx_venue, build_gold_mar
 from src.modules.xau.gold_tape_store import GoldTapeStore
 from src.modules.xau.xaut_runtime import get_xaut_order_flow
 from src.platform.marketdata.gold_binance import BinanceGoldPublicProvider
+from src.platform.marketdata.gold_kraken import KrakenGoldPublicProvider
 from src.platform.marketdata.gold_okx import OKXGoldPublicProvider
 
 logger = logging.getLogger(__name__)
@@ -75,9 +76,11 @@ async def get_gold_market_fusion(
         swap_provider = OKXGoldPublicProvider.xau_swap()
         xaut_provider = OKXGoldPublicProvider.xaut_spot()
         binance_provider = BinanceGoldPublicProvider()
+        kraken_provider = KrakenGoldPublicProvider()
         swap_task = asyncio.create_task(_fetch_centralized(swap_provider, force=force))
         xaut_task = asyncio.create_task(_fetch_centralized(xaut_provider, force=force))
         binance_task = asyncio.create_task(_fetch_centralized(binance_provider, force=force))
+        kraken_task = asyncio.create_task(_fetch_centralized(kraken_provider, force=force))
         bitfinex_task = asyncio.create_task(
             get_xaut_order_flow(xau_spot_price=xau_spot_price, force=force)
         )
@@ -86,6 +89,7 @@ async def get_gold_market_fusion(
         swap_analysis = None
         xaut_analysis = None
         binance_analysis = None
+        kraken_analysis = None
         bitfinex = None
 
         try:
@@ -119,6 +123,16 @@ async def get_gold_market_fusion(
             stage_errors["binance_xau_perp"] = type(exc).__name__
 
         try:
+            snap, trades = await kraken_task
+            kraken_analysis = analyze_okx_venue(
+                snap,
+                trades=trades,
+                xau_spot_price=xau_spot_price,
+            )
+        except Exception as exc:  # noqa: BLE001
+            stage_errors["kraken_paxg_spot"] = type(exc).__name__
+
+        try:
             bitfinex = await bitfinex_task
         except Exception as exc:  # noqa: BLE001
             stage_errors["bitfinex_xaut"] = type(exc).__name__
@@ -128,6 +142,7 @@ async def get_gold_market_fusion(
             okx_xaut=xaut_analysis,
             bitfinex_xaut=bitfinex,
             binance_xau=binance_analysis,
+            kraken_xau=kraken_analysis,
         )
         result["stage_errors"] = stage_errors
         result["source_health"] = {
@@ -145,6 +160,11 @@ async def get_gold_market_fusion(
                 "available": bool(binance_analysis),
                 "status": "ready" if binance_analysis else "unavailable",
                 "error": stage_errors.get("binance_xau_perp"),
+            },
+            "kraken_paxg_spot": {
+                "available": bool(kraken_analysis),
+                "status": "ready" if kraken_analysis else "unavailable",
+                "error": stage_errors.get("kraken_paxg_spot"),
             },
             "bitfinex_xaut": {
                 "available": bool(bitfinex),
