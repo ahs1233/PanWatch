@@ -1,3 +1,5 @@
+[Reading 171 lines from start (total: 171 lines, 0 remaining)]
+
 # GTG Microstructure Forward Collection v0.1
 
 Status: ACTIVE RESEARCH COLLECTION PROTOCOL
@@ -169,3 +171,43 @@ Collector implementation is accepted when:
 5. no Production files/branches are changed.
 
 This acceptance says only that collection works. It says nothing about trading edge.
+
+[executed on device: DESKTOP-208FC6J (d7641718-4a83-47ef-a89d-7a500d52416e)]
+
+## Amendment 1 — 2026-10-04: Binance XAUUSDT availability sensor
+
+This amendment is registered before Binance data is persisted by the collector.
+
+Reason:
+- both www.okx.com and the new recommended openapi.okx.com fail through the
+  user's local DNS;
+- direct IP/TLS attempts to the DoH-resolved OKX addresses time out;
+- therefore collector acceptance cannot depend on OKX availability on this host.
+
+This is an infrastructure-availability amendment, not a strategy-performance choice.
+
+Add a fourth public research sensor:
+
+4. Binance Futures XAUUSDT
+   - USDⓈ-M TradFi perpetual
+   - baseAsset = XAU
+   - quoteAsset / marginAsset = USDT
+   - public aggregate trades
+   - public order book
+   - bid/ask
+   - open interest
+   - 24h base-asset volume
+
+Aggressor convention for aggregate trades:
+- Binance field m means "buyer is maker"
+- m=true => taker/aggressor is SELL
+- m=false => taker/aggressor is BUY
+
+The collector may satisfy its "at least two venues" smoke acceptance with any
+two independent configured venues. Bitfinex XAUTUSD + Binance XAUUSDT is valid.
+
+OKX remains configured as a fail-soft sensor and may begin collecting later if
+network access becomes available. Its outage must not block the other venues.
+
+No Binance data may be used for strategy/model fitting before the original
+30-day + 30-decision-event maturation gate is satisfied.
