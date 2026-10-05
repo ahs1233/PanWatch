@@ -5,6 +5,7 @@ on:
     paths:
       - "src/modules/strategy/xau_v2_dataset.py"
       - "benchmarks/xau_v2_real_dataset_v1/**"
+      - "benchmarks/gen1_gold_2y_real_v1/**"
       - ".github/workflows/xau-real-dataset-smoke.yml"
   workflow_dispatch:
 
